@@ -90,7 +90,7 @@
 
 ## Current implementation direction
 
-- The product is pivoting away from the Swift shell and onto an Electron shell.
+- The product has completed the pivot from the old Swift shell to an Electron shell.
 - The reason for the pivot is product fit, not platform impossibility: the goal is to feel like the VS Code terminal, and Electron gives direct access to the same class of terminal stack.
 - The desktop stack should be:
   - Electron app shell
@@ -102,7 +102,7 @@
   - waiting for the real xterm size before auto-launching Claude's TUI
   - revisiting a first-class PTY backend once the shell host is stable
 - The terminal workflow should stay shell-native even when the app adds higher-level Claude affordances like blockers, notifications, and settings.
-- Existing Swift code is now reference material for product behavior and state shape, not the long-term implementation path.
+- The old Swift shell has been removed from the repo so the codebase matches the active implementation.
 
 ## Explicit non-v1 ideas to keep for later
 

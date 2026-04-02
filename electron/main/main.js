@@ -8,11 +8,13 @@ const {
   Notification,
   dialog,
   ipcMain,
+  nativeTheme,
   shell
 } = require("electron");
 
 const { scanWorkspace } = require("./workspace-scanner");
 const { detectSignal, sanitizeVisibleText } = require("./session-signals");
+const { TerminalTranscriptBuffer } = require("./terminal-transcript-buffer");
 const {
   buildClaudeSettingsContext,
   loadSettingsFile,
@@ -33,6 +35,8 @@ class AppController {
     this.pendingClaudeLaunch = new Set();
     this.pendingClaudeLaunchTimers = new Map();
     this.sessionSizes = new Map();
+    this.terminalBuffers = new Map();
+    this.repairStoredTranscripts();
     this.ptyHost = new PtyHostClient();
     this.ptyHost.onMessage((message) => this.handlePtyMessage(message));
   }
@@ -43,7 +47,7 @@ class AppController {
       height: 960,
       minWidth: 1100,
       minHeight: 720,
-      backgroundColor: "#11161d",
+      backgroundColor: nativeTheme.shouldUseDarkColors ? "#2b2b2b" : "#ede6dc",
       title: "Claude Workspace",
       webPreferences: {
         contextIsolation: true,
@@ -321,6 +325,7 @@ class AppController {
     };
 
     this.state.sessions.unshift(session);
+    this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(session.transcript));
     this.launchRuntime(session, repo);
     this.scheduleSave();
     this.broadcastState();
@@ -342,8 +347,9 @@ class AppController {
     session.updatedAt = now();
 
     const banner = `[Session reopened ${timestampLabel()}]`;
-    session.transcript += `\n\n${banner}\n\n`;
-    session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}\r\n${banner}\r\n`);
+    const bannerChunk = `\r\n${banner}\r\n`;
+    session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${bannerChunk}`);
+    session.transcript = trimTranscript(this.terminalBuffer(session.id, session.transcript).consume(bannerChunk));
 
     this.launchRuntime(session, repo);
     this.scheduleSave();
@@ -353,6 +359,7 @@ class AppController {
   closeSession(sessionId) {
     this.cancelPendingClaudeLaunch(sessionId);
     this.sessionSizes.delete(sessionId);
+    this.terminalBuffers.delete(sessionId);
     this.ptyHost.killSession(sessionId);
     this.focusedSessionId = this.focusedSessionId === sessionId ? null : this.focusedSessionId;
     this.state.sessions = this.state.sessions.filter((session) => session.id !== sessionId);
@@ -440,11 +447,9 @@ class AppController {
     }
 
     const visibleChunk = sanitizeVisibleText(rawChunk);
+    const buffer = this.terminalBuffer(session.id, session.transcript);
     session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${rawChunk}`);
-
-    if (visibleChunk) {
-      session.transcript = trimTranscript(`${session.transcript || ""}${visibleChunk}`);
-    }
+    session.transcript = trimTranscript(buffer.consume(rawChunk));
 
     session.updatedAt = now();
     session.lastActivityAt = now();
@@ -510,6 +515,35 @@ class AppController {
 
     this.scheduleSave();
     this.sendSessionUpdated(sessionId);
+  }
+
+  terminalBuffer(sessionId, seedText = "") {
+    let buffer = this.terminalBuffers.get(sessionId);
+
+    if (!buffer) {
+      buffer = new TerminalTranscriptBuffer(seedText || "");
+      this.terminalBuffers.set(sessionId, buffer);
+    }
+
+    return buffer;
+  }
+
+  repairStoredTranscripts() {
+    let changed = false;
+
+    for (const session of this.state.sessions) {
+      const transcript = rebuildTranscript(session);
+      this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(transcript));
+
+      if ((session.transcript || "") !== transcript) {
+        session.transcript = transcript;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.scheduleSave();
+    }
   }
 
   notifyBlocker(session) {
@@ -679,6 +713,14 @@ function trimRawTranscript(value) {
 function trimTranscript(value) {
   const maxLength = 20000;
   return value.length > maxLength ? value.slice(-maxLength) : value;
+}
+
+function rebuildTranscript(session) {
+  if (session.rawTranscript) {
+    return trimTranscript(TerminalTranscriptBuffer.visibleText(session.rawTranscript));
+  }
+
+  return trimTranscript(session.transcript || "");
 }
 
 function resolvedShellPath(preferences) {

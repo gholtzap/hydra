@@ -1,9 +1,7 @@
+const { TerminalTranscriptBuffer } = require("./terminal-transcript-buffer");
+
 function sanitizeVisibleText(text) {
-  return text
-    .replace(/\x1b\][^\u0007]*(?:\u0007|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
-    .replace(/\r/g, "")
-    .replace(/[^\x09\x0a\x20-\x7e\u00a0-\uffff]/g, "");
+  return TerminalTranscriptBuffer.visibleText(text);
 }
 
 function detectSignal(chunk) {

@@ -22,7 +22,10 @@ const ui = {
   settingsContext: null,
   settingsSelectedFilePath: null,
   settingsEditorText: "",
-  settingsSaveMessage: ""
+  settingsSaveMessage: "",
+  settingsJsonDraft: null,
+  settingsJsonError: "",
+  settingsShowRawJson: false
 };
 
 const sidebarElement = document.getElementById("sidebar");
@@ -31,6 +34,15 @@ const launcherDialog = document.getElementById("launcher-dialog");
 const settingsDialog = document.getElementById("settings-dialog");
 const quickSwitcherDialog = document.getElementById("quick-switcher-dialog");
 const commandPaletteDialog = document.getElementById("command-palette-dialog");
+const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+syncColorSchemeClass();
+
+if (typeof colorSchemeQuery.addEventListener === "function") {
+  colorSchemeQuery.addEventListener("change", handleColorSchemeChange);
+} else if (typeof colorSchemeQuery.addListener === "function") {
+  colorSchemeQuery.addListener(handleColorSchemeChange);
+}
 
 document.addEventListener("click", handleClick);
 document.addEventListener("input", handleInput);
@@ -107,6 +119,53 @@ initialize().catch((error) => {
   detailElement.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
 });
 
+function handleColorSchemeChange() {
+  syncColorSchemeClass();
+
+  if (ui.terminal) {
+    ui.terminal.options.theme = buildTerminalTheme();
+  }
+}
+
+function syncColorSchemeClass() {
+  document.documentElement.classList.toggle("dark", colorSchemeQuery.matches);
+}
+
+function readCssVar(name, fallback = "") {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function terminalFontFamily() {
+  return readCssVar("--font-mono", 'ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace');
+}
+
+function buildTerminalTheme() {
+  return {
+    background: readCssVar("--terminal-background", "#121212"),
+    foreground: readCssVar("--terminal-foreground", "#f4f4f4"),
+    cursor: readCssVar("--terminal-cursor", "#7dd3fc"),
+    cursorAccent: readCssVar("--terminal-cursor-accent", "#161616"),
+    selectionBackground: readCssVar("--terminal-selection", "rgba(125, 211, 252, 0.28)"),
+    black: "#161616",
+    red: "#ff7b72",
+    green: "#7ee787",
+    yellow: "#e3b341",
+    blue: "#79c0ff",
+    magenta: "#d2a8ff",
+    cyan: "#a5f3fc",
+    white: "#c9d1d9",
+    brightBlack: "#6e7681",
+    brightRed: "#ffa198",
+    brightGreen: "#56d364",
+    brightYellow: "#e3b341",
+    brightBlue: "#79c0ff",
+    brightMagenta: "#d2a8ff",
+    brightCyan: "#56d4dd",
+    brightWhite: "#f0f6fc"
+  };
+}
+
 async function initialize() {
   replaceState(await api.getState());
   ensureValidSelection();
@@ -135,27 +194,33 @@ function ensureValidSelection() {
 function renderSidebar() {
   sidebarElement.innerHTML = `
     <div class="sidebar-brand">
-      <div class="eyebrow">Claude Code Workspace</div>
-      <div class="sidebar-title">Claude Workspace</div>
-      <div class="muted">A real shell-first desktop home for Claude sessions.</div>
+      <div class="eyebrow">Claude Workspace</div>
+      <div class="sidebar-title-row">
+        <div class="sidebar-title">Sessions</div>
+        <button class="ghost" data-action="open-settings">Settings</button>
+      </div>
+      <div class="muted">Shell sessions across your repos.</div>
     </div>
 
-    <div class="sidebar-actions">
+    <div class="sidebar-primary-actions">
       <button class="primary" data-action="open-launcher">New Session</button>
-      <button data-action="open-settings">Settings</button>
-      <button data-action="open-workspace">Open Workspace</button>
-      <button data-action="create-project">New Folder</button>
+      <button data-action="open-quick-switcher">Jump To</button>
+    </div>
+
+    <div class="sidebar-secondary-actions">
+      <button class="ghost" data-action="open-workspace">Add Workspace</button>
+      <button class="ghost" data-action="create-project">New Folder</button>
     </div>
 
     <div class="sidebar-section">
-      <div class="section-label">Attention</div>
+      <div class="section-label">Inbox</div>
       <div class="sidebar-list">
         <button class="sidebar-item ${selectionMatches("inbox") ? "active" : ""}" data-action="select-inbox">
           <div class="sidebar-item-title">
-            <span>Inbox / Needs Attention</span>
+            <span>Needs attention</span>
             ${inboxSessions().length ? `<span class="inbox-count">${inboxSessions().length}</span>` : ""}
           </div>
-          <div class="row-subtitle">Blocked sessions and unread activity</div>
+          <div class="row-subtitle">Blocked and unread sessions</div>
         </button>
       </div>
     </div>
@@ -182,7 +247,7 @@ function renderRunningSessions() {
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 
   if (!running.length) {
-    return `<div class="muted" style="padding: 0 6px;">No live sessions</div>`;
+    return `<div class="muted" style="padding: 0 6px;">No active sessions</div>`;
   }
 
   return running
@@ -212,7 +277,7 @@ function renderWorkspaceBlocks() {
         <section class="workspace-block">
           <div class="workspace-header">
             <div class="workspace-title">${escapeHtml(workspace.name)}</div>
-            <button class="ghost" data-action="rescan-workspace" data-workspace-id="${workspace.id}">Rescan</button>
+            <button class="ghost" data-action="rescan-workspace" data-workspace-id="${workspace.id}">Refresh</button>
           </div>
           <div class="workspace-repos">
             ${
@@ -272,18 +337,18 @@ function renderInbox() {
       <div class="detail-hero">
         <div>
           <div class="eyebrow">Inbox</div>
-          <h1 class="detail-title">Needs attention</h1>
-          <div class="muted">Blocked sessions first, then unread activity across every repo.</div>
+          <h1 class="detail-title">Review queue</h1>
+          <div class="muted">Blocked sessions and unread activity.</div>
         </div>
         <div class="detail-actions">
           <button class="primary" data-action="open-launcher">New Session</button>
-          <button data-action="open-quick-switcher">Quick Switcher</button>
+          <button data-action="open-quick-switcher">Jump To</button>
         </div>
       </div>
       ${
         sessions.length
           ? `<div class="card-grid">${sessions.map(renderInboxCard).join("")}</div>`
-          : `<div class="empty-state">Blocked sessions and unread activity will collect here.</div>`
+          : `<div class="empty-state">Blocked and unread sessions will appear here.</div>`
       }
     </section>
   `;
@@ -308,15 +373,15 @@ function renderRepoDetail(repo) {
           <div class="muted">${escapeHtml(abbreviateHome(repo.path))}</div>
         </div>
         <div class="detail-actions">
-          <button data-action="reveal-repo" data-repo-id="${repo.id}">Reveal in Finder</button>
-          <button data-action="rescan-workspace" data-workspace-id="${repo.workspaceID}">Rescan Workspace</button>
+          <button data-action="reveal-repo" data-repo-id="${repo.id}">Reveal</button>
+          <button data-action="rescan-workspace" data-workspace-id="${repo.workspaceID}">Refresh</button>
           <button class="primary" data-action="open-launcher" data-repo-id="${repo.id}">New Session</button>
         </div>
       </div>
       ${
         sessions.length
           ? `<div class="repo-session-list">${sessions.map((session) => renderRepoSession(session, repo)).join("")}</div>`
-          : `<div class="empty-state">Start a shell-backed session for this repo from the New Session button.</div>`
+          : `<div class="empty-state">Start a shell session for this repo.</div>`
       }
     </section>
   `;
@@ -369,7 +434,7 @@ function updateSessionChrome(session) {
       </div>
       <div class="session-actions">
         <button data-action="reveal-repo" data-repo-id="${repo?.id || ""}">Reveal Repo</button>
-        <button data-action="open-settings">Claude Settings</button>
+        <button data-action="open-settings" data-settings-tab="claude">Claude Files</button>
         ${
           session.runtimeState === "live"
             ? `<button data-action="close-session" data-session-id="${session.id}">Close Session</button>`
@@ -418,34 +483,12 @@ function mountTerminal(session) {
       cursorInactiveStyle: "outline",
       disableStdin: session.runtimeState !== "live",
       drawBoldTextInBrightColors: true,
-      fontFamily: 'ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace',
+      fontFamily: terminalFontFamily(),
       fontSize: 13,
       macOptionIsMeta: true,
       rightClickSelectsWord: true,
       scrollback: 10000,
-      theme: {
-        background: "#121212",
-        foreground: "#f4f4f4",
-        cursor: "#7dd3fc",
-        cursorAccent: "#161616",
-        selectionBackground: "rgba(125, 211, 252, 0.28)",
-        black: "#161616",
-        red: "#ff7b72",
-        green: "#7ee787",
-        yellow: "#e3b341",
-        blue: "#79c0ff",
-        magenta: "#d2a8ff",
-        cyan: "#a5f3fc",
-        white: "#c9d1d9",
-        brightBlack: "#6e7681",
-        brightRed: "#ffa198",
-        brightGreen: "#56d364",
-        brightYellow: "#e3b341",
-        brightBlue: "#79c0ff",
-        brightMagenta: "#d2a8ff",
-        brightCyan: "#56d4dd",
-        brightWhite: "#f0f6fc"
-      }
+      theme: buildTerminalTheme()
     });
 
     ui.fitAddon = new FitAddon.FitAddon();
@@ -476,7 +519,7 @@ function mountTerminal(session) {
 
     ui.terminalSessionId = session.id;
     ui.terminal.reset();
-    ui.terminal.write(session.rawTranscript || "");
+    ui.terminal.write(terminalReplayText(session));
   }
 
   syncTerminalLiveState(session);
@@ -520,6 +563,10 @@ function destroyTerminal() {
   ui.terminal = null;
   ui.fitAddon = null;
   ui.terminalSessionId = null;
+}
+
+function terminalReplayText(session) {
+  return session.rawTranscript || session.transcript || "";
 }
 
 function renderInboxCard(session) {
@@ -577,7 +624,7 @@ function renderLauncherDialog() {
         <div>
           <div class="eyebrow">Session Launcher</div>
           <h2 class="dialog-title">New session</h2>
-          <div class="muted">Open a real shell in any repo, then optionally auto-enter Claude.</div>
+          <div class="muted">Open a shell in any repo, then optionally start Claude.</div>
         </div>
         <button value="cancel">Close</button>
       </div>
@@ -612,7 +659,7 @@ function renderLauncherDialog() {
             <input type="checkbox" id="launcher-launches-claude" ${ui.launcherLaunchesClaudeOnStart ? "checked" : ""} />
             <span>Launch Claude immediately</span>
           </label>
-          <div class="muted">When enabled, the app starts your login shell and runs the configured Claude command.</div>
+          <div class="muted">When enabled, your login shell runs the configured Claude command.</div>
           <div style="flex: 1;"></div>
           <div class="dialog-footer">
             <button type="button" data-action="launcher-close">Cancel</button>
@@ -728,10 +775,15 @@ async function renderSettingsDialog() {
   const repoId = currentRepoId();
   if (!ui.settingsContext) {
     ui.settingsContext = await api.getClaudeSettingsContext(repoId);
-    const firstFile = allSettingsFiles()[0];
+  }
+
+  const availableFiles = allSettingsFiles();
+  const selectedExists = availableFiles.some((file) => file.path === ui.settingsSelectedFilePath);
+
+  if (!selectedExists) {
+    const firstFile = availableFiles[0];
     if (firstFile) {
-      ui.settingsSelectedFilePath = firstFile.path;
-      ui.settingsEditorText = await api.loadSettingsFile(firstFile.path);
+      await loadSelectedSettingsFile(firstFile.path);
     }
   }
 
@@ -741,7 +793,7 @@ async function renderSettingsDialog() {
         <div>
           <div class="eyebrow">Settings</div>
           <h2 class="dialog-title">Preferences and Claude files</h2>
-          <div class="muted">Global command settings, project-specific Claude files, and resolved JSON values.</div>
+          <div class="muted">Edit app preferences, Claude instructions, and JSON settings in a format people can actually read.</div>
         </div>
         <button value="cancel">Close</button>
       </div>
@@ -793,65 +845,424 @@ function renderGeneralSettingsPane() {
 
 function renderClaudeSettingsPane() {
   const context = ui.settingsContext || { globalFiles: [], projectFiles: [], resolvedValues: [] };
+  const globalFiles = sortSettingsFiles(context.globalFiles);
+  const projectFiles = sortSettingsFiles(context.projectFiles);
   const selectedFile = allSettingsFiles().find((file) => file.path === ui.settingsSelectedFilePath) || null;
+  const projectRepo = repoById(currentRepoId());
 
   return `
     <div class="settings-layout">
       <div class="dialog-list">
         <div class="section-label">Global</div>
-        ${context.globalFiles.map((file) => renderSettingsFileRow(file)).join("")}
-        ${context.projectFiles.length ? `<div class="section-label">Project</div>` : ""}
-        ${context.projectFiles.map((file) => renderSettingsFileRow(file)).join("")}
+        ${globalFiles.map((file) => renderSettingsFileRow(file)).join("")}
+        ${
+          projectFiles.length
+            ? `<div class="section-label">Project${projectRepo ? ` · ${escapeHtml(projectRepo.name)}` : ""}</div>`
+            : ""
+        }
+        ${projectFiles.map((file) => renderSettingsFileRow(file)).join("")}
       </div>
 
       <div class="dialog-panel">
         ${
           selectedFile
-            ? `
-              <div class="detail-actions">
-                <div>
-                  <div class="row-title">${escapeHtml(selectedFile.title)}</div>
-                  <div class="row-subtitle">${escapeHtml(abbreviateHome(selectedFile.path))}</div>
-                </div>
-                <div style="margin-left:auto;" class="detail-actions">
-                  <button type="button" data-action="settings-reload-file">Reload</button>
-                  <button type="button" data-action="settings-save-file" class="primary">${selectedFile.exists ? "Save" : "Create"}</button>
-                  <button type="button" data-action="settings-reveal-file">Reveal</button>
-                </div>
-              </div>
-              <textarea id="settings-editor">${escapeHtml(ui.settingsEditorText)}</textarea>
-              ${
-                ui.settingsSaveMessage
-                  ? `<div class="muted">${escapeHtml(ui.settingsSaveMessage)}</div>`
-                  : ""
-              }
-            `
+            ? renderSelectedSettingsPanel(selectedFile, context)
             : `<div class="empty-state">Select a global or project Claude file to edit it.</div>`
         }
-
-        <div>
-          <div class="row-title">Resolved JSON Values</div>
-          <div class="settings-values">
-            ${
-              context.resolvedValues.length
-                ? context.resolvedValues
-                    .map(
-                      (value) => `
-                        <div class="value-row">
-                          <div class="row-title mono">${escapeHtml(value.keyPath)}</div>
-                          <div class="row-subtitle">${escapeHtml(value.sourceLabel)}</div>
-                          <div class="row-meta mono">${escapeHtml(value.valueSummary)}</div>
-                        </div>
-                      `
-                    )
-                    .join("")
-                : `<div class="value-row muted">No JSON settings are currently available to resolve.</div>`
-            }
-          </div>
-        </div>
       </div>
     </div>
   `;
+}
+
+function renderSelectedSettingsPanel(selectedFile, context) {
+  return isJsonSettingsFile(selectedFile)
+    ? renderJsonSettingsPanel(selectedFile, context)
+    : renderTextSettingsPanel(selectedFile);
+}
+
+function renderTextSettingsPanel(selectedFile) {
+  return `
+    <div class="settings-surface">
+      <div class="settings-file-hero">
+        <div class="settings-file-copy">
+          <div class="eyebrow">${escapeHtml(settingsScopeLabel(selectedFile))}</div>
+          <div class="settings-file-header">
+            <div>
+              <div class="row-title">${escapeHtml(friendlySettingsFileTitle(selectedFile))}</div>
+              <div class="row-subtitle">${escapeHtml(abbreviateHome(selectedFile.path))}</div>
+            </div>
+            ${renderSettingsActionButtons(selectedFile)}
+          </div>
+          <div class="muted">${escapeHtml(friendlySettingsFileSummary(selectedFile))}</div>
+        </div>
+        <div class="settings-stat-grid">
+          ${renderSettingsStat("Format", "Markdown")}
+          ${renderSettingsStat("Status", selectedFile.exists ? "Ready" : "Missing")}
+          ${renderSettingsStat("Scope", selectedFile.scope === "global" ? "Global" : "Project")}
+        </div>
+      </div>
+
+      <div class="settings-editor-card">
+        <div class="settings-help-row">
+          <div>
+            <div class="row-title">Instruction File</div>
+            <div class="muted">This file stays as Markdown so you can keep free-form instructions and examples.</div>
+          </div>
+          <span class="settings-chip">Text Editor</span>
+        </div>
+        <textarea id="settings-text-editor">${escapeHtml(ui.settingsEditorText)}</textarea>
+      </div>
+
+      ${renderSettingsSaveMessage()}
+    </div>
+  `;
+}
+
+function renderJsonSettingsPanel(selectedFile, context) {
+  const currentValue = currentJsonSettingsValue();
+  const parseError = ui.settingsJsonError;
+  const forceRawEditor = !!parseError;
+  const showRawEditor = ui.settingsShowRawJson || forceRawEditor;
+  const topLevelCount = countTopLevelJsonEntries(currentValue);
+  const leafCount = countLeafJsonEntries(currentValue);
+  const effectiveCount = context.resolvedValues.filter(
+    (value) => value.sourceLabel === selectedFile.title
+  ).length;
+
+  return `
+    <div class="settings-surface">
+      <div class="settings-file-hero">
+        <div class="settings-file-copy">
+          <div class="eyebrow">${escapeHtml(settingsScopeLabel(selectedFile))}</div>
+          <div class="settings-file-header">
+            <div>
+              <div class="row-title">${escapeHtml(friendlySettingsFileTitle(selectedFile))}</div>
+              <div class="row-subtitle">${escapeHtml(abbreviateHome(selectedFile.path))}</div>
+            </div>
+            ${renderSettingsActionButtons(selectedFile, { includeJsonToggle: true, forceRawEditor })}
+          </div>
+          <div class="muted">${escapeHtml(friendlySettingsFileSummary(selectedFile))}</div>
+        </div>
+        <div class="settings-stat-grid">
+          ${renderSettingsStat("Top-level", String(topLevelCount))}
+          ${renderSettingsStat("Values", String(leafCount))}
+          ${renderSettingsStat("Effective", String(effectiveCount))}
+          ${renderSettingsStat("Status", selectedFile.exists ? "Ready" : "New File")}
+        </div>
+      </div>
+
+      ${
+        parseError
+          ? `
+            <div class="settings-warning-card">
+              <div class="row-title">This file has invalid JSON</div>
+              <div class="row-subtitle">Fix the parse error below to return to the form view.</div>
+              <div class="row-meta mono">${escapeHtml(parseError)}</div>
+            </div>
+          `
+          : ""
+      }
+
+      ${showRawEditor ? renderJsonRawEditor() : renderStructuredJsonEditor(currentValue)}
+
+      ${renderSettingsSaveMessage()}
+      ${renderResolvedSettingsPanel(context.resolvedValues)}
+    </div>
+  `;
+}
+
+function renderStructuredJsonEditor(currentValue) {
+  return `
+    <div class="settings-editor-card">
+      <div class="settings-help-row">
+        <div>
+          <div class="row-title">Editable Settings</div>
+          <div class="muted">Change the settings here and save when you’re ready. The matching JSON file stays in sync behind the scenes.</div>
+        </div>
+        <span class="settings-chip">Form View</span>
+      </div>
+
+      ${
+        isJsonObject(currentValue)
+          ? `
+            ${
+              Object.keys(currentValue).length
+                ? `<div class="settings-field-stack">${renderJsonObjectFields(currentValue, [])}</div>`
+                : `<div class="settings-empty-note">No settings have been defined yet. Add the first one below.</div>`
+            }
+            ${renderRootAddSettingCard()}
+          `
+          : `
+            <div class="settings-field-stack">
+              ${renderJsonNode(currentValue, [], { customLabel: "Root Value", allowRemove: false })}
+            </div>
+            <div class="muted">This file currently uses a ${describeJsonValueType(currentValue)} as its root value. Switch to Advanced JSON if you need to change the overall shape.</div>
+          `
+      }
+    </div>
+  `;
+}
+
+function renderJsonRawEditor() {
+  return `
+    <div class="settings-editor-card">
+      <div class="settings-help-row">
+        <div>
+          <div class="row-title">Advanced JSON</div>
+          <div class="muted">Use raw JSON for shapes the form doesn’t cover. As soon as the file parses cleanly again, you can switch back to the form.</div>
+        </div>
+        <span class="settings-chip">Raw JSON</span>
+      </div>
+      <textarea id="settings-json-raw-editor" class="settings-json-raw-editor" data-setting-editor="raw-json">${escapeHtml(ui.settingsEditorText)}</textarea>
+    </div>
+  `;
+}
+
+function renderResolvedSettingsPanel(resolvedValues) {
+  return `
+    <div class="settings-effective-panel">
+      <div class="settings-help-row">
+        <div>
+          <div class="row-title">What Claude Will Use</div>
+          <div class="muted">Project JSON files override global ones. This list shows the effective value for each resolved key.</div>
+        </div>
+        <span class="settings-chip">${resolvedValues.length} Resolved</span>
+      </div>
+      <div class="settings-values">
+        ${
+          resolvedValues.length
+            ? resolvedValues
+                .map(
+                  (value) => `
+                    <div class="value-row">
+                      <div class="settings-file-row-top">
+                        <div class="row-title">${escapeHtml(labelForResolvedKeyPath(value.keyPath))}</div>
+                        <span class="settings-chip">${escapeHtml(friendlySourceLabel(value.sourceLabel))}</span>
+                      </div>
+                      <div class="row-subtitle mono">${escapeHtml(value.keyPath)}</div>
+                      <div class="row-meta mono">${escapeHtml(value.valueSummary)}</div>
+                    </div>
+                  `
+                )
+                .join("")
+            : `<div class="value-row muted">No JSON settings are currently available to resolve.</div>`
+        }
+      </div>
+    </div>
+  `;
+}
+
+function renderJsonObjectFields(objectValue, parentPath) {
+  return Object.entries(objectValue)
+    .map(([key, value]) => renderJsonNode(value, [...parentPath, key]))
+    .join("");
+}
+
+function renderJsonNode(value, path, options = {}) {
+  if (Array.isArray(value)) {
+    return renderJsonArrayNode(value, path, options);
+  }
+
+  if (isJsonObject(value)) {
+    return renderJsonObjectNode(value, path, options);
+  }
+
+  return renderJsonPrimitiveNode(value, path, options);
+}
+
+function renderJsonPrimitiveNode(value, path, options = {}) {
+  const encodedPath = encodeSettingPath(path);
+  const label = options.customLabel || labelForSettingPath(path);
+  const allowRemove = options.allowRemove ?? path.length > 0;
+  const pathLabelText = formatSettingPath(path);
+  let controlMarkup = "";
+
+  if (typeof value === "boolean") {
+    controlMarkup = `
+      <label class="settings-switch">
+        <input type="checkbox" data-setting-editor="boolean" data-setting-path="${encodedPath}" ${value ? "checked" : ""} />
+        <span>Enabled</span>
+      </label>
+    `;
+  } else if (typeof value === "number") {
+    controlMarkup = `
+      <input
+        type="number"
+        step="any"
+        data-setting-editor="number"
+        data-setting-path="${encodedPath}"
+        value="${escapeAttribute(String(value))}" />
+    `;
+  } else if (typeof value === "string") {
+    controlMarkup =
+      value.includes("\n") || value.length > 80
+        ? `
+          <textarea
+            class="settings-field-textarea"
+            data-setting-editor="string"
+            data-setting-path="${encodedPath}">${escapeHtml(value)}</textarea>
+        `
+        : `
+          <input
+            type="text"
+            data-setting-editor="string"
+            data-setting-path="${encodedPath}"
+            value="${escapeAttribute(value)}" />
+        `;
+  } else {
+    controlMarkup = `
+      <div class="settings-empty-note">This value is currently <span class="mono">null</span>.</div>
+      <div class="settings-meta-row">
+        <button type="button" data-action="settings-convert-field" data-setting-path="${encodedPath}" data-setting-value-kind="string">Use Text</button>
+        <button type="button" data-action="settings-convert-field" data-setting-path="${encodedPath}" data-setting-value-kind="number">Use Number</button>
+        <button type="button" data-action="settings-convert-field" data-setting-path="${encodedPath}" data-setting-value-kind="boolean">Use Toggle</button>
+        <button type="button" data-action="settings-convert-field" data-setting-path="${encodedPath}" data-setting-value-kind="object">Use Group</button>
+        <button type="button" data-action="settings-convert-field" data-setting-path="${encodedPath}" data-setting-value-kind="array">Use List</button>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="settings-field-card">
+      <div class="settings-field-copy">
+        <div class="settings-file-row-top">
+          <div class="row-title">${escapeHtml(label)}</div>
+          <span class="settings-chip">${escapeHtml(jsonValueTypeLabel(value))}</span>
+        </div>
+        <div class="row-subtitle mono">${escapeHtml(pathLabelText)}</div>
+      </div>
+      <div class="settings-field-control">
+        ${controlMarkup}
+      </div>
+      ${
+        allowRemove
+          ? `<button type="button" class="ghost settings-field-remove" data-action="settings-remove-field" data-setting-path="${encodedPath}">Remove</button>`
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderJsonObjectNode(objectValue, path, options = {}) {
+  const encodedPath = encodeSettingPath(path);
+  const label = options.customLabel || labelForSettingPath(path);
+  const allowRemove = options.allowRemove ?? path.length > 0;
+  const childEntries = Object.keys(objectValue);
+
+  return `
+    <div class="settings-group-card">
+      <div class="settings-group-header">
+        <div class="settings-field-copy">
+          <div class="settings-file-row-top">
+            <div class="row-title">${escapeHtml(label)}</div>
+            <span class="settings-chip">${childEntries.length} Fields</span>
+          </div>
+          <div class="row-subtitle mono">${escapeHtml(formatSettingPath(path))}</div>
+        </div>
+        ${
+          allowRemove
+            ? `<button type="button" class="ghost settings-field-remove" data-action="settings-remove-field" data-setting-path="${encodedPath}">Remove Group</button>`
+            : ""
+        }
+      </div>
+      ${
+        childEntries.length
+          ? `<div class="settings-group-body">${renderJsonObjectFields(objectValue, path)}</div>`
+          : `<div class="settings-empty-note">This group is empty. Use Advanced JSON if you need to add nested keys here.</div>`
+      }
+    </div>
+  `;
+}
+
+function renderJsonArrayNode(arrayValue, path, options = {}) {
+  const encodedPath = encodeSettingPath(path);
+  const label = options.customLabel || labelForSettingPath(path);
+  const allowRemove = options.allowRemove ?? path.length > 0;
+
+  return `
+    <div class="settings-group-card">
+      <div class="settings-group-header">
+        <div class="settings-field-copy">
+          <div class="settings-file-row-top">
+            <div class="row-title">${escapeHtml(label)}</div>
+            <span class="settings-chip">${arrayValue.length} Items</span>
+          </div>
+          <div class="row-subtitle mono">${escapeHtml(formatSettingPath(path))}</div>
+        </div>
+        <div class="settings-meta-row">
+          <button type="button" data-action="settings-add-array-item" data-setting-path="${encodedPath}">Add Item</button>
+          ${
+            allowRemove
+              ? `<button type="button" class="ghost settings-field-remove" data-action="settings-remove-field" data-setting-path="${encodedPath}">Remove List</button>`
+              : ""
+          }
+        </div>
+      </div>
+      ${
+        arrayValue.length
+          ? `
+            <div class="settings-group-body">
+              ${arrayValue.map((item, index) => renderJsonNode(item, [...path, index])).join("")}
+            </div>
+          `
+          : `<div class="settings-empty-note">This list is empty. Add the first item when you’re ready.</div>`
+      }
+    </div>
+  `;
+}
+
+function renderRootAddSettingCard() {
+  return `
+    <div class="settings-add-card">
+      <div class="row-title">Add a Top-Level Setting</div>
+      <div class="row-subtitle">Create a new setting without touching raw JSON. Use Advanced JSON for custom nested structures.</div>
+      <div class="settings-add-grid">
+        <input id="settings-new-key" type="text" placeholder="Setting name" />
+        <select id="settings-new-type">
+          <option value="string">Text</option>
+          <option value="number">Number</option>
+          <option value="boolean">Toggle</option>
+          <option value="object">Group</option>
+          <option value="array">List</option>
+        </select>
+        <input id="settings-new-value" type="text" placeholder="Optional starting value" />
+        <button type="button" class="primary" data-action="settings-add-root-field">Add Setting</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderSettingsActionButtons(selectedFile, options = {}) {
+  const { includeJsonToggle = false, forceRawEditor = false } = options;
+  const showJsonToggle = includeJsonToggle && !forceRawEditor;
+
+  return `
+    <div class="detail-actions settings-detail-actions">
+      ${
+        showJsonToggle
+          ? `<button type="button" data-action="settings-toggle-raw-json">${ui.settingsShowRawJson ? "Back to Form" : "Advanced JSON"}</button>`
+          : ""
+      }
+      <button type="button" data-action="settings-reload-file">Reload</button>
+      <button type="button" class="primary" data-action="settings-save-file">${selectedFile.exists ? "Save" : "Create"}</button>
+      <button type="button" data-action="settings-reveal-file">Reveal</button>
+    </div>
+  `;
+}
+
+function renderSettingsStat(label, value) {
+  return `
+    <div class="settings-stat">
+      <div class="settings-stat-label">${escapeHtml(label)}</div>
+      <div class="settings-stat-value">${escapeHtml(value)}</div>
+    </div>
+  `;
+}
+
+function renderSettingsSaveMessage() {
+  return ui.settingsSaveMessage
+    ? `<div class="settings-save-message">${escapeHtml(ui.settingsSaveMessage)}</div>`
+    : "";
 }
 
 function renderSettingsFileRow(file) {
@@ -861,8 +1272,12 @@ function renderSettingsFileRow(file) {
       class="switcher-row ${ui.settingsSelectedFilePath === file.path ? "active" : ""}"
       data-action="settings-select-file"
       data-file-path="${file.path}">
-      <div class="row-title">${escapeHtml(file.title)}</div>
-      <div class="row-subtitle">${file.exists ? "Exists" : "Missing"}</div>
+      <div class="settings-file-row-top">
+        <div class="row-title">${escapeHtml(friendlySettingsFileTitle(file))}</div>
+        <span class="settings-chip">${isJsonSettingsFile(file) ? "JSON" : "MD"}</span>
+      </div>
+      <div class="row-subtitle">${escapeHtml(friendlySettingsFileListSubtitle(file))}</div>
+      <div class="row-meta">${file.exists ? "Ready to edit" : "Create on save"}</div>
     </button>
   `;
 }
@@ -889,7 +1304,7 @@ async function handleClick(event) {
       openLauncher(target.dataset.repoId || currentRepoId());
       break;
     case "open-settings":
-      await openSettings();
+      await openSettings(target.dataset.settingsTab || "general");
       break;
     case "open-workspace":
       await api.openWorkspaceFolder();
@@ -946,9 +1361,7 @@ async function handleClick(event) {
       await renderSettingsDialog();
       break;
     case "settings-select-file":
-      ui.settingsSelectedFilePath = target.dataset.filePath;
-      ui.settingsEditorText = await api.loadSettingsFile(target.dataset.filePath);
-      ui.settingsSaveMessage = "";
+      await loadSelectedSettingsFile(target.dataset.filePath);
       await renderSettingsDialog();
       break;
     case "settings-save-file":
@@ -956,10 +1369,43 @@ async function handleClick(event) {
       break;
     case "settings-reload-file":
       if (ui.settingsSelectedFilePath) {
-        ui.settingsEditorText = await api.loadSettingsFile(ui.settingsSelectedFilePath);
-        ui.settingsSaveMessage = "";
+        await loadSelectedSettingsFile(ui.settingsSelectedFilePath);
         await renderSettingsDialog();
       }
+      break;
+    case "settings-toggle-raw-json":
+      if (ui.settingsShowRawJson) {
+        syncSettingsJsonDraftFromText();
+        if (ui.settingsJsonError) {
+          ui.settingsSaveMessage = `Fix the JSON parse error before returning to the form: ${ui.settingsJsonError}`;
+        } else {
+          ui.settingsShowRawJson = false;
+          ui.settingsSaveMessage = "";
+        }
+      } else {
+        ui.settingsShowRawJson = true;
+        ui.settingsSaveMessage = "";
+      }
+      await renderSettingsDialog();
+      break;
+    case "settings-remove-field":
+      removeJsonSettingAtPath(decodeSettingPath(target.dataset.settingPath));
+      await renderSettingsDialog();
+      break;
+    case "settings-add-array-item":
+      addJsonArrayItem(decodeSettingPath(target.dataset.settingPath));
+      await renderSettingsDialog();
+      break;
+    case "settings-convert-field":
+      updateJsonSettingValue(
+        decodeSettingPath(target.dataset.settingPath),
+        defaultValueForSettingKind(target.dataset.settingValueKind)
+      );
+      await renderSettingsDialog();
+      break;
+    case "settings-add-root-field":
+      addRootJsonSetting();
+      await renderSettingsDialog();
       break;
     case "settings-reveal-file":
       if (ui.settingsSelectedFilePath) {
@@ -980,6 +1426,11 @@ async function handleClick(event) {
 }
 
 async function handleInput(event) {
+  if (event.target.dataset.settingEditor) {
+    handleSettingsFieldInput(event.target);
+    return;
+  }
+
   switch (event.target.id) {
     case "launcher-query":
       ui.launcherQuery = event.target.value;
@@ -993,8 +1444,9 @@ async function handleInput(event) {
       ui.commandPaletteQuery = event.target.value;
       renderCommandPaletteDialog();
       break;
-    case "settings-editor":
+    case "settings-text-editor":
       ui.settingsEditorText = event.target.value;
+      ui.settingsSaveMessage = "";
       break;
     default:
       break;
@@ -1002,6 +1454,11 @@ async function handleInput(event) {
 }
 
 async function handleChange(event) {
+  if (event.target.dataset.settingEditor) {
+    handleSettingsFieldChange(event.target);
+    return;
+  }
+
   switch (event.target.id) {
     case "launcher-launches-claude":
       ui.launcherLaunchesClaudeOnStart = event.target.checked;
@@ -1077,12 +1534,15 @@ async function startLauncherSession() {
   }
 }
 
-async function openSettings() {
-  ui.settingsTab = "general";
+async function openSettings(initialTab = "general") {
+  ui.settingsTab = initialTab;
   ui.settingsContext = null;
   ui.settingsSelectedFilePath = null;
   ui.settingsEditorText = "";
   ui.settingsSaveMessage = "";
+  ui.settingsJsonDraft = null;
+  ui.settingsJsonError = "";
+  ui.settingsShowRawJson = false;
   await renderSettingsDialog();
   if (!settingsDialog.open) {
     settingsDialog.showModal();
@@ -1110,9 +1570,24 @@ async function saveCurrentSettingsFile() {
     return;
   }
 
+  if (isJsonSettingsFilePath(ui.settingsSelectedFilePath)) {
+    syncSettingsJsonDraftFromText();
+    if (ui.settingsJsonError) {
+      ui.settingsSaveMessage = `Fix the JSON parse error before saving: ${ui.settingsJsonError}`;
+      await renderSettingsDialog();
+      return;
+    }
+    ui.settingsEditorText = formatJsonValue(currentJsonSettingsValue());
+  }
+
   await api.saveSettingsFile(ui.settingsSelectedFilePath, ui.settingsEditorText);
   ui.settingsContext = await api.getClaudeSettingsContext(currentRepoId());
-  ui.settingsSaveMessage = `Saved ${pathLabel(ui.settingsSelectedFilePath)}`;
+  ui.settingsSaveMessage =
+    `Saved ${friendlySettingsFileTitle(allSettingsFiles().find((file) => file.path === ui.settingsSelectedFilePath) || {
+      path: ui.settingsSelectedFilePath,
+      title: pathLabel(ui.settingsSelectedFilePath),
+      scope: "global"
+    })}`;
   await renderSettingsDialog();
 }
 
@@ -1121,7 +1596,450 @@ function allSettingsFiles() {
     return [];
   }
 
-  return [...ui.settingsContext.globalFiles, ...ui.settingsContext.projectFiles];
+  return [
+    ...sortSettingsFiles(ui.settingsContext.globalFiles),
+    ...sortSettingsFiles(ui.settingsContext.projectFiles)
+  ];
+}
+
+async function loadSelectedSettingsFile(filePath) {
+  ui.settingsSelectedFilePath = filePath;
+  ui.settingsEditorText = await api.loadSettingsFile(filePath);
+  ui.settingsSaveMessage = "";
+  ui.settingsShowRawJson = false;
+  syncSettingsJsonDraftFromText();
+}
+
+function handleSettingsFieldInput(target) {
+  const path = decodeSettingPath(target.dataset.settingPath);
+
+  switch (target.dataset.settingEditor) {
+    case "string":
+      updateJsonSettingValue(path, target.value);
+      break;
+    case "raw-json":
+      ui.settingsEditorText = target.value;
+      syncSettingsJsonDraftFromText();
+      break;
+    default:
+      break;
+  }
+}
+
+function handleSettingsFieldChange(target) {
+  const path = decodeSettingPath(target.dataset.settingPath);
+
+  switch (target.dataset.settingEditor) {
+    case "boolean":
+      updateJsonSettingValue(path, target.checked);
+      break;
+    case "number": {
+      const parsedValue = Number(target.value);
+      updateJsonSettingValue(path, Number.isFinite(parsedValue) ? parsedValue : 0);
+      if (!Number.isFinite(parsedValue)) {
+        target.value = "0";
+      }
+      break;
+    }
+    case "string":
+      updateJsonSettingValue(path, target.value);
+      break;
+    default:
+      break;
+  }
+}
+
+function syncSettingsJsonDraftFromText() {
+  if (!isJsonSettingsFilePath(ui.settingsSelectedFilePath)) {
+    ui.settingsJsonDraft = null;
+    ui.settingsJsonError = "";
+    return;
+  }
+
+  const rawContents = (ui.settingsEditorText || "").trim();
+  if (!rawContents) {
+    ui.settingsJsonDraft = {};
+    ui.settingsJsonError = "";
+    return;
+  }
+
+  try {
+    ui.settingsJsonDraft = JSON.parse(ui.settingsEditorText);
+    ui.settingsJsonError = "";
+  } catch (error) {
+    ui.settingsJsonDraft = null;
+    ui.settingsJsonError = error.message;
+  }
+}
+
+function currentJsonSettingsValue() {
+  return ui.settingsJsonDraft ?? {};
+}
+
+function updateJsonSettingValue(path, value) {
+  const nextRoot = cloneJsonValue(currentJsonSettingsValue());
+  const updatedValue = setJsonValueAtPath(nextRoot, path, value);
+  ui.settingsJsonDraft = updatedValue;
+  ui.settingsJsonError = "";
+  ui.settingsEditorText = formatJsonValue(updatedValue);
+  ui.settingsSaveMessage = "";
+}
+
+function removeJsonSettingAtPath(path) {
+  const nextRoot = cloneJsonValue(currentJsonSettingsValue());
+  deleteJsonValueAtPath(nextRoot, path);
+  ui.settingsJsonDraft = nextRoot;
+  ui.settingsJsonError = "";
+  ui.settingsEditorText = formatJsonValue(nextRoot);
+  ui.settingsSaveMessage = "";
+}
+
+function addJsonArrayItem(path) {
+  const nextRoot = cloneJsonValue(currentJsonSettingsValue());
+  const arrayValue = getJsonValueAtPath(nextRoot, path);
+  if (!Array.isArray(arrayValue)) {
+    return;
+  }
+
+  arrayValue.push(defaultArrayItemValue(arrayValue));
+  ui.settingsJsonDraft = nextRoot;
+  ui.settingsJsonError = "";
+  ui.settingsEditorText = formatJsonValue(nextRoot);
+  ui.settingsSaveMessage = "";
+}
+
+function addRootJsonSetting() {
+  const rootValue = currentJsonSettingsValue();
+  if (!isJsonObject(rootValue)) {
+    ui.settingsSaveMessage = "Use Advanced JSON to change the root structure before adding top-level settings.";
+    return;
+  }
+
+  const keyInput = settingsDialog.querySelector("#settings-new-key");
+  const typeInput = settingsDialog.querySelector("#settings-new-type");
+  const valueInput = settingsDialog.querySelector("#settings-new-value");
+  const nextKey = keyInput?.value.trim();
+
+  if (!nextKey) {
+    ui.settingsSaveMessage = "Enter a setting name first.";
+    return;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(rootValue, nextKey)) {
+    ui.settingsSaveMessage = `${nextKey} already exists in this file.`;
+    return;
+  }
+
+  const nextRoot = cloneJsonValue(rootValue);
+  nextRoot[nextKey] = buildNewSettingValue(typeInput?.value || "string", valueInput?.value || "");
+  ui.settingsJsonDraft = nextRoot;
+  ui.settingsJsonError = "";
+  ui.settingsEditorText = formatJsonValue(nextRoot);
+  ui.settingsSaveMessage = "";
+}
+
+function cloneJsonValue(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function setJsonValueAtPath(rootValue, path, nextValue) {
+  if (!path.length) {
+    return nextValue;
+  }
+
+  const parentValue = getJsonValueAtPath(rootValue, path.slice(0, -1));
+  parentValue[path[path.length - 1]] = nextValue;
+  return rootValue;
+}
+
+function getJsonValueAtPath(rootValue, path) {
+  return path.reduce((currentValue, segment) => currentValue[segment], rootValue);
+}
+
+function deleteJsonValueAtPath(rootValue, path) {
+  if (!path.length) {
+    return rootValue;
+  }
+
+  const parentValue = getJsonValueAtPath(rootValue, path.slice(0, -1));
+  const lastSegment = path[path.length - 1];
+
+  if (Array.isArray(parentValue)) {
+    parentValue.splice(lastSegment, 1);
+  } else {
+    delete parentValue[lastSegment];
+  }
+
+  return rootValue;
+}
+
+function buildNewSettingValue(kind, initialValue) {
+  switch (kind) {
+    case "number": {
+      const parsedValue = Number(initialValue);
+      return Number.isFinite(parsedValue) ? parsedValue : 0;
+    }
+    case "boolean":
+      return initialValue.trim().toLowerCase() === "true";
+    case "object":
+      return {};
+    case "array":
+      return initialValue ? [initialValue] : [];
+    default:
+      return initialValue;
+  }
+}
+
+function defaultArrayItemValue(arrayValue) {
+  if (!arrayValue.length) {
+    return "";
+  }
+
+  return defaultValueFromJsonValue(arrayValue[0]);
+}
+
+function defaultValueFromJsonValue(value) {
+  if (Array.isArray(value)) {
+    return [];
+  }
+
+  if (isJsonObject(value)) {
+    return {};
+  }
+
+  return defaultValueForSettingKind(jsonValueTypeLabel(value).toLowerCase());
+}
+
+function defaultValueForSettingKind(kind) {
+  switch (kind) {
+    case "number":
+      return 0;
+    case "boolean":
+    case "toggle":
+      return false;
+    case "object":
+    case "group":
+      return {};
+    case "array":
+    case "list":
+      return [];
+    case "null":
+      return null;
+    default:
+      return "";
+  }
+}
+
+function countTopLevelJsonEntries(value) {
+  if (Array.isArray(value)) {
+    return value.length;
+  }
+
+  if (isJsonObject(value)) {
+    return Object.keys(value).length;
+  }
+
+  return value === null || value === undefined ? 0 : 1;
+}
+
+function countLeafJsonEntries(value) {
+  if (Array.isArray(value)) {
+    return value.reduce((count, item) => count + countLeafJsonEntries(item), 0);
+  }
+
+  if (isJsonObject(value)) {
+    return Object.values(value).reduce((count, item) => count + countLeafJsonEntries(item), 0);
+  }
+
+  return value === undefined ? 0 : 1;
+}
+
+function describeJsonValueType(value) {
+  return jsonValueTypeLabel(value).toLowerCase();
+}
+
+function jsonValueTypeLabel(value) {
+  if (Array.isArray(value)) {
+    return "Array";
+  }
+
+  if (value === null) {
+    return "Null";
+  }
+
+  if (isJsonObject(value)) {
+    return "Object";
+  }
+
+  switch (typeof value) {
+    case "boolean":
+      return "Boolean";
+    case "number":
+      return "Number";
+    case "string":
+      return "String";
+    default:
+      return "Value";
+  }
+}
+
+function isJsonObject(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isJsonSettingsFile(file) {
+  return isJsonSettingsFilePath(file?.path || "");
+}
+
+function isJsonSettingsFilePath(filePath) {
+  return filePath.endsWith(".json");
+}
+
+function sortSettingsFiles(files) {
+  return [...files].sort((left, right) => {
+    const orderDelta = settingsFileOrder(left) - settingsFileOrder(right);
+    if (orderDelta !== 0) {
+      return orderDelta;
+    }
+
+    return left.path.localeCompare(right.path);
+  });
+}
+
+function settingsFileOrder(file) {
+  const name = pathLabel(file.path);
+  switch (name) {
+    case "settings.json":
+      return 0;
+    case "settings.local.json":
+      return 1;
+    case "CLAUDE.md":
+      return 2;
+    default:
+      return 3;
+  }
+}
+
+function friendlySettingsFileTitle(file) {
+  const name = pathLabel(file.path);
+  if (name === "CLAUDE.md") {
+    return file.scope === "global" ? "Global Instructions" : "Project Instructions";
+  }
+  if (name === "settings.json") {
+    return file.scope === "global" ? "Global Settings" : "Project Settings";
+  }
+  if (name === "settings.local.json") {
+    return file.scope === "global" ? "Global Local Overrides" : "Project Local Overrides";
+  }
+  return file.title;
+}
+
+function friendlySettingsFileListSubtitle(file) {
+  const name = pathLabel(file.path);
+  if (name === "CLAUDE.md") {
+    return file.scope === "global"
+      ? "Shared Markdown instructions for every session"
+      : "Repo-specific Markdown instructions";
+  }
+  if (name === "settings.json") {
+    return file.scope === "global"
+      ? "Shared Claude defaults in JSON"
+      : "Repo-level JSON overrides";
+  }
+  if (name === "settings.local.json") {
+    return file.scope === "global"
+      ? "Machine-specific JSON overrides"
+      : "Repo-local JSON overrides";
+  }
+  return file.title;
+}
+
+function friendlySettingsFileSummary(file) {
+  const name = pathLabel(file.path);
+  if (name === "CLAUDE.md") {
+    return file.scope === "global"
+      ? "Keep broad Claude guidance here. This file stays as Markdown and applies across your workspaces."
+      : "Keep repo-specific Claude guidance here. This file stays as Markdown and travels with the project.";
+  }
+  if (name === "settings.json") {
+    return file.scope === "global"
+      ? "Edit shared Claude defaults in a form instead of reading raw JSON. Saving writes back to the underlying file."
+      : "Edit repo-level Claude overrides in a form. These settings can replace your global defaults for this project.";
+  }
+  if (name === "settings.local.json") {
+    return file.scope === "global"
+      ? "Use local overrides for machine-specific Claude behavior that should sit on top of your shared defaults."
+      : "Use repo-local overrides for settings that should win inside this project without changing broader defaults.";
+  }
+  return file.title;
+}
+
+function settingsScopeLabel(file) {
+  return file.scope === "global" ? "Global Claude Defaults" : "Project Claude Override";
+}
+
+function friendlySourceLabel(sourceLabel) {
+  const file = allSettingsFiles().find((candidate) => candidate.title === sourceLabel);
+  return file ? friendlySettingsFileTitle(file) : sourceLabel;
+}
+
+function labelForResolvedKeyPath(keyPath) {
+  if (!keyPath || keyPath === "$") {
+    return "Root Value";
+  }
+
+  const segments = keyPath.split(".");
+  return humanizeSettingSegment(segments[segments.length - 1]);
+}
+
+function labelForSettingPath(path) {
+  if (!path.length) {
+    return "Root Value";
+  }
+
+  const lastSegment = path[path.length - 1];
+  if (typeof lastSegment === "number") {
+    return `Item ${lastSegment + 1}`;
+  }
+
+  return humanizeSettingSegment(lastSegment);
+}
+
+function humanizeSettingSegment(value) {
+  return String(value)
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function formatSettingPath(path) {
+  if (!path.length) {
+    return "$";
+  }
+
+  return path.reduce((result, segment) => {
+    if (typeof segment === "number") {
+      return `${result}[${segment}]`;
+    }
+
+    return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment)
+      ? `${result}.${segment}`
+      : `${result}[${JSON.stringify(segment)}]`;
+  }, "$");
+}
+
+function encodeSettingPath(path) {
+  return encodeURIComponent(JSON.stringify(path));
+}
+
+function decodeSettingPath(serializedPath) {
+  return JSON.parse(decodeURIComponent(serializedPath || "%5B%5D"));
+}
+
+function formatJsonValue(value) {
+  return `${JSON.stringify(value, null, 2)}\n`;
 }
 
 function mergeSessionSummary(summary) {

@@ -1,0 +1,17 @@
+{
+  "name": "claude-code-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code Workspace desktop shell built with Electron",
+  "main": "electron/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0"
+  }
+}

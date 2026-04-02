@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <title>Claude Workspace</title>
+    <link rel="stylesheet" href="./vendor/xterm.css" />
+    <link rel="stylesheet" href="./app.css" />
+  </head>
+  <body>
+    <div id="app-shell">
+      <aside id="sidebar"></aside>
+      <main id="detail"></main>
+    </div>
+
+    <dialog id="launcher-dialog" class="app-dialog"></dialog>
+    <dialog id="settings-dialog" class="app-dialog app-dialog-wide"></dialog>
+    <dialog id="quick-switcher-dialog" class="app-dialog"></dialog>
+    <dialog id="command-palette-dialog" class="app-dialog"></dialog>
+
+    <script src="./vendor/xterm.js"></script>
+    <script src="./vendor/addon-fit.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

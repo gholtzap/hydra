@@ -17,6 +17,8 @@ interface ClaudeWorkspaceApi {
     repoId: string,
     position: { x: number; y: number }
   ) => Promise<any>;
+  readClipboardText: () => Promise<string>;
+  writeClipboardText: (text: string) => Promise<any>;
   revealPath: (filePath: string) => Promise<any>;
   nextUnreadSession: () => Promise<string | null>;
   updatePreferences: (patch: Record<string, unknown>) => Promise<any>;

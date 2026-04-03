@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
   openRepoInFinder: (repoId) => ipcRenderer.invoke("repo:reveal", repoId),
   showRepoContextMenu: (repoId, position) =>
     ipcRenderer.invoke("repo:contextMenu", { repoId, position }),
+  readClipboardText: () => ipcRenderer.invoke("clipboard:readText"),
+  writeClipboardText: (text) => ipcRenderer.invoke("clipboard:writeText", text),
   revealPath: (filePath) => ipcRenderer.invoke("path:reveal", filePath),
   nextUnreadSession: () => ipcRenderer.invoke("session:nextUnread"),
   updatePreferences: (patch) => ipcRenderer.invoke("preferences:update", patch),

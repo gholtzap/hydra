@@ -8,6 +8,7 @@ const {
   BrowserWindow,
   Menu,
   Notification,
+  clipboard,
   dialog,
   ipcMain,
   nativeTheme,
@@ -100,6 +101,11 @@ class AppController {
     ipcMain.handle("repo:contextMenu", (_event, payload) =>
       this.showRepoContextMenu(payload.repoId, payload.position)
     );
+    ipcMain.handle("clipboard:readText", () => clipboard.readText());
+    ipcMain.handle("clipboard:writeText", (_event, text) => {
+      clipboard.writeText(text || "");
+      return true;
+    });
     ipcMain.handle("path:reveal", (_event, filePath) => shell.showItemInFolder(filePath));
     ipcMain.handle("session:nextUnread", () => this.nextUnreadSession());
     ipcMain.handle("preferences:update", (_event, patch) => this.updatePreferences(patch));
@@ -161,6 +167,18 @@ class AppController {
             accelerator: "CmdOrCtrl+]",
             click: () => this.sendCommand("next-unread")
           }
+        ]
+      },
+      {
+        label: "Edit",
+        submenu: [
+          { role: "undo" },
+          { role: "redo" },
+          { type: "separator" },
+          { role: "cut" },
+          { role: "copy" },
+          { role: "paste" },
+          { role: "selectAll" }
         ]
       },
       {

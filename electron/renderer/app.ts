@@ -13,6 +13,7 @@ const ui = {
   selection: { type: "inbox", id: null },
   focusSection: "main" as SectionId,
   sidebarExpandedRepoId: null as string | null,
+  sidebarNavItem: "inbox" as string,
   mainListSessionId: null as string | null,
   terminal: null,
   fitAddon: null,
@@ -210,6 +211,7 @@ function replaceState(nextState) {
   if (ui.mainListSessionId && !sessionById(ui.mainListSessionId)) {
     ui.mainListSessionId = null;
   }
+  syncSidebarNavSelection();
   syncMainListSelection();
 }
 
@@ -222,6 +224,7 @@ function ensureValidSelection() {
     ui.selection = { type: "inbox", id: null };
   }
 
+  syncSidebarNavSelection();
   syncMainListSelection();
   normalizeFocusSection();
 }
@@ -238,13 +241,13 @@ function renderSidebar() {
           ${renderProjectRailButtons()}
         </div>
         <div class="sidebar-rail-bottom">
-          <button class="sidebar-rail-button sidebar-utility-button" data-action="open-workspace" data-tooltip="Add Workspace" title="Add Workspace" aria-label="Add Workspace">
+          <button class="sidebar-rail-button sidebar-utility-button ${sidebarNavMatches(sidebarActionNavId("open-workspace")) ? "keyboard-active" : ""}" data-action="open-workspace" data-tooltip="Add Workspace" title="Add Workspace" aria-label="Add Workspace">
             ${renderUtilityIcon("workspace")}
           </button>
-          <button class="sidebar-rail-button sidebar-utility-button" data-action="create-project" data-tooltip="New Folder" title="New Folder" aria-label="New Folder">
+          <button class="sidebar-rail-button sidebar-utility-button ${sidebarNavMatches(sidebarActionNavId("create-project")) ? "keyboard-active" : ""}" data-action="create-project" data-tooltip="New Folder" title="New Folder" aria-label="New Folder">
             ${renderUtilityIcon("folder")}
           </button>
-          <button class="sidebar-rail-button sidebar-utility-button" data-action="open-settings" data-tooltip="Settings" title="Settings" aria-label="Settings">
+          <button class="sidebar-rail-button sidebar-utility-button ${sidebarNavMatches(sidebarActionNavId("open-settings")) ? "keyboard-active" : ""}" data-action="open-settings" data-tooltip="Settings" title="Settings" aria-label="Settings">
             ${renderUtilityIcon("settings")}
           </button>
         </div>
@@ -260,7 +263,7 @@ function renderInboxRailButton() {
   const count = inboxSessions().length;
 
   return `
-    <button class="sidebar-rail-button sidebar-home-button ${selectionMatches("inbox") ? "active" : ""}" data-action="select-inbox" data-tooltip="Inbox" title="Inbox" aria-label="Inbox">
+    <button class="sidebar-rail-button sidebar-home-button ${selectionMatches("inbox") ? "active" : ""} ${sidebarNavMatches("inbox") ? "keyboard-active" : ""}" data-action="select-inbox" data-tooltip="Inbox" title="Inbox" aria-label="Inbox">
       ${renderUtilityIcon("inbox")}
       ${count ? `<span class="sidebar-rail-badge">${count > 9 ? "9+" : count}</span>` : ""}
     </button>
@@ -287,7 +290,7 @@ function renderProjectRailButton(repo) {
   const badgeLabel = attentionCount ? (attentionCount > 9 ? "9+" : String(attentionCount)) : "";
 
   return `
-    <button class="sidebar-rail-button sidebar-project-button ${active ? "active" : ""} ${expanded ? "expanded" : ""}" data-action="select-repo" data-repo-id="${repo.id}" data-tooltip="${escapeAttribute(repo.name)}" title="${escapeAttribute(repo.name)}" aria-label="${escapeAttribute(repo.name)}">
+    <button class="sidebar-rail-button sidebar-project-button ${active ? "active" : ""} ${expanded ? "expanded" : ""} ${sidebarNavMatches(repo.id) ? "keyboard-active" : ""}" data-action="select-repo" data-repo-id="${repo.id}" data-tooltip="${escapeAttribute(repo.name)}" title="${escapeAttribute(repo.name)}" aria-label="${escapeAttribute(repo.name)}">
       <span class="sidebar-project-avatar" aria-hidden="true">${renderProjectAvatar(repo)}</span>
       ${
         badgeLabel
@@ -534,6 +537,7 @@ function mountTerminal(session) {
     ui.fitAddon = new FitAddon.FitAddon();
     ui.terminal.loadAddon(ui.fitAddon);
     ui.terminal.open(terminalElement);
+    ui.terminal.attachCustomKeyEventHandler((event) => handleTerminalCustomKeyEvent(event));
     ui.terminal.onData((data) => {
       if (ui.terminalSessionId) {
         api.sendInput(ui.terminalSessionId, data);
@@ -1330,6 +1334,8 @@ async function handleClick(event) {
 
   const { action } = target.dataset;
 
+  syncSidebarNavItemFromTarget(target);
+
   switch (action) {
     case "select-inbox":
       await selectInbox();
@@ -1489,6 +1495,7 @@ function handlePointerDown(event) {
   }
 
   if (sidebarElement.contains(target)) {
+    syncSidebarNavItemFromTarget(target);
     setFocusSection("sidebar");
     return;
   }
@@ -1526,7 +1533,7 @@ async function handleContextMenu(event) {
   await api.showRepoContextMenu(repoId, { x: event.clientX, y: event.clientY });
 }
 
-function handleKeyDown(event) {
+async function handleKeyDown(event) {
   if (isAnyDialogOpen()) {
     return;
   }
@@ -1540,6 +1547,10 @@ function handleKeyDown(event) {
 
     event.preventDefault();
     setFocusSection(nextSection);
+    return;
+  }
+
+  if (await handleTerminalClipboardShortcut(event)) {
     return;
   }
 
@@ -1571,11 +1582,9 @@ function handleKeyDown(event) {
     }
 
     if (event.key === "Enter") {
-      const repoId = currentRepoId();
-      if (repoId) {
-        event.preventDefault();
-        toggleSidebarProjectDrawer(repoId);
-      }
+      event.preventDefault();
+      await activateSidebarNavItem();
+      return;
     }
   }
 
@@ -1675,6 +1684,7 @@ async function selectInbox(nextFocusSection: SectionId | null = null) {
   }
   ui.selection = { type: "inbox", id: null };
   ui.sidebarExpandedRepoId = null;
+  ui.sidebarNavItem = "inbox";
   syncMainListSelection();
   normalizeFocusSection();
   await api.setFocusedSession(null);
@@ -1693,6 +1703,7 @@ async function selectRepo(
   if (ui.sidebarExpandedRepoId) {
     ui.sidebarExpandedRepoId = repoId;
   }
+  ui.sidebarNavItem = repoId;
   syncMainListSelection();
   normalizeFocusSection();
   await api.setFocusedSession(null);
@@ -1711,6 +1722,7 @@ async function selectSession(
   if (ui.sidebarExpandedRepoId) {
     ui.sidebarExpandedRepoId = sessionById(sessionId)?.repoID || ui.sidebarExpandedRepoId;
   }
+  ui.sidebarNavItem = sessionById(sessionId)?.repoID || ui.sidebarNavItem;
   ui.mainListSessionId = sessionId;
   normalizeFocusSection();
   await api.setFocusedSession(sessionId);
@@ -2314,6 +2326,64 @@ function currentRepoId() {
   return null;
 }
 
+function sidebarActionNavId(action) {
+  return `action:${action}`;
+}
+
+function sidebarNavItems() {
+  return [
+    "inbox",
+    ...sortedRepos().map((repo) => repo.id),
+    sidebarActionNavId("open-workspace"),
+    sidebarActionNavId("create-project"),
+    sidebarActionNavId("open-settings")
+  ];
+}
+
+function syncSidebarNavSelection() {
+  const items = new Set(sidebarNavItems());
+  if (items.has(ui.sidebarNavItem)) {
+    return;
+  }
+
+  if (ui.selection.type === "inbox") {
+    ui.sidebarNavItem = "inbox";
+    return;
+  }
+
+  ui.sidebarNavItem = currentRepoId() || "inbox";
+}
+
+function sidebarNavMatches(itemId) {
+  return ui.focusSection === "sidebar" && ui.sidebarNavItem === itemId;
+}
+
+function syncSidebarNavItemFromTarget(target) {
+  const actionable = target.closest("[data-action], [data-repo-id]") as HTMLElement | null;
+  if (!actionable || !sidebarElement.contains(actionable) || isSidebarDrawerTarget(actionable)) {
+    return;
+  }
+
+  const { action, repoId } = actionable.dataset;
+  if (repoId) {
+    ui.sidebarNavItem = repoId;
+    return;
+  }
+
+  switch (action) {
+    case "select-inbox":
+      ui.sidebarNavItem = "inbox";
+      break;
+    case "open-workspace":
+    case "create-project":
+    case "open-settings":
+      ui.sidebarNavItem = sidebarActionNavId(action);
+      break;
+    default:
+      break;
+  }
+}
+
 function expandedSidebarRepo() {
   return ui.sidebarExpandedRepoId ? repoById(ui.sidebarExpandedRepoId) : null;
 }
@@ -2470,13 +2540,12 @@ function compareRepos(left, right) {
 }
 
 function navigateSidebarItems(direction: number) {
-  const items = ["inbox", ...sortedRepos().map((repo) => repo.id)];
+  const items = sidebarNavItems();
   if (!items.length) {
     return;
   }
 
-  const currentItemId = ui.selection.type === "inbox" ? "inbox" : currentRepoId();
-  const currentIndex = items.findIndex((itemId) => itemId === currentItemId);
+  const currentIndex = items.findIndex((itemId) => itemId === ui.sidebarNavItem);
   if (currentIndex < 0) {
     const fallbackIndex = direction > 0 ? 0 : items.length - 1;
     const fallbackItemId = items[fallbackIndex];
@@ -2494,6 +2563,12 @@ function navigateSidebarItems(direction: number) {
   }
 
   const nextItemId = items[nextIndex];
+  if (nextItemId.startsWith("action:")) {
+    ui.sidebarNavItem = nextItemId;
+    renderSidebar();
+    return;
+  }
+
   if (nextItemId === "inbox") {
     void selectInbox("sidebar");
     return;
@@ -2573,11 +2648,17 @@ function collapseSidebarProjectDrawer(repoId = null) {
 }
 
 function scrollSidebarSelectionIntoView() {
-  const activeRepoId = currentRepoId();
-  const target =
-    (activeRepoId
-      ? sidebarElement.querySelector(`[data-repo-id="${CSS.escape(activeRepoId)}"]`)
-      : sidebarElement.querySelector('[data-action="select-inbox"]')) as HTMLElement | null;
+  const itemId = ui.sidebarNavItem;
+  let target: HTMLElement | null = null;
+
+  if (itemId === "inbox") {
+    target = sidebarElement.querySelector('[data-action="select-inbox"]') as HTMLElement | null;
+  } else if (itemId.startsWith("action:")) {
+    const action = itemId.slice("action:".length);
+    target = sidebarElement.querySelector(`[data-action="${CSS.escape(action)}"]`) as HTMLElement | null;
+  } else {
+    target = sidebarElement.querySelector(`[data-repo-id="${CSS.escape(itemId)}"]`) as HTMLElement | null;
+  }
 
   target?.scrollIntoView({ block: "nearest" });
 }
@@ -2752,6 +2833,128 @@ function isTerminalTarget(target: HTMLElement) {
 
 function isSidebarDrawerTarget(target: HTMLElement) {
   return !!target.closest(".sidebar-project-drawer");
+}
+
+async function activateSidebarNavItem() {
+  const itemId = ui.sidebarNavItem;
+  if (itemId.startsWith("action:")) {
+    const action = itemId.slice("action:".length);
+    switch (action) {
+      case "open-workspace":
+        await api.openWorkspaceFolder();
+        break;
+      case "create-project":
+        await api.createProjectFolder();
+        break;
+      case "open-settings":
+        await openSettings("general");
+        break;
+      default:
+        break;
+    }
+    return;
+  }
+
+  if (itemId === "inbox") {
+    await selectInbox("sidebar");
+    return;
+  }
+
+  toggleSidebarProjectDrawer(itemId);
+}
+
+async function handleTerminalClipboardShortcut(event) {
+  if (!ui.terminal || terminalClipboardHandled(event)) {
+    return false;
+  }
+
+  if (ui.focusSection !== "terminal" && !isTerminalKeyboardTarget(event.target)) {
+    return false;
+  }
+
+  if (isTerminalPasteShortcut(event)) {
+    event.preventDefault();
+    markTerminalClipboardHandled(event);
+    await pasteClipboardIntoTerminal();
+    return true;
+  }
+
+  if (isTerminalCopyShortcut(event)) {
+    event.preventDefault();
+    markTerminalClipboardHandled(event);
+    const selection = ui.terminal.getSelection?.() || "";
+    if (selection) {
+      await api.writeClipboardText(selection);
+    }
+    return true;
+  }
+
+  return false;
+}
+
+function handleTerminalCustomKeyEvent(event) {
+  if (event.type !== "keydown") {
+    return true;
+  }
+
+  if (!isTerminalCopyShortcut(event) && !isTerminalPasteShortcut(event)) {
+    return true;
+  }
+
+  if (terminalClipboardHandled(event)) {
+    return false;
+  }
+
+  void handleTerminalClipboardShortcut(event);
+  return false;
+}
+
+async function pasteClipboardIntoTerminal() {
+  if (!ui.terminal) {
+    return;
+  }
+
+  const text = await api.readClipboardText();
+  if (!text) {
+    return;
+  }
+
+  if (typeof ui.terminal.paste === "function") {
+    ui.terminal.paste(text);
+    return;
+  }
+
+  if (ui.terminalSessionId) {
+    await api.sendInput(ui.terminalSessionId, text);
+  }
+}
+
+function isTerminalKeyboardTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return (
+    target.classList.contains("xterm-helper-textarea") ||
+    !!target.closest("#terminal-shell") ||
+    !!target.closest(".xterm")
+  );
+}
+
+function markTerminalClipboardHandled(event) {
+  (event as KeyboardEvent & { __claudeWorkspaceTerminalClipboardHandled?: boolean }).__claudeWorkspaceTerminalClipboardHandled = true;
+}
+
+function terminalClipboardHandled(event) {
+  return !!(event as KeyboardEvent & { __claudeWorkspaceTerminalClipboardHandled?: boolean }).__claudeWorkspaceTerminalClipboardHandled;
+}
+
+function isTerminalCopyShortcut(event) {
+  return event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "c";
+}
+
+function isTerminalPasteShortcut(event) {
+  return event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "v";
 }
 
 function isSectionNavigationKey(event: KeyboardEvent) {

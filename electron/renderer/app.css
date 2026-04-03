@@ -415,6 +415,11 @@ textarea {
   color: var(--text);
 }
 
+.sidebar-rail-button.keyboard-active {
+  border-color: var(--surface-active-border);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
 #sidebar.section-focused .sidebar-rail {
   border-radius: 24px;
   box-shadow: inset 0 0 0 1px var(--surface-active-border);

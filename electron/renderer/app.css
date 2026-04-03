@@ -750,6 +750,18 @@ textarea {
   border-color: var(--surface-active-border);
 }
 
+.inbox-card.keyboard-active,
+.session-row.keyboard-active {
+  border-color: var(--surface-active-border);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.inbox-card.keyboard-active:hover,
+.session-row.keyboard-active:hover {
+  border-color: var(--surface-active-border);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
 .sidebar-item-title,
 .row-title {
   display: flex;

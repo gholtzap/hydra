@@ -13,6 +13,7 @@ const ui = {
   selection: { type: "inbox", id: null },
   focusSection: "main" as SectionId,
   sidebarExpandedRepoId: null as string | null,
+  mainListSessionId: null as string | null,
   terminal: null,
   fitAddon: null,
   terminalSessionId: null,
@@ -206,6 +207,10 @@ function replaceState(nextState) {
   if (ui.sidebarExpandedRepoId && !repoById(ui.sidebarExpandedRepoId)) {
     ui.sidebarExpandedRepoId = null;
   }
+  if (ui.mainListSessionId && !sessionById(ui.mainListSessionId)) {
+    ui.mainListSessionId = null;
+  }
+  syncMainListSelection();
 }
 
 function ensureValidSelection() {
@@ -217,6 +222,7 @@ function ensureValidSelection() {
     ui.selection = { type: "inbox", id: null };
   }
 
+  syncMainListSelection();
   normalizeFocusSection();
 }
 
@@ -606,7 +612,7 @@ function terminalReplayText(session) {
 function renderInboxCard(session) {
   const repo = repoById(session.repoID);
   return `
-    <button class="inbox-card" data-action="select-session" data-session-id="${session.id}">
+    <button class="inbox-card ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}">
       <div class="row-title">
         <span>${escapeHtml(session.title)}</span>
         <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
@@ -619,7 +625,7 @@ function renderInboxCard(session) {
 
 function renderRepoSession(session, repo) {
   return `
-    <button class="session-row ${selectionMatches("session", session.id) ? "active" : ""}" data-action="select-session" data-session-id="${session.id}">
+    <button class="session-row ${selectionMatches("session", session.id) ? "active" : ""} ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}">
       <div class="row-title">
         <span>${escapeHtml(session.title)}</span>
         <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
@@ -1560,7 +1566,7 @@ function handleKeyDown(event) {
   if (ui.focusSection === "sidebar" && !event.metaKey && !event.ctrlKey && !event.altKey) {
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
       event.preventDefault();
-      navigateSidebarProjects(event.key === "ArrowDown" ? 1 : -1);
+      navigateSidebarItems(event.key === "ArrowDown" ? 1 : -1);
       return;
     }
 
@@ -1578,6 +1584,19 @@ function handleKeyDown(event) {
       event.preventDefault();
       navigateSidebarDrawerSessions(event.key === "ArrowDown" ? 1 : -1);
       return;
+    }
+  }
+
+  if (ui.focusSection === "main" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      event.preventDefault();
+      navigateMainListSessions(event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+
+    if (event.key === "Enter" && ui.mainListSessionId) {
+      event.preventDefault();
+      void selectSession(ui.mainListSessionId, "terminal");
     }
   }
 }
@@ -1656,6 +1675,7 @@ async function selectInbox(nextFocusSection: SectionId | null = null) {
   }
   ui.selection = { type: "inbox", id: null };
   ui.sidebarExpandedRepoId = null;
+  syncMainListSelection();
   normalizeFocusSection();
   await api.setFocusedSession(null);
   renderSidebar();
@@ -1673,6 +1693,7 @@ async function selectRepo(
   if (ui.sidebarExpandedRepoId) {
     ui.sidebarExpandedRepoId = repoId;
   }
+  syncMainListSelection();
   normalizeFocusSection();
   await api.setFocusedSession(null);
   renderSidebar();
@@ -1690,6 +1711,7 @@ async function selectSession(
   if (ui.sidebarExpandedRepoId) {
     ui.sidebarExpandedRepoId = sessionById(sessionId)?.repoID || ui.sidebarExpandedRepoId;
   }
+  ui.mainListSessionId = sessionId;
   normalizeFocusSection();
   await api.setFocusedSession(sessionId);
   renderSidebar();
@@ -2296,6 +2318,37 @@ function expandedSidebarRepo() {
   return ui.sidebarExpandedRepoId ? repoById(ui.sidebarExpandedRepoId) : null;
 }
 
+function mainListSessions() {
+  if (ui.selection.type === "repo") {
+    return sessionsForRepo(ui.selection.id);
+  }
+
+  if (ui.selection.type === "inbox") {
+    return inboxSessions();
+  }
+
+  return [];
+}
+
+function syncMainListSelection() {
+  if (ui.selection.type === "session") {
+    ui.mainListSessionId = ui.selection.id;
+    return;
+  }
+
+  const sessions = mainListSessions();
+  if (!sessions.length) {
+    ui.mainListSessionId = null;
+    return;
+  }
+
+  if (ui.mainListSessionId && sessions.some((session) => session.id === ui.mainListSessionId)) {
+    return;
+  }
+
+  ui.mainListSessionId = sessions[0].id;
+}
+
 function normalizeFocusSection() {
   const sections = availableSections();
   if (!sections.includes(ui.focusSection)) {
@@ -2397,6 +2450,7 @@ function focusCurrentSectionElement() {
     default: {
       const sessionMainRegion = document.getElementById("session-main-region") as HTMLElement | null;
       (sessionMainRegion || detailElement).focus({ preventScroll: true });
+      scrollMainListSelectionIntoView();
       break;
     }
   }
@@ -2415,25 +2469,37 @@ function compareRepos(left, right) {
   return left.path.localeCompare(right.path);
 }
 
-function navigateSidebarProjects(direction: number) {
-  const repos = sortedRepos();
-  if (!repos.length) {
+function navigateSidebarItems(direction: number) {
+  const items = ["inbox", ...sortedRepos().map((repo) => repo.id)];
+  if (!items.length) {
     return;
   }
 
-  const currentRepoIndex = repos.findIndex((repo) => repo.id === currentRepoId());
-  if (currentRepoIndex < 0) {
-    const fallbackIndex = direction > 0 ? 0 : repos.length - 1;
-    void selectRepo(repos[fallbackIndex].id, "sidebar");
+  const currentItemId = ui.selection.type === "inbox" ? "inbox" : currentRepoId();
+  const currentIndex = items.findIndex((itemId) => itemId === currentItemId);
+  if (currentIndex < 0) {
+    const fallbackIndex = direction > 0 ? 0 : items.length - 1;
+    const fallbackItemId = items[fallbackIndex];
+    if (fallbackItemId === "inbox") {
+      void selectInbox("sidebar");
+    } else {
+      void selectRepo(fallbackItemId, "sidebar");
+    }
     return;
   }
 
-  const nextIndex = currentRepoIndex + direction;
-  if (nextIndex < 0 || nextIndex >= repos.length) {
+  const nextIndex = currentIndex + direction;
+  if (nextIndex < 0 || nextIndex >= items.length) {
     return;
   }
 
-  void selectRepo(repos[nextIndex].id, "sidebar");
+  const nextItemId = items[nextIndex];
+  if (nextItemId === "inbox") {
+    void selectInbox("sidebar");
+    return;
+  }
+
+  void selectRepo(nextItemId, "sidebar");
 }
 
 function navigateSidebarDrawerSessions(direction: number) {
@@ -2460,6 +2526,28 @@ function navigateSidebarDrawerSessions(direction: number) {
   }
 
   void selectSession(sessions[nextIndex].id, "sidebar-drawer");
+}
+
+function navigateMainListSessions(direction: number) {
+  const sessions = mainListSessions();
+  if (!sessions.length) {
+    return;
+  }
+
+  const currentIndex = sessions.findIndex((session) => session.id === ui.mainListSessionId);
+  if (currentIndex < 0) {
+    ui.mainListSessionId = direction > 0 ? sessions[0].id : sessions[sessions.length - 1].id;
+    renderDetail();
+    return;
+  }
+
+  const nextIndex = currentIndex + direction;
+  if (nextIndex < 0 || nextIndex >= sessions.length) {
+    return;
+  }
+
+  ui.mainListSessionId = sessions[nextIndex].id;
+  renderDetail();
 }
 
 function toggleSidebarProjectDrawer(repoId) {
@@ -2506,6 +2594,18 @@ function scrollSidebarDrawerSelectionIntoView() {
   target?.scrollIntoView({ block: "nearest" });
 }
 
+function scrollMainListSelectionIntoView() {
+  if (!ui.mainListSessionId || ui.focusSection !== "main") {
+    return;
+  }
+
+  const target = detailElement.querySelector(
+    `[data-session-id="${CSS.escape(ui.mainListSessionId)}"]`
+  ) as HTMLElement | null;
+
+  target?.scrollIntoView({ block: "nearest" });
+}
+
 function sessionsForRepo(repoId) {
   return [...state.sessions]
     .filter((session) => session.repoID === repoId)
@@ -2526,6 +2626,10 @@ function inboxSessions() {
 
 function selectionMatches(type, id = null) {
   return ui.selection.type === type && (id === null || ui.selection.id === id);
+}
+
+function mainListSelectionMatches(sessionId) {
+  return ui.focusSection === "main" && ui.mainListSessionId === sessionId;
 }
 
 function renderProjectAvatar(repo) {

@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     ipcRenderer.invoke("session:resize", { sessionId, cols, rows }),
   setFocusedSession: (sessionId) => ipcRenderer.invoke("session:focus", sessionId),
   openRepoInFinder: (repoId) => ipcRenderer.invoke("repo:reveal", repoId),
+  showRepoContextMenu: (repoId, position) =>
+    ipcRenderer.invoke("repo:contextMenu", { repoId, position }),
   revealPath: (filePath) => ipcRenderer.invoke("path:reveal", filePath),
   nextUnreadSession: () => ipcRenderer.invoke("session:nextUnread"),
   updatePreferences: (patch) => ipcRenderer.invoke("preferences:update", patch),

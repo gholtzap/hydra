@@ -63,6 +63,7 @@ document.addEventListener("click", handleClick);
 document.addEventListener("input", handleInput);
 document.addEventListener("change", handleChange);
 document.addEventListener("pointerdown", handlePointerDown, true);
+document.addEventListener("contextmenu", handleContextMenu, true);
 document.addEventListener("keydown", handleKeyDown, true);
 
 api.onStateChanged((nextState) => {
@@ -109,7 +110,7 @@ api.onSessionUpdated((payload) => {
   }
 });
 
-api.onCommand(async ({ command }) => {
+api.onCommand(async ({ command, sessionId }) => {
   switch (command) {
     case "new-session":
       openLauncher();
@@ -127,6 +128,11 @@ api.onCommand(async ({ command }) => {
       }
       break;
     }
+    case "select-session":
+      if (sessionId) {
+        await selectSession(sessionId, "terminal");
+      }
+      break;
     default:
       break;
   }
@@ -292,7 +298,7 @@ function renderSidebarProjectDrawer(repo) {
   const sessions = sessionsForRepo(repo.id);
 
   return `
-    <section class="sidebar-project-drawer" tabindex="-1">
+    <section class="sidebar-project-drawer" tabindex="-1" data-repo-id="${repo.id}">
       <div class="sidebar-project-drawer-header">
         <div class="sidebar-project-drawer-title-row">
           <div class="sidebar-project-drawer-avatar" aria-hidden="true">${renderProjectAvatar(repo)}</div>
@@ -1486,6 +1492,34 @@ function handlePointerDown(event) {
   }
 }
 
+async function handleContextMenu(event) {
+  if (isAnyDialogOpen()) {
+    return;
+  }
+
+  const target = event.target as HTMLElement | null;
+  if (!target) {
+    return;
+  }
+
+  const repoElement = target.closest("[data-repo-id]") as HTMLElement | null;
+  const repoId = repoElement?.dataset.repoId;
+  if (!repoId || !sidebarElement.contains(repoElement)) {
+    return;
+  }
+
+  event.preventDefault();
+
+  const nextSection = isSidebarDrawerTarget(target) ? "sidebar-drawer" : "sidebar";
+  if (currentRepoId() !== repoId) {
+    await selectRepo(repoId, nextSection);
+  } else {
+    setFocusSection(nextSection);
+  }
+
+  await api.showRepoContextMenu(repoId, { x: event.clientX, y: event.clientY });
+}
+
 function handleKeyDown(event) {
   if (isAnyDialogOpen()) {
     return;
@@ -1505,6 +1539,22 @@ function handleKeyDown(event) {
 
   if (isEditableTarget(event.target as HTMLElement | null)) {
     return;
+  }
+
+  if (
+    event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey &&
+    event.key.toLowerCase() === "c" &&
+    (ui.focusSection === "sidebar" || ui.focusSection === "sidebar-drawer")
+  ) {
+    const repoId = currentRepoId();
+    if (repoId) {
+      event.preventDefault();
+      void startClaudeSessionForRepo(repoId);
+      return;
+    }
   }
 
   if (ui.focusSection === "sidebar" && !event.metaKey && !event.ctrlKey && !event.altKey) {
@@ -1665,15 +1715,8 @@ async function startLauncherSession() {
     return;
   }
 
-  const sessionId = await api.createSession(
-    ui.launcherSelectedRepoId,
-    ui.launcherLaunchesClaudeOnStart
-  );
-
   launcherDialog.close();
-  if (sessionId) {
-    await selectSession(sessionId, "terminal");
-  }
+  await startSessionForRepo(ui.launcherSelectedRepoId, ui.launcherLaunchesClaudeOnStart, "terminal");
 }
 
 async function openSettings(initialTab = "general") {
@@ -1705,6 +1748,27 @@ function openCommandPalette() {
   if (!commandPaletteDialog.open) {
     commandPaletteDialog.showModal();
   }
+}
+
+async function startClaudeSessionForRepo(repoId) {
+  await startSessionForRepo(repoId, true, "terminal");
+}
+
+async function startSessionForRepo(
+  repoId,
+  launchesClaudeOnStart,
+  focusSection: SectionId = "terminal"
+) {
+  if (!repoId) {
+    return null;
+  }
+
+  const sessionId = await api.createSession(repoId, launchesClaudeOnStart);
+  if (sessionId) {
+    await selectSession(sessionId, focusSection);
+  }
+
+  return sessionId;
 }
 
 async function saveCurrentSettingsFile() {

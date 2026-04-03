@@ -97,6 +97,9 @@ class AppController {
     );
     ipcMain.handle("session:focus", (_event, sessionId) => this.setFocusedSession(sessionId));
     ipcMain.handle("repo:reveal", (_event, repoId) => this.revealRepo(repoId));
+    ipcMain.handle("repo:contextMenu", (_event, payload) =>
+      this.showRepoContextMenu(payload.repoId, payload.position)
+    );
     ipcMain.handle("path:reveal", (_event, filePath) => shell.showItemInFolder(filePath));
     ipcMain.handle("session:nextUnread", () => this.nextUnreadSession());
     ipcMain.handle("preferences:update", (_event, patch) => this.updatePreferences(patch));
@@ -218,12 +221,12 @@ class AppController {
     });
   }
 
-  sendCommand(command) {
+  sendCommand(command, payload = {}) {
     if (!this.window || this.window.isDestroyed()) {
       return;
     }
 
-    this.window.webContents.send("app:command", { command });
+    this.window.webContents.send("app:command", { command, ...payload });
   }
 
   scheduleSave() {
@@ -401,6 +404,35 @@ class AppController {
     }
 
     shell.showItemInFolder(repo.path);
+  }
+
+  showRepoContextMenu(repoId, position) {
+    const repo = this.repoById(repoId);
+    if (!repo || !this.window || this.window.isDestroyed()) {
+      return;
+    }
+
+    const menu = Menu.buildFromTemplate([
+      {
+        label: "Start Claude Code Session",
+        click: () => {
+          const sessionId = this.createSession(repoId, true);
+          if (sessionId) {
+            this.sendCommand("select-session", { sessionId });
+          }
+        }
+      },
+      {
+        label: "Reveal Repo",
+        click: () => this.revealRepo(repoId)
+      }
+    ]);
+
+    menu.popup({
+      window: this.window,
+      x: Number.isFinite(position?.x) ? position.x : undefined,
+      y: Number.isFinite(position?.y) ? position.y : undefined
+    });
   }
 
   nextUnreadSession() {

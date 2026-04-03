@@ -13,6 +13,10 @@ interface ClaudeWorkspaceApi {
   resizeSession: (sessionId: string, cols: number, rows: number) => Promise<any>;
   setFocusedSession: (sessionId: string | null) => Promise<any>;
   openRepoInFinder: (repoId: string) => Promise<any>;
+  showRepoContextMenu: (
+    repoId: string,
+    position: { x: number; y: number }
+  ) => Promise<any>;
   revealPath: (filePath: string) => Promise<any>;
   nextUnreadSession: () => Promise<string | null>;
   updatePreferences: (patch: Record<string, unknown>) => Promise<any>;
@@ -22,7 +26,7 @@ interface ClaudeWorkspaceApi {
   onStateChanged: (callback: (payload: any) => void) => Unsubscribe;
   onSessionOutput: (callback: (payload: any) => void) => Unsubscribe;
   onSessionUpdated: (callback: (payload: any) => void) => Unsubscribe;
-  onCommand: (callback: (payload: { command: string }) => void) => Unsubscribe;
+  onCommand: (callback: (payload: { command: string; sessionId?: string }) => void) => Unsubscribe;
 }
 
 declare global {

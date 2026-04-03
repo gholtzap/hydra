@@ -12,7 +12,7 @@ const SKIPPED_DIRECTORIES = new Set([
 
 function scanWorkspace(rootPath, workspaceId) {
   const normalizedRootPath = path.resolve(rootPath);
-  const repoPaths = new Set();
+  const repoPaths = new Set<string>();
 
   walk(normalizedRootPath, repoPaths);
 

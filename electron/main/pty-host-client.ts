@@ -2,6 +2,10 @@ const { spawn } = require("node:child_process");
 const path = require("node:path");
 
 class PtyHostClient {
+  child: any;
+  pending: string;
+  listeners: Set<(message: any) => void>;
+
   constructor() {
     this.child = null;
     this.pending = "";

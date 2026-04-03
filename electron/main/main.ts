@@ -1,3 +1,5 @@
+import type { BrowserWindow as ElectronBrowserWindow } from "electron";
+
 const fs = require("node:fs");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
@@ -26,6 +28,17 @@ const { PtyHostClient } = require("./pty-host-client");
 app.setName("ClaudeWorkspace");
 
 class AppController {
+  state: any;
+  window: ElectronBrowserWindow | null;
+  focusedSessionId: string | null;
+  saveTimer: NodeJS.Timeout | null;
+  allowQuit: boolean;
+  pendingClaudeLaunch: Set<string>;
+  pendingClaudeLaunchTimers: Map<string, NodeJS.Timeout>;
+  sessionSizes: Map<string, { cols: number; rows: number }>;
+  terminalBuffers: Map<string, any>;
+  ptyHost: any;
+
   constructor() {
     this.state = loadState();
     this.window = null;

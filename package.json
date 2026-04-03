@@ -3,15 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "description": "Claude Code Workspace desktop shell built with Electron",
-  "main": "electron/main/main.js",
+  "main": "dist-electron/main/main.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron ."
+    "build": "npm run build:main && npm run build:renderer && npm run build:assets",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "tsc -p tsconfig.renderer.json",
+    "build:assets": "mkdir -p dist-electron/main dist-electron/renderer/vendor && cp electron/main/pty_host.py dist-electron/main/pty_host.py && cp electron/renderer/index.html dist-electron/renderer/index.html && cp electron/renderer/app.css dist-electron/renderer/app.css && cp electron/renderer/vendor/xterm.css dist-electron/renderer/vendor/xterm.css && cp electron/renderer/vendor/xterm.js dist-electron/renderer/vendor/xterm.js && cp electron/renderer/vendor/addon-fit.js dist-electron/renderer/vendor/addon-fit.js",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron ."
   },
   "dependencies": {
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
-    "electron": "^35.0.0"
+    "@types/node": "^25.5.2",
+    "electron": "^35.0.0",
+    "typescript": "^6.0.2"
   }
 }

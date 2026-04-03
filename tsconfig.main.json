@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "lib": ["ES2022", "DOM"],
+    "rootDir": "electron/main",
+    "outDir": "dist-electron/main",
+    "types": ["node"]
+  },
+  "include": ["electron/main/**/*.ts"]
+}

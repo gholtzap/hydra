@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "rootDir": "electron/renderer",
+    "outDir": "dist-electron/renderer"
+  },
+  "include": ["electron/global.d.ts", "electron/renderer/app.ts"]
+}

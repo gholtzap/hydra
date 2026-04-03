@@ -305,7 +305,7 @@ textarea {
 
 #app-shell {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 228px minmax(0, 1fr);
   width: 100%;
   height: 100%;
 }
@@ -313,9 +313,8 @@ textarea {
 #sidebar {
   display: flex;
   flex-direction: column;
-  gap: 14px;
   min-height: 0;
-  padding: 14px;
+  padding: 12px 10px;
   border-right: 1px solid var(--border);
   background: var(--sidebar-surface);
 }
@@ -328,12 +327,48 @@ textarea {
   padding: 14px;
 }
 
-.sidebar-brand {
+.sidebar-shell {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+  gap: 10px;
+  min-height: 0;
+  height: 100%;
+}
+
+.sidebar-header,
+.sidebar-heading,
+.sidebar-workspace-header,
+.repo-folder-header {
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-header,
+.sidebar-workspace-header {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sidebar-heading {
+  min-width: 0;
+  gap: 10px;
+}
+
+.sidebar-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--surface-active-border);
+  background:
+    linear-gradient(180deg, var(--surface-active), var(--surface-muted));
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-indent: 0.18em;
+  flex: none;
 }
 
 .eyebrow {
@@ -344,39 +379,21 @@ textarea {
 }
 
 .sidebar-title {
-  font-size: 20px;
-  line-height: 1.1;
-  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.05;
+  font-weight: 700;
 }
 
-.sidebar-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.sidebar-title-row button,
-.workspace-header button,
+.sidebar-icon-button,
+.sidebar-inline-button,
 .detail-actions button,
 .session-actions button {
   white-space: nowrap;
 }
 
-.sidebar-primary-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-}
-
-.sidebar-secondary-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.sidebar-secondary-actions button {
-  flex: 1 1 0;
+.sidebar-icon-button {
+  padding: 7px 10px;
+  border-radius: 12px;
 }
 
 .sidebar-section {
@@ -400,6 +417,27 @@ textarea {
   gap: 4px;
   min-height: 0;
   overflow: auto;
+}
+
+.sidebar-tree {
+  gap: 10px;
+}
+
+.sidebar-project-section {
+  flex: 1 1 auto;
+}
+
+.sidebar-footer {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-footer-button {
+  padding: 8px 10px;
+  font-size: 12px;
 }
 
 .sidebar-item,
@@ -470,35 +508,202 @@ textarea {
   line-height: 1.5;
 }
 
-.workspace-block {
+.sidebar-inbox-item {
+  background: var(--surface-soft);
+}
+
+.sidebar-workspace {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding-top: 10px;
 }
 
-.workspace-block + .workspace-block {
-  margin-top: 4px;
+.sidebar-workspace + .sidebar-workspace {
+  padding-top: 8px;
   border-top: 1px solid var(--border);
 }
 
-.workspace-header {
+.sidebar-workspace-header {
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.sidebar-workspace-title {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.sidebar-inline-button {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.sidebar-folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidebar-empty-note {
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.sidebar-empty-note-tight {
+  padding: 8px 10px;
+}
+
+.repo-folder {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.repo-folder-header {
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.repo-folder-toggle {
+  width: 28px;
+  min-height: 48px;
+  padding: 0;
+  border-radius: 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.repo-folder-toggle:hover {
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+.repo-folder-toggle.expanded {
+  background: var(--surface-soft);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.folder-caret {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.repo-folder-trigger,
+.session-tree-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: var(--surface-soft);
+  box-shadow: none;
+}
+
+.repo-folder-trigger {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+}
+
+.session-tree-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+}
+
+.repo-folder-trigger.active,
+.session-tree-item.active {
+  background: var(--surface-active);
+  border-color: var(--surface-active-border);
+}
+
+.repo-folder-trigger:hover,
+.session-tree-item:hover {
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+.repo-folder-trigger.active:hover,
+.session-tree-item.active:hover {
+  background: var(--surface-active);
+  border-color: var(--surface-active-border);
+}
+
+.repo-folder-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, var(--surface-active), var(--panel));
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  flex: none;
+}
+
+.repo-folder-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.repo-folder-name-row,
+.session-tree-title-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 0 2px 2px;
+  min-width: 0;
 }
 
-.workspace-title {
-  font-size: 12px;
+.repo-folder-name,
+.session-tree-title,
+.repo-folder-meta,
+.session-tree-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-folder-name,
+.session-tree-title {
+  font-size: 13px;
   font-weight: 600;
 }
 
-.workspace-repos {
+.repo-folder-meta,
+.session-tree-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.repo-folder-children {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  margin-left: 40px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
 }
 
 .detail-panel {

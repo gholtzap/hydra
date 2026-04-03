@@ -1,4 +1,9 @@
 class TerminalTranscriptBuffer {
+  maxLength: number;
+  committedText: string;
+  currentLine: string[];
+  cursorColumn: number;
+
   constructor(seedText = "", maxLength = 160000) {
     this.maxLength = maxLength;
     this.committedText = "";

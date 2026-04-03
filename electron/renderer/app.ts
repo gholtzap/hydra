@@ -1,10 +1,10 @@
 const api = window.claudeWorkspace;
 
 const state = {
-  workspaces: [],
-  repos: [],
-  sessions: [],
-  preferences: {}
+  workspaces: [] as any[],
+  repos: [] as any[],
+  sessions: [] as any[],
+  preferences: {} as Record<string, any>
 };
 
 const ui = {
@@ -13,6 +13,7 @@ const ui = {
   fitAddon: null,
   terminalSessionId: null,
   resizeObserver: null,
+  repoExpansion: new Map<string, boolean>(),
   launcherQuery: "",
   launcherSelectedRepoId: null,
   launcherLaunchesClaudeOnStart: true,
@@ -28,13 +29,20 @@ const ui = {
   settingsShowRawJson: false
 };
 
-const sidebarElement = document.getElementById("sidebar");
-const detailElement = document.getElementById("detail");
-const launcherDialog = document.getElementById("launcher-dialog");
-const settingsDialog = document.getElementById("settings-dialog");
-const quickSwitcherDialog = document.getElementById("quick-switcher-dialog");
-const commandPaletteDialog = document.getElementById("command-palette-dialog");
+const sidebarElement = document.getElementById("sidebar") as HTMLElement;
+const detailElement = document.getElementById("detail") as HTMLElement;
+const launcherDialog = document.getElementById("launcher-dialog") as HTMLDialogElement;
+const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogElement;
+const quickSwitcherDialog = document.getElementById("quick-switcher-dialog") as HTMLDialogElement;
+const commandPaletteDialog = document.getElementById("command-palette-dialog") as HTMLDialogElement;
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+type JsonRenderOptions = {
+  customLabel?: string;
+  allowRemove?: boolean;
+  includeJsonToggle?: boolean;
+  forceRawEditor?: boolean;
+};
 
 syncColorSchemeClass();
 
@@ -179,6 +187,7 @@ function replaceState(nextState) {
   state.repos = nextState.repos || [];
   state.sessions = nextState.sessions || [];
   state.preferences = nextState.preferences || {};
+  pruneRepoExpansionState();
 }
 
 function ensureValidSelection() {
@@ -193,119 +202,124 @@ function ensureValidSelection() {
 
 function renderSidebar() {
   sidebarElement.innerHTML = `
-    <div class="sidebar-brand">
-      <div class="eyebrow">Claude Workspace</div>
-      <div class="sidebar-title-row">
-        <div class="sidebar-title">Sessions</div>
-        <button class="ghost" data-action="open-settings">Settings</button>
+    <div class="sidebar-shell">
+      <div class="sidebar-header">
+        <div class="sidebar-heading">
+          <div class="sidebar-mark">CW</div>
+          <div>
+            <div class="eyebrow">Claude Workspace</div>
+            <div class="sidebar-title">Projects</div>
+          </div>
+        </div>
+        <button class="ghost sidebar-icon-button" data-action="open-settings">Settings</button>
       </div>
-      <div class="muted">Shell sessions across your repos.</div>
-    </div>
 
-    <div class="sidebar-primary-actions">
-      <button class="primary" data-action="open-launcher">New Session</button>
-      <button data-action="open-quick-switcher">Jump To</button>
-    </div>
-
-    <div class="sidebar-secondary-actions">
-      <button class="ghost" data-action="open-workspace">Add Workspace</button>
-      <button class="ghost" data-action="create-project">New Folder</button>
-    </div>
-
-    <div class="sidebar-section">
-      <div class="section-label">Inbox</div>
-      <div class="sidebar-list">
-        <button class="sidebar-item ${selectionMatches("inbox") ? "active" : ""}" data-action="select-inbox">
+      <div class="sidebar-section">
+        <button class="sidebar-item sidebar-inbox-item ${selectionMatches("inbox") ? "active" : ""}" data-action="select-inbox">
           <div class="sidebar-item-title">
-            <span>Needs attention</span>
+            <span>Inbox</span>
             ${inboxSessions().length ? `<span class="inbox-count">${inboxSessions().length}</span>` : ""}
           </div>
-          <div class="row-subtitle">Blocked and unread sessions</div>
+          <div class="row-subtitle">Unread and blocked</div>
         </button>
       </div>
-    </div>
 
-    <div class="sidebar-section">
-      <div class="section-label">Running Sessions</div>
-      <div class="sidebar-list">
-        ${renderRunningSessions()}
+      <div class="sidebar-section sidebar-project-section">
+        <div class="section-label">Projects</div>
+        <div class="sidebar-list sidebar-tree">
+          ${renderRepoFolders()}
+        </div>
       </div>
-    </div>
 
-    <div class="sidebar-section" style="min-height: 0;">
-      <div class="section-label">Workspaces</div>
-      <div class="sidebar-list">
-        ${renderWorkspaceBlocks()}
+      <div class="sidebar-footer">
+        <button class="ghost sidebar-footer-button" data-action="open-workspace">Add Workspace</button>
+        <button class="ghost sidebar-footer-button" data-action="create-project">New Folder</button>
       </div>
     </div>
   `;
 }
 
-function renderRunningSessions() {
-  const running = state.sessions
-    .filter((session) => session.runtimeState === "live")
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-
-  if (!running.length) {
-    return `<div class="muted" style="padding: 0 6px;">No active sessions</div>`;
+function renderRepoFolders() {
+  if (!state.repos.length) {
+    return `<div class="sidebar-empty-note">Add a workspace to start grouping repos and sessions.</div>`;
   }
 
-  return running
-    .map(
-      (session) => `
-        <button class="session-row ${selectionMatches("session", session.id) ? "active" : ""}" data-action="select-session" data-session-id="${session.id}">
-          <div class="row-title">
-            <span>${escapeHtml(session.title)}</span>
-            ${session.unreadCount && state.preferences.showInAppBadges ? '<span class="unread-dot"></span>' : ""}
-          </div>
-          <div class="row-subtitle">${escapeHtml(repoById(session.repoID)?.name || "Unknown Repo")}</div>
-          <div class="row-meta">${statusLabel(session.status)}</div>
-        </button>
-      `
-    )
+  return [...state.repos]
+    .sort((left, right) => {
+      const nameDelta = left.name.localeCompare(right.name);
+      if (nameDelta !== 0) {
+        return nameDelta;
+      }
+
+      return left.path.localeCompare(right.path);
+    })
+    .map((repo) => renderRepoFolder(repo))
     .join("");
 }
 
-function renderWorkspaceBlocks() {
-  return state.workspaces
-    .map((workspace) => {
-      const repos = state.repos
-        .filter((repo) => repo.workspaceID === workspace.id)
-        .sort((left, right) => left.name.localeCompare(right.name));
+function renderRepoFolder(repo) {
+  const sessions = sessionsForRepo(repo.id);
+  const expanded = isRepoExpanded(repo.id);
+  const isSelectedRepo = selectionMatches("repo", repo.id);
+  const containsSelectedSession =
+    ui.selection.type === "session" && currentRepoId() === repo.id;
+  const liveCount = sessions.filter((session) => session.runtimeState === "live").length;
+  const attentionCount = sessions.filter((session) => session.blocker || session.unreadCount > 0).length;
 
-      return `
-        <section class="workspace-block">
-          <div class="workspace-header">
-            <div class="workspace-title">${escapeHtml(workspace.name)}</div>
-            <button class="ghost" data-action="rescan-workspace" data-workspace-id="${workspace.id}">Refresh</button>
+  return `
+    <section class="repo-folder ${expanded ? "expanded" : ""}">
+      <div class="repo-folder-header">
+        <button
+          class="repo-folder-toggle ${expanded ? "expanded" : ""}"
+          data-action="toggle-repo-folder"
+          data-repo-id="${repo.id}"
+          aria-label="${expanded ? "Collapse" : "Expand"} ${escapeAttribute(repo.name)}">
+          <span class="folder-caret">${expanded ? "v" : ">"}</span>
+        </button>
+        <button class="repo-folder-trigger ${(isSelectedRepo || containsSelectedSession) ? "active" : ""}" data-action="select-repo" data-repo-id="${repo.id}">
+          <div class="repo-folder-icon">${escapeHtml(repoInitials(repo.name))}</div>
+          <div class="repo-folder-copy">
+            <div class="repo-folder-name-row">
+              <span class="repo-folder-name">${escapeHtml(repo.name)}</span>
+              ${
+                attentionCount
+                  ? `<span class="inbox-count">${attentionCount}</span>`
+                  : liveCount
+                    ? `<span class="active-count">${liveCount}</span>`
+                    : ""
+              }
+            </div>
+            <div class="repo-folder-meta">${escapeHtml(repoFolderMeta(sessions, liveCount, attentionCount))}</div>
           </div>
-          <div class="workspace-repos">
-            ${
-              repos.length
-                ? repos
-                    .map((repo) => {
-                      const activeCount = state.sessions.filter(
-                        (session) => session.repoID === repo.id && session.runtimeState === "live"
-                      ).length;
+        </button>
+      </div>
+      ${
+        expanded
+          ? `
+            <div class="repo-folder-children">
+              ${
+                sessions.length
+                  ? sessions.map((session) => renderSidebarSession(session)).join("")
+                  : `<div class="sidebar-empty-note sidebar-empty-note-tight">No sessions yet</div>`
+              }
+            </div>
+          `
+          : ""
+      }
+    </section>
+  `;
+}
 
-                      return `
-                        <button class="repo-item ${selectionMatches("repo", repo.id) ? "active" : ""}" data-action="select-repo" data-repo-id="${repo.id}">
-                          <div class="row-title">
-                            <span>${escapeHtml(repo.name)}</span>
-                            ${activeCount ? `<span class="active-count">${activeCount}</span>` : ""}
-                          </div>
-                          <div class="row-subtitle">${escapeHtml(abbreviateHome(repo.path))}</div>
-                        </button>
-                      `;
-                    })
-                    .join("")
-                : `<div class="muted" style="padding: 6px;">No repos found</div>`
-            }
-          </div>
-        </section>
-      `;
-    })
-    .join("");
+function renderSidebarSession(session) {
+  return `
+    <button class="session-tree-item ${selectionMatches("session", session.id) ? "active" : ""}" data-action="select-session" data-session-id="${session.id}">
+      <div class="session-tree-title-row">
+        <span class="session-tree-title">${escapeHtml(session.title)}</span>
+        ${session.unreadCount && state.preferences.showInAppBadges ? '<span class="unread-dot"></span>' : ""}
+      </div>
+      <div class="session-tree-meta">${escapeHtml(sidebarSessionMeta(session))}</div>
+    </button>
+  `;
 }
 
 function renderDetail() {
@@ -1058,7 +1072,7 @@ function renderJsonObjectFields(objectValue, parentPath) {
     .join("");
 }
 
-function renderJsonNode(value, path, options = {}) {
+function renderJsonNode(value, path, options: JsonRenderOptions = {}) {
   if (Array.isArray(value)) {
     return renderJsonArrayNode(value, path, options);
   }
@@ -1070,7 +1084,7 @@ function renderJsonNode(value, path, options = {}) {
   return renderJsonPrimitiveNode(value, path, options);
 }
 
-function renderJsonPrimitiveNode(value, path, options = {}) {
+function renderJsonPrimitiveNode(value, path, options: JsonRenderOptions = {}) {
   const encodedPath = encodeSettingPath(path);
   const label = options.customLabel || labelForSettingPath(path);
   const allowRemove = options.allowRemove ?? path.length > 0;
@@ -1143,7 +1157,7 @@ function renderJsonPrimitiveNode(value, path, options = {}) {
   `;
 }
 
-function renderJsonObjectNode(objectValue, path, options = {}) {
+function renderJsonObjectNode(objectValue, path, options: JsonRenderOptions = {}) {
   const encodedPath = encodeSettingPath(path);
   const label = options.customLabel || labelForSettingPath(path);
   const allowRemove = options.allowRemove ?? path.length > 0;
@@ -1174,7 +1188,7 @@ function renderJsonObjectNode(objectValue, path, options = {}) {
   `;
 }
 
-function renderJsonArrayNode(arrayValue, path, options = {}) {
+function renderJsonArrayNode(arrayValue, path, options: JsonRenderOptions = {}) {
   const encodedPath = encodeSettingPath(path);
   const label = options.customLabel || labelForSettingPath(path);
   const allowRemove = options.allowRemove ?? path.length > 0;
@@ -1232,7 +1246,7 @@ function renderRootAddSettingCard() {
   `;
 }
 
-function renderSettingsActionButtons(selectedFile, options = {}) {
+function renderSettingsActionButtons(selectedFile, options: JsonRenderOptions = {}) {
   const { includeJsonToggle = false, forceRawEditor = false } = options;
   const showJsonToggle = includeJsonToggle && !forceRawEditor;
 
@@ -1293,6 +1307,9 @@ async function handleClick(event) {
   switch (action) {
     case "select-inbox":
       await selectInbox();
+      break;
+    case "toggle-repo-folder":
+      toggleRepoFolder(target.dataset.repoId);
       break;
     case "select-repo":
       await selectRepo(target.dataset.repoId);
@@ -1426,26 +1443,31 @@ async function handleClick(event) {
 }
 
 async function handleInput(event) {
-  if (event.target.dataset.settingEditor) {
-    handleSettingsFieldInput(event.target);
+  const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+  if (!target) {
     return;
   }
 
-  switch (event.target.id) {
+  if (target.dataset.settingEditor) {
+    handleSettingsFieldInput(target);
+    return;
+  }
+
+  switch (target.id) {
     case "launcher-query":
-      ui.launcherQuery = event.target.value;
+      ui.launcherQuery = target.value;
       renderLauncherDialog();
       break;
     case "quick-switcher-query":
-      ui.quickSwitcherQuery = event.target.value;
+      ui.quickSwitcherQuery = target.value;
       renderQuickSwitcherDialog();
       break;
     case "command-palette-query":
-      ui.commandPaletteQuery = event.target.value;
+      ui.commandPaletteQuery = target.value;
       renderCommandPaletteDialog();
       break;
     case "settings-text-editor":
-      ui.settingsEditorText = event.target.value;
+      ui.settingsEditorText = target.value;
       ui.settingsSaveMessage = "";
       break;
     default:
@@ -1454,29 +1476,34 @@ async function handleInput(event) {
 }
 
 async function handleChange(event) {
-  if (event.target.dataset.settingEditor) {
-    handleSettingsFieldChange(event.target);
+  const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+  if (!target) {
     return;
   }
 
-  switch (event.target.id) {
+  if (target.dataset.settingEditor) {
+    handleSettingsFieldChange(target);
+    return;
+  }
+
+  switch (target.id) {
     case "launcher-launches-claude":
-      ui.launcherLaunchesClaudeOnStart = event.target.checked;
+      ui.launcherLaunchesClaudeOnStart = (target as HTMLInputElement).checked;
       break;
     case "pref-notifications-enabled":
-      await api.updatePreferences({ notificationsEnabled: event.target.checked });
+      await api.updatePreferences({ notificationsEnabled: (target as HTMLInputElement).checked });
       break;
     case "pref-claude-command":
-      await api.updatePreferences({ claudeExecutablePath: event.target.value });
+      await api.updatePreferences({ claudeExecutablePath: target.value });
       break;
     case "pref-shell-executable":
-      await api.updatePreferences({ shellExecutablePath: event.target.value });
+      await api.updatePreferences({ shellExecutablePath: target.value });
       break;
     case "pref-native-notifications":
-      await api.updatePreferences({ showNativeNotifications: event.target.checked });
+      await api.updatePreferences({ showNativeNotifications: (target as HTMLInputElement).checked });
       break;
     case "pref-in-app-badges":
-      await api.updatePreferences({ showInAppBadges: event.target.checked });
+      await api.updatePreferences({ showInAppBadges: (target as HTMLInputElement).checked });
       break;
     default:
       break;
@@ -1491,6 +1518,7 @@ async function selectInbox() {
 }
 
 async function selectRepo(repoId) {
+  ensureRepoExpanded(repoId);
   ui.selection = { type: "repo", id: repoId };
   await api.setFocusedSession(null);
   renderSidebar();
@@ -1498,6 +1526,7 @@ async function selectRepo(repoId) {
 }
 
 async function selectSession(sessionId) {
+  ensureRepoExpanded(sessionById(sessionId)?.repoID || null);
   ui.selection = { type: "session", id: sessionId };
   await api.setFocusedSession(sessionId);
   renderSidebar();
@@ -1715,9 +1744,9 @@ function addRootJsonSetting() {
     return;
   }
 
-  const keyInput = settingsDialog.querySelector("#settings-new-key");
-  const typeInput = settingsDialog.querySelector("#settings-new-type");
-  const valueInput = settingsDialog.querySelector("#settings-new-value");
+  const keyInput = settingsDialog.querySelector("#settings-new-key") as HTMLInputElement | null;
+  const typeInput = settingsDialog.querySelector("#settings-new-type") as HTMLSelectElement | null;
+  const valueInput = settingsDialog.querySelector("#settings-new-value") as HTMLInputElement | null;
   const nextKey = keyInput?.value.trim();
 
   if (!nextKey) {
@@ -2086,6 +2115,61 @@ function currentRepoId() {
   return null;
 }
 
+function pruneRepoExpansionState() {
+  const repoIds = new Set(state.repos.map((repo) => repo.id));
+  for (const repoId of ui.repoExpansion.keys()) {
+    if (!repoIds.has(repoId)) {
+      ui.repoExpansion.delete(repoId);
+    }
+  }
+}
+
+function sessionsForRepo(repoId) {
+  return [...state.sessions]
+    .filter((session) => session.repoID === repoId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+function isRepoExpanded(repoId) {
+  const explicitValue = ui.repoExpansion.get(repoId);
+  if (explicitValue !== undefined) {
+    return explicitValue;
+  }
+
+  return defaultRepoExpanded(repoId);
+}
+
+function defaultRepoExpanded(repoId) {
+  if (!repoId) {
+    return false;
+  }
+
+  if (currentRepoId() === repoId) {
+    return true;
+  }
+
+  return sessionsForRepo(repoId).some(
+    (session) => session.runtimeState === "live" || session.unreadCount > 0 || session.blocker
+  );
+}
+
+function ensureRepoExpanded(repoId) {
+  if (!repoId) {
+    return;
+  }
+
+  ui.repoExpansion.set(repoId, true);
+}
+
+function toggleRepoFolder(repoId) {
+  if (!repoId) {
+    return;
+  }
+
+  ui.repoExpansion.set(repoId, !isRepoExpanded(repoId));
+  renderSidebar();
+}
+
 function inboxSessions() {
   return [...state.sessions]
     .filter((session) => session.blocker || session.unreadCount > 0)
@@ -2100,6 +2184,43 @@ function inboxSessions() {
 
 function selectionMatches(type, id = null) {
   return ui.selection.type === type && (id === null || ui.selection.id === id);
+}
+
+function repoFolderMeta(sessions, liveCount, attentionCount) {
+  const parts = [];
+
+  if (attentionCount) {
+    parts.push(`${attentionCount} needs review`);
+  }
+
+  if (liveCount) {
+    parts.push(`${liveCount} live`);
+  }
+
+  if (sessions.length) {
+    parts.push(`${sessions.length} session${sessions.length === 1 ? "" : "s"}`);
+  } else {
+    parts.push("No sessions yet");
+  }
+
+  return parts.join(" · ");
+}
+
+function sidebarSessionMeta(session) {
+  if (session.blocker?.summary) {
+    return `${statusLabel(session.status)} · ${session.blocker.summary}`;
+  }
+
+  return statusLabel(session.status);
+}
+
+function repoInitials(name) {
+  return String(name || "?")
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || "")
+    .join("") || "?";
 }
 
 function statusLabel(status) {

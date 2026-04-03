@@ -1,4 +1,6 @@
 const api = window.claudeWorkspace;
+const SECTION_ORDER = ["sidebar", "sidebar-drawer", "main", "terminal"] as const;
+type SectionId = (typeof SECTION_ORDER)[number];
 
 const state = {
   workspaces: [] as any[],
@@ -9,11 +11,12 @@ const state = {
 
 const ui = {
   selection: { type: "inbox", id: null },
+  focusSection: "main" as SectionId,
+  sidebarExpandedRepoId: null as string | null,
   terminal: null,
   fitAddon: null,
   terminalSessionId: null,
   resizeObserver: null,
-  repoExpansion: new Map<string, boolean>(),
   launcherQuery: "",
   launcherSelectedRepoId: null,
   launcherLaunchesClaudeOnStart: true,
@@ -31,11 +34,15 @@ const ui = {
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
 const detailElement = document.getElementById("detail") as HTMLElement;
+const appShellElement = document.getElementById("app-shell") as HTMLElement;
 const launcherDialog = document.getElementById("launcher-dialog") as HTMLDialogElement;
 const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogElement;
 const quickSwitcherDialog = document.getElementById("quick-switcher-dialog") as HTMLDialogElement;
 const commandPaletteDialog = document.getElementById("command-palette-dialog") as HTMLDialogElement;
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+sidebarElement.tabIndex = -1;
+detailElement.tabIndex = -1;
 
 type JsonRenderOptions = {
   customLabel?: string;
@@ -55,6 +62,8 @@ if (typeof colorSchemeQuery.addEventListener === "function") {
 document.addEventListener("click", handleClick);
 document.addEventListener("input", handleInput);
 document.addEventListener("change", handleChange);
+document.addEventListener("pointerdown", handlePointerDown, true);
+document.addEventListener("keydown", handleKeyDown, true);
 
 api.onStateChanged((nextState) => {
   replaceState(nextState);
@@ -114,7 +123,7 @@ api.onCommand(async ({ command }) => {
     case "next-unread": {
       const nextSessionId = await api.nextUnreadSession();
       if (nextSessionId) {
-        selectSession(nextSessionId);
+        await selectSession(nextSessionId, "terminal");
       }
       break;
     }
@@ -177,6 +186,7 @@ function buildTerminalTheme() {
 async function initialize() {
   replaceState(await api.getState());
   ensureValidSelection();
+  normalizeFocusSection();
   renderSidebar();
   renderDetail();
   renderDialogs();
@@ -187,7 +197,9 @@ function replaceState(nextState) {
   state.repos = nextState.repos || [];
   state.sessions = nextState.sessions || [];
   state.preferences = nextState.preferences || {};
-  pruneRepoExpansionState();
+  if (ui.sidebarExpandedRepoId && !repoById(ui.sidebarExpandedRepoId)) {
+    ui.sidebarExpandedRepoId = null;
+  }
 }
 
 function ensureValidSelection() {
@@ -198,126 +210,120 @@ function ensureValidSelection() {
   if (ui.selection.type === "repo" && !repoById(ui.selection.id)) {
     ui.selection = { type: "inbox", id: null };
   }
+
+  normalizeFocusSection();
 }
 
 function renderSidebar() {
+  const expandedRepo = expandedSidebarRepo();
+
   sidebarElement.innerHTML = `
-    <div class="sidebar-shell">
-      <div class="sidebar-header">
-        <div class="sidebar-heading">
-          <div class="sidebar-mark">CW</div>
-          <div>
-            <div class="eyebrow">Claude Workspace</div>
-            <div class="sidebar-title">Projects</div>
-          </div>
+    <div class="sidebar-shell ${expandedRepo ? "sidebar-shell-expanded" : ""}">
+      <div class="sidebar-rail">
+        <div class="sidebar-rail-top">
+          ${renderInboxRailButton()}
+          <div class="sidebar-rail-divider"></div>
+          ${renderProjectRailButtons()}
         </div>
-        <button class="ghost sidebar-icon-button" data-action="open-settings">Settings</button>
-      </div>
-
-      <div class="sidebar-section">
-        <button class="sidebar-item sidebar-inbox-item ${selectionMatches("inbox") ? "active" : ""}" data-action="select-inbox">
-          <div class="sidebar-item-title">
-            <span>Inbox</span>
-            ${inboxSessions().length ? `<span class="inbox-count">${inboxSessions().length}</span>` : ""}
-          </div>
-          <div class="row-subtitle">Unread and blocked</div>
-        </button>
-      </div>
-
-      <div class="sidebar-section sidebar-project-section">
-        <div class="section-label">Projects</div>
-        <div class="sidebar-list sidebar-tree">
-          ${renderRepoFolders()}
+        <div class="sidebar-rail-bottom">
+          <button class="sidebar-rail-button sidebar-utility-button" data-action="open-workspace" data-tooltip="Add Workspace" title="Add Workspace" aria-label="Add Workspace">
+            ${renderUtilityIcon("workspace")}
+          </button>
+          <button class="sidebar-rail-button sidebar-utility-button" data-action="create-project" data-tooltip="New Folder" title="New Folder" aria-label="New Folder">
+            ${renderUtilityIcon("folder")}
+          </button>
+          <button class="sidebar-rail-button sidebar-utility-button" data-action="open-settings" data-tooltip="Settings" title="Settings" aria-label="Settings">
+            ${renderUtilityIcon("settings")}
+          </button>
         </div>
       </div>
-
-      <div class="sidebar-footer">
-        <button class="ghost sidebar-footer-button" data-action="open-workspace">Add Workspace</button>
-        <button class="ghost sidebar-footer-button" data-action="create-project">New Folder</button>
-      </div>
+      ${expandedRepo ? renderSidebarProjectDrawer(expandedRepo) : ""}
     </div>
+  `;
+
+  syncSectionFocusUi();
+}
+
+function renderInboxRailButton() {
+  const count = inboxSessions().length;
+
+  return `
+    <button class="sidebar-rail-button sidebar-home-button ${selectionMatches("inbox") ? "active" : ""}" data-action="select-inbox" data-tooltip="Inbox" title="Inbox" aria-label="Inbox">
+      ${renderUtilityIcon("inbox")}
+      ${count ? `<span class="sidebar-rail-badge">${count > 9 ? "9+" : count}</span>` : ""}
+    </button>
   `;
 }
 
-function renderRepoFolders() {
+function renderProjectRailButtons() {
   if (!state.repos.length) {
-    return `<div class="sidebar-empty-note">Add a workspace to start grouping repos and sessions.</div>`;
+    return `<div class="sidebar-rail-empty" data-tooltip="Add a workspace to start">?</div>`;
   }
 
   return [...state.repos]
-    .sort((left, right) => {
-      const nameDelta = left.name.localeCompare(right.name);
-      if (nameDelta !== 0) {
-        return nameDelta;
-      }
-
-      return left.path.localeCompare(right.path);
-    })
-    .map((repo) => renderRepoFolder(repo))
+    .sort(compareRepos)
+    .map((repo) => renderProjectRailButton(repo))
     .join("");
 }
 
-function renderRepoFolder(repo) {
+function renderProjectRailButton(repo) {
   const sessions = sessionsForRepo(repo.id);
-  const expanded = isRepoExpanded(repo.id);
-  const isSelectedRepo = selectionMatches("repo", repo.id);
-  const containsSelectedSession =
-    ui.selection.type === "session" && currentRepoId() === repo.id;
   const liveCount = sessions.filter((session) => session.runtimeState === "live").length;
   const attentionCount = sessions.filter((session) => session.blocker || session.unreadCount > 0).length;
+  const active = currentRepoId() === repo.id;
+  const expanded = ui.sidebarExpandedRepoId === repo.id;
+  const badgeLabel = attentionCount ? (attentionCount > 9 ? "9+" : String(attentionCount)) : "";
 
   return `
-    <section class="repo-folder ${expanded ? "expanded" : ""}">
-      <div class="repo-folder-header">
-        <button
-          class="repo-folder-toggle ${expanded ? "expanded" : ""}"
-          data-action="toggle-repo-folder"
-          data-repo-id="${repo.id}"
-          aria-label="${expanded ? "Collapse" : "Expand"} ${escapeAttribute(repo.name)}">
-          <span class="folder-caret">${expanded ? "v" : ">"}</span>
-        </button>
-        <button class="repo-folder-trigger ${(isSelectedRepo || containsSelectedSession) ? "active" : ""}" data-action="select-repo" data-repo-id="${repo.id}">
-          <div class="repo-folder-icon">${escapeHtml(repoInitials(repo.name))}</div>
-          <div class="repo-folder-copy">
-            <div class="repo-folder-name-row">
-              <span class="repo-folder-name">${escapeHtml(repo.name)}</span>
-              ${
-                attentionCount
-                  ? `<span class="inbox-count">${attentionCount}</span>`
-                  : liveCount
-                    ? `<span class="active-count">${liveCount}</span>`
-                    : ""
-              }
-            </div>
-            <div class="repo-folder-meta">${escapeHtml(repoFolderMeta(sessions, liveCount, attentionCount))}</div>
-          </div>
-        </button>
-      </div>
+    <button class="sidebar-rail-button sidebar-project-button ${active ? "active" : ""} ${expanded ? "expanded" : ""}" data-action="select-repo" data-repo-id="${repo.id}" data-tooltip="${escapeAttribute(repo.name)}" title="${escapeAttribute(repo.name)}" aria-label="${escapeAttribute(repo.name)}">
+      <span class="sidebar-project-avatar" aria-hidden="true">${renderProjectAvatar(repo)}</span>
       ${
-        expanded
-          ? `
-            <div class="repo-folder-children">
-              ${
-                sessions.length
-                  ? sessions.map((session) => renderSidebarSession(session)).join("")
-                  : `<div class="sidebar-empty-note sidebar-empty-note-tight">No sessions yet</div>`
-              }
-            </div>
-          `
-          : ""
+        badgeLabel
+          ? `<span class="sidebar-rail-badge">${badgeLabel}</span>`
+          : liveCount
+            ? `<span class="sidebar-rail-dot"></span>`
+            : ""
       }
+    </button>
+  `;
+}
+
+function renderSidebarProjectDrawer(repo) {
+  const sessions = sessionsForRepo(repo.id);
+
+  return `
+    <section class="sidebar-project-drawer" tabindex="-1">
+      <div class="sidebar-project-drawer-header">
+        <div class="sidebar-project-drawer-title-row">
+          <div class="sidebar-project-drawer-avatar" aria-hidden="true">${renderProjectAvatar(repo)}</div>
+          <div class="sidebar-project-drawer-copy">
+            <div class="sidebar-project-drawer-title">${escapeHtml(repo.name)}</div>
+            <div class="sidebar-project-drawer-path">${escapeHtml(abbreviateHome(repo.path))}</div>
+          </div>
+        </div>
+        <button class="ghost sidebar-project-drawer-close" data-action="collapse-sidebar-project" data-repo-id="${repo.id}" aria-label="Collapse ${escapeAttribute(repo.name)}">Close</button>
+      </div>
+      <div class="sidebar-project-drawer-section-label">Sessions</div>
+      <div class="sidebar-project-drawer-list">
+        ${
+          sessions.length
+            ? sessions.map((session) => renderSidebarDrawerSession(session, repo)).join("")
+            : `<div class="sidebar-project-drawer-empty">No sessions yet.</div>`
+        }
+      </div>
     </section>
   `;
 }
 
-function renderSidebarSession(session) {
+function renderSidebarDrawerSession(session, repo) {
   return `
-    <button class="session-tree-item ${selectionMatches("session", session.id) ? "active" : ""}" data-action="select-session" data-session-id="${session.id}">
-      <div class="session-tree-title-row">
-        <span class="session-tree-title">${escapeHtml(session.title)}</span>
+    <button class="session-row ${selectionMatches("session", session.id) ? "active" : ""}" data-action="select-session" data-session-id="${session.id}">
+      <div class="row-title">
+        <span>${escapeHtml(session.title)}</span>
         ${session.unreadCount && state.preferences.showInAppBadges ? '<span class="unread-dot"></span>' : ""}
       </div>
-      <div class="session-tree-meta">${escapeHtml(sidebarSessionMeta(session))}</div>
+      <div class="row-subtitle">${escapeHtml(repo.name)}</div>
+      <div class="row-meta">${escapeHtml(previewTranscript(session.transcript))}</div>
     </button>
   `;
 }
@@ -366,11 +372,14 @@ function renderInbox() {
       }
     </section>
   `;
+
+  syncSectionFocusUi();
 }
 
 function renderRepoDetail(repo) {
   if (!repo) {
     detailElement.innerHTML = `<div class="empty-state">This repo is no longer available.</div>`;
+    syncSectionFocusUi();
     return;
   }
 
@@ -399,6 +408,8 @@ function renderRepoDetail(repo) {
       }
     </section>
   `;
+
+  syncSectionFocusUi();
 }
 
 function renderSessionDetail(session) {
@@ -410,9 +421,11 @@ function renderSessionDetail(session) {
 
   detailElement.innerHTML = `
     <section class="session-detail">
-      <div id="session-chrome"></div>
-      <div id="session-blocker"></div>
-      <div class="terminal-wrap">
+      <div id="session-main-region" class="session-main-region" tabindex="-1">
+        <div id="session-chrome"></div>
+        <div id="session-blocker"></div>
+      </div>
+      <div class="terminal-wrap" tabindex="-1">
         <div id="terminal-shell">
           <div id="terminal"></div>
         </div>
@@ -422,6 +435,7 @@ function renderSessionDetail(session) {
 
   updateSessionChrome(session);
   mountTerminal(session);
+  syncSectionFocusUi();
 }
 
 function updateSessionChrome(session) {
@@ -551,7 +565,7 @@ function mountTerminal(session) {
       api.resizeSession(ui.terminalSessionId, ui.terminal.cols, ui.terminal.rows);
     });
   }
-  if (session.runtimeState === "live") {
+  if (session.runtimeState === "live" && ui.focusSection === "terminal" && !isAnyDialogOpen()) {
     ui.terminal.focus();
   }
 }
@@ -1308,14 +1322,14 @@ async function handleClick(event) {
     case "select-inbox":
       await selectInbox();
       break;
-    case "toggle-repo-folder":
-      toggleRepoFolder(target.dataset.repoId);
-      break;
     case "select-repo":
       await selectRepo(target.dataset.repoId);
       break;
     case "select-session":
       await selectSession(target.dataset.sessionId);
+      break;
+    case "collapse-sidebar-project":
+      collapseSidebarProjectDrawer(target.dataset.repoId);
       break;
     case "open-launcher":
       openLauncher(target.dataset.repoId || currentRepoId());
@@ -1367,11 +1381,11 @@ async function handleClick(event) {
       break;
     case "switch-session":
       quickSwitcherDialog.close();
-      await selectSession(target.dataset.sessionId);
+      await selectSession(target.dataset.sessionId, "terminal");
       break;
     case "switch-repo":
       quickSwitcherDialog.close();
-      await selectRepo(target.dataset.repoId);
+      await selectRepo(target.dataset.repoId, "main");
       break;
     case "settings-tab":
       ui.settingsTab = target.dataset.tab;
@@ -1433,12 +1447,88 @@ async function handleClick(event) {
       const nextSessionId = await api.nextUnreadSession();
       if (nextSessionId) {
         commandPaletteDialog.close();
-        await selectSession(nextSessionId);
+        await selectSession(nextSessionId, "terminal");
       }
       break;
     }
     default:
       break;
+  }
+}
+
+function handlePointerDown(event) {
+  if (isAnyDialogOpen()) {
+    return;
+  }
+
+  const target = event.target as HTMLElement | null;
+  if (!target) {
+    return;
+  }
+
+  if (isTerminalTarget(target)) {
+    setFocusSection("terminal");
+    return;
+  }
+
+  if (isSidebarDrawerTarget(target)) {
+    setFocusSection("sidebar-drawer");
+    return;
+  }
+
+  if (sidebarElement.contains(target)) {
+    setFocusSection("sidebar");
+    return;
+  }
+
+  if (detailElement.contains(target)) {
+    setFocusSection("main");
+  }
+}
+
+function handleKeyDown(event) {
+  if (isAnyDialogOpen()) {
+    return;
+  }
+
+  if (isSectionNavigationKey(event)) {
+    const direction = event.key === "ArrowLeft" ? -1 : 1;
+    const nextSection = adjacentSection(direction);
+    if (!nextSection) {
+      return;
+    }
+
+    event.preventDefault();
+    setFocusSection(nextSection);
+    return;
+  }
+
+  if (isEditableTarget(event.target as HTMLElement | null)) {
+    return;
+  }
+
+  if (ui.focusSection === "sidebar" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      event.preventDefault();
+      navigateSidebarProjects(event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+
+    if (event.key === "Enter") {
+      const repoId = currentRepoId();
+      if (repoId) {
+        event.preventDefault();
+        toggleSidebarProjectDrawer(repoId);
+      }
+    }
+  }
+
+  if (ui.focusSection === "sidebar-drawer" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      event.preventDefault();
+      navigateSidebarDrawerSessions(event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
   }
 }
 
@@ -1510,24 +1600,47 @@ async function handleChange(event) {
   }
 }
 
-async function selectInbox() {
+async function selectInbox(nextFocusSection: SectionId | null = null) {
+  if (nextFocusSection) {
+    ui.focusSection = nextFocusSection;
+  }
   ui.selection = { type: "inbox", id: null };
+  ui.sidebarExpandedRepoId = null;
+  normalizeFocusSection();
   await api.setFocusedSession(null);
   renderSidebar();
   renderDetail();
 }
 
-async function selectRepo(repoId) {
-  ensureRepoExpanded(repoId);
+async function selectRepo(
+  repoId,
+  nextFocusSection: SectionId | null = null
+) {
+  if (nextFocusSection) {
+    ui.focusSection = nextFocusSection;
+  }
   ui.selection = { type: "repo", id: repoId };
+  if (ui.sidebarExpandedRepoId) {
+    ui.sidebarExpandedRepoId = repoId;
+  }
+  normalizeFocusSection();
   await api.setFocusedSession(null);
   renderSidebar();
   renderDetail();
 }
 
-async function selectSession(sessionId) {
-  ensureRepoExpanded(sessionById(sessionId)?.repoID || null);
+async function selectSession(
+  sessionId,
+  nextFocusSection: SectionId | null = null
+) {
+  if (nextFocusSection) {
+    ui.focusSection = nextFocusSection;
+  }
   ui.selection = { type: "session", id: sessionId };
+  if (ui.sidebarExpandedRepoId) {
+    ui.sidebarExpandedRepoId = sessionById(sessionId)?.repoID || ui.sidebarExpandedRepoId;
+  }
+  normalizeFocusSection();
   await api.setFocusedSession(sessionId);
   renderSidebar();
   renderDetail();
@@ -1559,7 +1672,7 @@ async function startLauncherSession() {
 
   launcherDialog.close();
   if (sessionId) {
-    await selectSession(sessionId);
+    await selectSession(sessionId, "terminal");
   }
 }
 
@@ -2115,59 +2228,224 @@ function currentRepoId() {
   return null;
 }
 
-function pruneRepoExpansionState() {
-  const repoIds = new Set(state.repos.map((repo) => repo.id));
-  for (const repoId of ui.repoExpansion.keys()) {
-    if (!repoIds.has(repoId)) {
-      ui.repoExpansion.delete(repoId);
+function expandedSidebarRepo() {
+  return ui.sidebarExpandedRepoId ? repoById(ui.sidebarExpandedRepoId) : null;
+}
+
+function normalizeFocusSection() {
+  const sections = availableSections();
+  if (!sections.includes(ui.focusSection)) {
+    if (ui.focusSection === "sidebar-drawer" && sections.includes("sidebar")) {
+      ui.focusSection = "sidebar";
+      return;
+    }
+
+    ui.focusSection = sections.includes("main") ? "main" : sections[0];
+  }
+}
+
+function availableSections() {
+  const sections: SectionId[] = ["sidebar"];
+
+  if (expandedSidebarRepo()) {
+    sections.push("sidebar-drawer");
+  }
+
+  sections.push("main");
+
+  if (ui.selection.type === "session") {
+    sections.push("terminal");
+  }
+
+  return sections;
+}
+
+function setFocusSection(section: SectionId) {
+  ui.focusSection = section;
+  normalizeFocusSection();
+  syncSectionFocusUi();
+}
+
+function adjacentSection(direction: number) {
+  const sections = availableSections();
+  const currentIndex = sections.indexOf(ui.focusSection);
+  const nextIndex = currentIndex + direction;
+  return sections[nextIndex] || null;
+}
+
+function syncSectionFocusUi() {
+  normalizeFocusSection();
+
+  const expanded = !!expandedSidebarRepo();
+  appShellElement.classList.toggle("sidebar-expanded", expanded);
+  sidebarElement.classList.toggle("sidebar-expanded", expanded);
+
+  sidebarElement.classList.toggle("section-focused", ui.focusSection === "sidebar");
+  const sidebarDrawer = sidebarElement.querySelector(".sidebar-project-drawer") as HTMLElement | null;
+  if (sidebarDrawer) {
+    sidebarDrawer.classList.toggle("section-focused", ui.focusSection === "sidebar-drawer");
+  }
+  detailElement.classList.toggle(
+    "section-focused",
+    ui.focusSection === "main" && ui.selection.type !== "session"
+  );
+
+  const sessionMainRegion = document.getElementById("session-main-region");
+  if (sessionMainRegion) {
+    sessionMainRegion.classList.toggle("section-focused", ui.focusSection === "main");
+  }
+
+  const terminalWrap = detailElement.querySelector(".terminal-wrap") as HTMLElement | null;
+  if (terminalWrap) {
+    terminalWrap.classList.toggle("section-focused", ui.focusSection === "terminal");
+  }
+
+  if (isAnyDialogOpen()) {
+    return;
+  }
+
+  focusCurrentSectionElement();
+}
+
+function focusCurrentSectionElement() {
+  switch (ui.focusSection) {
+    case "sidebar":
+      sidebarElement.focus({ preventScroll: true });
+      scrollSidebarSelectionIntoView();
+      break;
+    case "sidebar-drawer": {
+      const sidebarDrawer = sidebarElement.querySelector(".sidebar-project-drawer") as HTMLElement | null;
+      sidebarDrawer?.focus({ preventScroll: true });
+      scrollSidebarDrawerSelectionIntoView();
+      break;
+    }
+    case "terminal":
+      if (ui.terminal) {
+        ui.terminal.focus();
+        break;
+      }
+
+      (detailElement.querySelector(".terminal-wrap") as HTMLElement | null)?.focus({
+        preventScroll: true
+      });
+      break;
+    case "main":
+    default: {
+      const sessionMainRegion = document.getElementById("session-main-region") as HTMLElement | null;
+      (sessionMainRegion || detailElement).focus({ preventScroll: true });
+      break;
     }
   }
+}
+
+function sortedRepos() {
+  return [...state.repos].sort(compareRepos);
+}
+
+function compareRepos(left, right) {
+  const nameDelta = left.name.localeCompare(right.name);
+  if (nameDelta !== 0) {
+    return nameDelta;
+  }
+
+  return left.path.localeCompare(right.path);
+}
+
+function navigateSidebarProjects(direction: number) {
+  const repos = sortedRepos();
+  if (!repos.length) {
+    return;
+  }
+
+  const currentRepoIndex = repos.findIndex((repo) => repo.id === currentRepoId());
+  if (currentRepoIndex < 0) {
+    const fallbackIndex = direction > 0 ? 0 : repos.length - 1;
+    void selectRepo(repos[fallbackIndex].id, "sidebar");
+    return;
+  }
+
+  const nextIndex = currentRepoIndex + direction;
+  if (nextIndex < 0 || nextIndex >= repos.length) {
+    return;
+  }
+
+  void selectRepo(repos[nextIndex].id, "sidebar");
+}
+
+function navigateSidebarDrawerSessions(direction: number) {
+  const repo = expandedSidebarRepo();
+  if (!repo) {
+    return;
+  }
+
+  const sessions = sessionsForRepo(repo.id);
+  if (!sessions.length) {
+    return;
+  }
+
+  const currentSessionIndex = sessions.findIndex((session) => session.id === ui.selection.id);
+  if (ui.selection.type !== "session" || currentSessionIndex < 0) {
+    const fallbackIndex = direction > 0 ? 0 : sessions.length - 1;
+    void selectSession(sessions[fallbackIndex].id, "sidebar-drawer");
+    return;
+  }
+
+  const nextIndex = currentSessionIndex + direction;
+  if (nextIndex < 0 || nextIndex >= sessions.length) {
+    return;
+  }
+
+  void selectSession(sessions[nextIndex].id, "sidebar-drawer");
+}
+
+function toggleSidebarProjectDrawer(repoId) {
+  if (!repoId) {
+    return;
+  }
+
+  ui.sidebarExpandedRepoId = ui.sidebarExpandedRepoId === repoId ? null : repoId;
+  renderSidebar();
+}
+
+function collapseSidebarProjectDrawer(repoId = null) {
+  if (!ui.sidebarExpandedRepoId) {
+    return;
+  }
+
+  if (repoId && ui.sidebarExpandedRepoId !== repoId) {
+    return;
+  }
+
+  ui.sidebarExpandedRepoId = null;
+  renderSidebar();
+}
+
+function scrollSidebarSelectionIntoView() {
+  const activeRepoId = currentRepoId();
+  const target =
+    (activeRepoId
+      ? sidebarElement.querySelector(`[data-repo-id="${CSS.escape(activeRepoId)}"]`)
+      : sidebarElement.querySelector('[data-action="select-inbox"]')) as HTMLElement | null;
+
+  target?.scrollIntoView({ block: "nearest" });
+}
+
+function scrollSidebarDrawerSelectionIntoView() {
+  if (ui.selection.type !== "session") {
+    return;
+  }
+
+  const target = sidebarElement.querySelector(
+    `[data-session-id="${CSS.escape(ui.selection.id)}"]`
+  ) as HTMLElement | null;
+
+  target?.scrollIntoView({ block: "nearest" });
 }
 
 function sessionsForRepo(repoId) {
   return [...state.sessions]
     .filter((session) => session.repoID === repoId)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-}
-
-function isRepoExpanded(repoId) {
-  const explicitValue = ui.repoExpansion.get(repoId);
-  if (explicitValue !== undefined) {
-    return explicitValue;
-  }
-
-  return defaultRepoExpanded(repoId);
-}
-
-function defaultRepoExpanded(repoId) {
-  if (!repoId) {
-    return false;
-  }
-
-  if (currentRepoId() === repoId) {
-    return true;
-  }
-
-  return sessionsForRepo(repoId).some(
-    (session) => session.runtimeState === "live" || session.unreadCount > 0 || session.blocker
-  );
-}
-
-function ensureRepoExpanded(repoId) {
-  if (!repoId) {
-    return;
-  }
-
-  ui.repoExpansion.set(repoId, true);
-}
-
-function toggleRepoFolder(repoId) {
-  if (!repoId) {
-    return;
-  }
-
-  ui.repoExpansion.set(repoId, !isRepoExpanded(repoId));
-  renderSidebar();
 }
 
 function inboxSessions() {
@@ -2186,41 +2464,133 @@ function selectionMatches(type, id = null) {
   return ui.selection.type === type && (id === null || ui.selection.id === id);
 }
 
-function repoFolderMeta(sessions, liveCount, attentionCount) {
-  const parts = [];
-
-  if (attentionCount) {
-    parts.push(`${attentionCount} needs review`);
-  }
-
-  if (liveCount) {
-    parts.push(`${liveCount} live`);
-  }
-
-  if (sessions.length) {
-    parts.push(`${sessions.length} session${sessions.length === 1 ? "" : "s"}`);
-  } else {
-    parts.push("No sessions yet");
-  }
-
-  return parts.join(" · ");
+function renderProjectAvatar(repo) {
+  return buildIdenticonSvg(repo.path || repo.name || repo.id);
 }
 
-function sidebarSessionMeta(session) {
-  if (session.blocker?.summary) {
-    return `${statusLabel(session.status)} · ${session.blocker.summary}`;
+function renderUtilityIcon(kind) {
+  switch (kind) {
+    case "workspace":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7.5h16v10H4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+          <path d="M7 5h4l1.3 1.5H20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      `;
+    case "folder":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7.5h16v10H4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+          <path d="M12 10v5M9.5 12.5h5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+      `;
+    case "settings":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/>
+          <path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M17.3 6.7l-1.4 1.4M8.1 15.9l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+      `;
+    case "inbox":
+    default:
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 7h14l1 10H4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+          <path d="M8.5 12.5h2l1.2 2h2.6l1.2-2h2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      `;
   }
-
-  return statusLabel(session.status);
 }
 
-function repoInitials(name) {
-  return String(name || "?")
-    .split(/[^A-Za-z0-9]+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() || "")
-    .join("") || "?";
+function buildIdenticonSvg(seed) {
+  const hash = hashSeed(seed);
+  const background = `hsl(${hash % 360} 52% 18%)`;
+  const foreground = `hsl(${(hash >> 9) % 360} 72% 62%)`;
+  const accent = `hsl(${(hash >> 18) % 360} 78% 74%)`;
+  const cells: string[] = [];
+  const bitSource = hash ^ 0x9e3779b9;
+  const cellSize = 12;
+  const offset = 2;
+
+  for (let row = 0; row < 5; row += 1) {
+    for (let column = 0; column < 3; column += 1) {
+      const bitIndex = row * 3 + column;
+      const filled = ((bitSource >> bitIndex) & 1) === 1;
+      if (!filled) {
+        continue;
+      }
+
+      const mirroredColumn = 4 - column;
+      cells.push(renderIdenticonCell(column, row, cellSize, offset, foreground, accent));
+      if (mirroredColumn !== column) {
+        cells.push(renderIdenticonCell(mirroredColumn, row, cellSize, offset, foreground, accent));
+      }
+    }
+  }
+
+  return `
+    <svg viewBox="0 0 64 64" role="img" aria-hidden="true">
+      <rect x="2" y="2" width="60" height="60" rx="18" fill="${background}"/>
+      <rect x="8" y="8" width="48" height="48" rx="14" fill="rgba(255,255,255,0.04)"/>
+      ${cells.join("")}
+    </svg>
+  `;
+}
+
+function renderIdenticonCell(column, row, cellSize, offset, foreground, accent) {
+  const x = offset + column * cellSize;
+  const y = offset + row * cellSize;
+
+  return `
+    <rect x="${x + 8}" y="${y + 8}" width="${cellSize - 2}" height="${cellSize - 2}" rx="4" fill="${foreground}"/>
+    <circle cx="${x + 14}" cy="${y + 14}" r="2.2" fill="${accent}" opacity="0.85"/>
+  `;
+}
+
+function hashSeed(value) {
+  let hash = 2166136261;
+  for (const character of String(value || "")) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return hash >>> 0;
+}
+
+function isAnyDialogOpen() {
+  return (
+    launcherDialog.open ||
+    settingsDialog.open ||
+    quickSwitcherDialog.open ||
+    commandPaletteDialog.open
+  );
+}
+
+function isEditableTarget(target: HTMLElement | null) {
+  if (!target) {
+    return false;
+  }
+
+  const editableElement = target.closest(
+    'input, textarea, select, [contenteditable="true"], [contenteditable=""], .xterm-helper-textarea'
+  );
+
+  return !!editableElement;
+}
+
+function isTerminalTarget(target: HTMLElement) {
+  return !!target.closest("#terminal-shell");
+}
+
+function isSidebarDrawerTarget(target: HTMLElement) {
+  return !!target.closest(".sidebar-project-drawer");
+}
+
+function isSectionNavigationKey(event: KeyboardEvent) {
+  const hasModifier = event.metaKey || event.ctrlKey;
+  return hasModifier && !event.altKey && event.key !== "ArrowUp" && event.key !== "ArrowDown"
+    ? event.key === "ArrowLeft" || event.key === "ArrowRight"
+    : false;
 }
 
 function statusLabel(status) {

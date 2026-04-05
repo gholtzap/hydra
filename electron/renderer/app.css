@@ -1285,10 +1285,24 @@ textarea {
   border: 1px solid var(--border);
   background: var(--surface-soft);
   overflow: hidden;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
 }
 
 .session-pane-active {
-  box-shadow: 0 14px 30px oklch(0.2 0.01 80 / 0.10);
+  border-color: var(--surface-active-border);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--surface-active-border) 92%, transparent),
+    0 14px 30px oklch(0.2 0.01 80 / 0.10);
+}
+
+.session-pane-focused {
+  border-color: color-mix(in oklab, var(--ring) 54%, var(--surface-active-border));
+  box-shadow:
+    0 0 0 2px color-mix(in oklab, var(--ring) 28%, transparent),
+    0 18px 36px oklch(0.2 0.01 80 / 0.16);
 }
 
 .session-pane-main {

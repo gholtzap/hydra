@@ -4371,9 +4371,11 @@ function syncSectionFocusUi() {
   for (const pane of sessionPanes) {
     const sessionId = (pane as HTMLElement).dataset.sessionId || null;
     const active = ui.selection.type === "session" && sessionId === ui.selection.id;
+    const paneFocused = active && (ui.focusSection === "main" || ui.focusSection === "terminal");
     const mainRegion = pane.querySelector(".session-pane-main") as HTMLElement | null;
     const terminalWrap = pane.querySelector(".session-pane-terminal-wrap") as HTMLElement | null;
     pane.classList.toggle("session-pane-active", active);
+    pane.classList.toggle("session-pane-focused", paneFocused);
     mainRegion?.classList.toggle("section-focused", active && ui.focusSection === "main");
     terminalWrap?.classList.toggle("section-focused", active && ui.focusSection === "terminal");
   }

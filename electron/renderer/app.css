@@ -330,8 +330,8 @@ textarea {
 #sidebar:focus,
 #detail:focus,
 .sidebar-project-drawer:focus,
-.session-main-region:focus,
-.terminal-wrap:focus {
+.session-pane-main:focus,
+.session-pane-terminal-wrap:focus {
   outline: none;
 }
 
@@ -1048,36 +1048,99 @@ textarea {
   padding: 20px;
 }
 
-.session-detail {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 10px;
+.session-workspace-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   min-height: 0;
   height: 100%;
 }
 
-.session-main-region {
+.workspace-hero {
+  padding: 4px 2px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace-detail-actions {
+  justify-content: flex-end;
+}
+
+.session-workspace-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.session-workspace-split {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.session-workspace-split-row {
+  flex-direction: row;
+}
+
+.session-workspace-split-column {
+  flex-direction: column;
+}
+
+.session-workspace-split > * {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.session-pane {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.session-pane-active {
+  box-shadow: 0 14px 30px oklch(0.2 0.01 80 / 0.10);
+}
+
+.session-pane-main {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  border-radius: 18px;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--border);
 }
 
-.session-main-region.section-focused,
-.terminal-wrap.section-focused {
+.session-pane-main.section-focused,
+.session-pane-terminal-wrap.section-focused {
   box-shadow:
-    0 0 0 1px var(--surface-active-border),
-    0 0 0 4px var(--focus-ring);
+    inset 0 0 0 1px var(--surface-active-border),
+    inset 0 0 0 4px var(--focus-ring);
 }
 
-.session-header {
+.session-pane-header-row {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  flex-wrap: wrap;
-  padding: 4px 0 10px;
-  border-bottom: 1px solid var(--border);
+}
+
+.session-pane-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.session-pane-title-copy {
+  min-width: 0;
 }
 
 .session-title-row {
@@ -1092,6 +1155,23 @@ textarea {
   line-height: 1.2;
   font-weight: 600;
   margin: 0;
+}
+
+.session-pane-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.session-pane-drag-handle {
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  flex: none;
 }
 
 .status-badge {
@@ -1159,23 +1239,20 @@ textarea {
   border: 1px solid var(--warn-border);
 }
 
-.terminal-wrap {
+.session-pane-terminal-wrap {
   position: relative;
   min-height: 0;
-  border-radius: 16px;
-  overflow: hidden;
-  border: 1px solid var(--border);
   background: var(--terminal-background);
 }
 
-.terminal-wrap-paused {
-  border-color: var(--warn-border);
+.session-pane-terminal-wrap-paused {
+  background: color-mix(in oklab, var(--terminal-background) 88%, var(--warn-bg));
 }
 
-#terminal-shell {
+.session-terminal-shell {
   width: 100%;
   height: 100%;
-  min-height: 420px;
+  min-height: 240px;
   background:
     radial-gradient(circle at top left, var(--terminal-shell-top), transparent 24%),
     radial-gradient(circle at bottom right, var(--terminal-shell-bottom), transparent 24%),
@@ -1183,7 +1260,7 @@ textarea {
   padding: 10px;
 }
 
-#terminal {
+.session-terminal {
   width: 100%;
   height: 100%;
 }
@@ -1204,12 +1281,69 @@ textarea {
   backdrop-filter: blur(10px);
 }
 
-#terminal-shell,
-#terminal-shell .xterm,
-#terminal-shell .xterm * {
+.session-terminal-shell,
+.session-terminal-shell .xterm,
+.session-terminal-shell .xterm * {
   font-family: var(--font-mono);
   font-kerning: none;
   letter-spacing: normal;
+}
+
+.session-pane-drop-indicator {
+  position: absolute;
+  inset: 10px;
+  border-radius: 14px;
+  border: 2px dashed transparent;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 5;
+  transition:
+    opacity 120ms ease,
+    inset 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.session-pane-drop-label {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--panel) 84%, transparent);
+  border: 1px solid var(--surface-active-border);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.session-pane-drop-center .session-pane-drop-indicator,
+.session-pane-drop-left .session-pane-drop-indicator,
+.session-pane-drop-right .session-pane-drop-indicator,
+.session-pane-drop-top .session-pane-drop-indicator,
+.session-pane-drop-bottom .session-pane-drop-indicator {
+  opacity: 1;
+  border-color: var(--surface-active-border);
+  background: color-mix(in oklab, var(--focus-ring) 70%, transparent);
+}
+
+.session-pane-drop-left .session-pane-drop-indicator {
+  right: 56%;
+}
+
+.session-pane-drop-right .session-pane-drop-indicator {
+  left: 56%;
+}
+
+.session-pane-drop-top .session-pane-drop-indicator {
+  bottom: 56%;
+}
+
+.session-pane-drop-bottom .session-pane-drop-indicator {
+  top: 56%;
 }
 
 .repo-session-list {

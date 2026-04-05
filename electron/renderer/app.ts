@@ -1,6 +1,29 @@
 const api = window.claudeWorkspace;
 const SECTION_ORDER = ["sidebar", "sidebar-drawer", "main", "terminal"] as const;
 type SectionId = (typeof SECTION_ORDER)[number];
+const MAX_VISIBLE_SESSION_PANES = 4;
+
+type WorkspaceSplitAxis = "row" | "column";
+type WorkspaceDropZone = "center" | "left" | "right" | "top" | "bottom";
+
+type WorkspaceLeafNode = {
+  type: "leaf";
+  sessionId: string;
+};
+
+type WorkspaceSplitNode = {
+  type: "split";
+  axis: WorkspaceSplitAxis;
+  children: WorkspaceLayoutNode[];
+};
+
+type WorkspaceLayoutNode = WorkspaceLeafNode | WorkspaceSplitNode;
+
+type TerminalMount = {
+  terminal: any;
+  fitAddon: any;
+  resizeObserver: ResizeObserver;
+};
 
 const state = {
   workspaces: [] as any[],
@@ -15,10 +38,7 @@ const ui = {
   sidebarExpandedRepoId: null as string | null,
   sidebarNavItem: "inbox" as string,
   mainListSessionId: null as string | null,
-  terminal: null,
-  fitAddon: null,
-  terminalSessionId: null,
-  resizeObserver: null,
+  terminalMounts: new Map<string, TerminalMount>(),
   launcherQuery: "",
   launcherSelectedRepoId: null,
   launcherLaunchesClaudeOnStart: true,
@@ -35,7 +55,12 @@ const ui = {
   portStatusData: null,
   portStatusLoading: false,
   portStatusShowAll: false,
-  portStatusPollTimer: null as number | null
+  portStatusPollTimer: null as number | null,
+  workspaceStructureSignature: "",
+  draggingSessionId: null as string | null,
+  draggingSessionSource: null as string | null,
+  dragTargetSessionId: null as string | null,
+  dragTargetZone: null as WorkspaceDropZone | null
 };
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
@@ -71,6 +96,10 @@ document.addEventListener("change", handleChange);
 document.addEventListener("pointerdown", handlePointerDown, true);
 document.addEventListener("contextmenu", handleContextMenu, true);
 document.addEventListener("keydown", handleKeyDown, true);
+document.addEventListener("dragstart", handleDragStart, true);
+document.addEventListener("dragend", handleDragEnd, true);
+document.addEventListener("dragover", handleDragOver, true);
+document.addEventListener("drop", handleDrop, true);
 
 api.onStateChanged((nextState) => {
   replaceState(nextState);
@@ -88,10 +117,10 @@ api.onSessionOutput((payload) => {
     return;
   }
 
-  if (ui.selection.type === "session" && ui.selection.id === payload.sessionId && ui.terminal) {
-    updateSessionChrome(session);
-    ui.terminal.write(payload.data);
-    syncTerminalLiveState(session);
+  if (ui.selection.type === "session" && isSessionVisible(payload.sessionId)) {
+    updateSessionWorkspaceToolbar();
+    updateSessionPane(session);
+    writeSessionTerminalOutput(payload.sessionId, payload.data);
     return;
   }
 
@@ -108,9 +137,10 @@ api.onSessionUpdated((payload) => {
     return;
   }
 
-  if (ui.selection.type === "session" && ui.selection.id === session.id) {
-    updateSessionChrome(session);
-    syncTerminalLiveState(session);
+  if (ui.selection.type === "session" && isSessionVisible(session.id)) {
+    updateSessionWorkspaceToolbar();
+    updateSessionPane(session);
+    syncSessionTerminalLiveState(session);
   } else if (ui.selection.type !== "session") {
     renderDetail();
   }
@@ -151,8 +181,8 @@ initialize().catch((error) => {
 function handleColorSchemeChange() {
   syncColorSchemeClass();
 
-  if (ui.terminal) {
-    ui.terminal.options.theme = buildTerminalTheme();
+  for (const mount of ui.terminalMounts.values()) {
+    mount.terminal.options.theme = buildTerminalTheme();
   }
 }
 
@@ -209,6 +239,7 @@ function replaceState(nextState) {
   state.repos = nextState.repos || [];
   state.sessions = nextState.sessions || [];
   state.preferences = nextState.preferences || {};
+  syncStoredSessionWorkspaceLayout();
   if (ui.sidebarExpandedRepoId && !repoById(ui.sidebarExpandedRepoId)) {
     ui.sidebarExpandedRepoId = null;
   }
@@ -220,8 +251,15 @@ function replaceState(nextState) {
 }
 
 function ensureValidSelection() {
+  if (ui.selection.type === "session" && sessionById(ui.selection.id)) {
+    syncStoredSessionWorkspaceLayout(ui.selection.id);
+  }
+
   if (ui.selection.type === "session" && !sessionById(ui.selection.id)) {
-    ui.selection = { type: "inbox", id: null };
+    const visibleSessionIds = workspaceVisibleSessionIds();
+    ui.selection = visibleSessionIds.length
+      ? { type: "session", id: visibleSessionIds[0] }
+      : { type: "inbox", id: null };
   }
 
   if (ui.selection.type === "repo" && !repoById(ui.selection.id)) {
@@ -339,7 +377,7 @@ function renderSidebarProjectDrawer(repo) {
 
 function renderSidebarDrawerSession(session, repo) {
   return `
-    <button class="session-row ${selectionMatches("session", session.id) ? "active" : ""}" data-action="select-session" data-session-id="${session.id}">
+    <button class="session-row ${selectionMatches("session", session.id) ? "active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
       <div class="row-title">
         <span>${escapeHtml(session.title)}</span>
         ${session.unreadCount && state.preferences.showInAppBadges ? '<span class="unread-dot"></span>' : ""}
@@ -644,59 +682,113 @@ function pluralize(count, singular, plural) {
 function renderSessionDetail(session) {
   if (!session) {
     detailElement.innerHTML = `<div class="empty-state">This session is no longer available.</div>`;
-    destroyTerminal();
+    destroySessionWorkspaceTerminals();
     return;
   }
 
-  // Re-rendering the selected session replaces the terminal container node,
-  // so the current xterm instance must be recreated for the same session.
-  if (ui.terminalSessionId === session.id) {
-    destroyTerminal();
+  const layout = syncStoredSessionWorkspaceLayout(session.id);
+  const signature = workspaceLayoutSignature(layout);
+
+  if (
+    detailElement.querySelector(".session-workspace-detail") === null ||
+    ui.workspaceStructureSignature !== signature
+  ) {
+    destroySessionWorkspaceTerminals();
+    detailElement.innerHTML = `
+      <section class="session-workspace-detail">
+        <div id="session-workspace-toolbar"></div>
+        <div id="session-workspace-canvas" class="session-workspace-canvas">
+          ${layout ? renderSessionWorkspaceLayoutNode(layout) : `<div class="empty-state">Drag a session here to start a workspace layout.</div>`}
+        </div>
+      </section>
+    `;
+    ui.workspaceStructureSignature = signature;
+    if (layout) {
+      mountSessionWorkspaceTerminals(layout);
+    }
   }
 
-  detailElement.innerHTML = `
-    <section class="session-detail">
-      <div id="session-main-region" class="session-main-region" tabindex="-1">
-        <div id="session-chrome"></div>
-        <div id="session-blocker"></div>
-      </div>
-      <div class="terminal-wrap ${session.runtimeState === "live" ? "" : "terminal-wrap-paused"}" tabindex="-1">
-        <div id="terminal-shell">
-          <div id="terminal"></div>
-        </div>
-        ${renderPausedSessionNotice(session)}
-      </div>
-    </section>
-  `;
-
-  updateSessionChrome(session);
-  mountTerminal(session);
+  updateSessionWorkspaceToolbar();
+  updateAllSessionPanes();
+  updateSessionDropUi();
   syncSectionFocusUi();
 }
 
 function updateSessionChrome(session) {
-  if (ui.selection.type !== "session" || ui.selection.id !== session.id) {
+  if (isSessionVisible(session.id)) {
+    updateSessionWorkspaceToolbar();
+    updateSessionPane(session);
+  }
+}
+
+function renderSessionWorkspaceLayoutNode(node: WorkspaceLayoutNode) {
+  if (!node) {
+    return "";
+  }
+
+  if (node.type === "leaf") {
+    return renderSessionPane(node.sessionId);
+  }
+
+  return `
+    <div class="session-workspace-split session-workspace-split-${node.axis}">
+      ${node.children.map((child) => renderSessionWorkspaceLayoutNode(child)).join("")}
+    </div>
+  `;
+}
+
+function renderSessionPane(sessionId) {
+  const session = sessionById(sessionId);
+  if (!session) {
+    return "";
+  }
+
+  return `
+    <article class="session-pane ${selectionMatches("session", session.id) ? "session-pane-active" : ""}" data-session-id="${session.id}">
+      <div class="session-pane-drop-indicator">
+        <span class="session-pane-drop-label"></span>
+      </div>
+      <div class="session-pane-main" tabindex="-1" data-action="select-session-pane" data-session-id="${session.id}">
+        <div class="session-pane-header"></div>
+        <div class="session-pane-blocker"></div>
+      </div>
+      <div class="session-pane-terminal-wrap ${session.runtimeState === "live" ? "" : "session-pane-terminal-wrap-paused"}" tabindex="-1">
+        <div class="session-terminal-shell" data-session-id="${session.id}">
+          <div class="session-terminal" data-session-id="${session.id}"></div>
+        </div>
+        <div class="session-pane-paused-notice"></div>
+      </div>
+    </article>
+  `;
+}
+
+function updateSessionWorkspaceToolbar() {
+  if (ui.selection.type !== "session") {
+    return;
+  }
+
+  const session = sessionById(ui.selection.id);
+  const toolbar = document.getElementById("session-workspace-toolbar");
+
+  if (!session || !toolbar) {
     return;
   }
 
   const repo = repoById(session.repoID);
-  const chrome = document.getElementById("session-chrome");
-  const blockerElement = document.getElementById("session-blocker");
+  const visibleSessionCount = workspaceVisibleSessionIds().length;
 
-  if (!chrome || !blockerElement) {
-    return;
-  }
-
-  chrome.innerHTML = `
-    <div class="session-header">
+  toolbar.innerHTML = `
+    <div class="detail-hero workspace-hero">
       <div>
-        <div class="session-title-row">
-          <h1 class="session-title">${escapeHtml(session.title)}</h1>
-          <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
-        </div>
-        <div class="muted">${escapeHtml(abbreviateHome(repo?.path || ""))}</div>
+        <div class="eyebrow">Workspace</div>
+        <h1 class="detail-title">${escapeHtml(session.title)}</h1>
+        <div class="muted">${escapeHtml(repo?.name || "Unknown Repo")} · ${visibleSessionCount} visible ${pluralize(visibleSessionCount, "session", "sessions")} · Drag a session onto a pane edge to split it.</div>
       </div>
-      <div class="session-actions">
+      <div class="detail-actions workspace-detail-actions">
+        <button data-action="open-launcher" data-repo-id="${repo?.id || ""}">New Session</button>
+        <button data-action="workspace-layout-columns">Columns</button>
+        <button data-action="workspace-layout-stack">Stack</button>
+        <button data-action="workspace-layout-grid" ${visibleSessionCount > 1 ? "" : "disabled"}>Grid</button>
         <button data-action="reveal-repo" data-repo-id="${repo?.id || ""}">Reveal Repo</button>
         <button data-action="open-settings" data-settings-tab="claude">Claude Files</button>
         ${
@@ -708,25 +800,84 @@ function updateSessionChrome(session) {
       </div>
     </div>
   `;
+}
 
-  blockerElement.innerHTML = session.blocker
-    ? `
-      <div class="blocker-banner">
-        <div>
-          <div class="row-title">${escapeHtml(blockerLabel(session.blocker.kind))}</div>
-          <div class="row-subtitle">${escapeHtml(session.blocker.summary)}</div>
+function updateAllSessionPanes() {
+  for (const sessionId of workspaceVisibleSessionIds()) {
+    const session = sessionById(sessionId);
+    if (session) {
+      updateSessionPane(session);
+    }
+  }
+}
+
+function updateSessionPane(session) {
+  const pane = sessionPaneElement(session.id);
+  if (!pane) {
+    return;
+  }
+
+  const repo = repoById(session.repoID);
+  const header = pane.querySelector(".session-pane-header") as HTMLElement | null;
+  const blockerElement = pane.querySelector(".session-pane-blocker") as HTMLElement | null;
+  const pausedNotice = pane.querySelector(".session-pane-paused-notice") as HTMLElement | null;
+  const terminalWrap = pane.querySelector(".session-pane-terminal-wrap") as HTMLElement | null;
+
+  if (!header || !blockerElement || !pausedNotice || !terminalWrap) {
+    return;
+  }
+
+  pane.classList.toggle("session-pane-active", selectionMatches("session", session.id));
+  terminalWrap.classList.toggle("session-pane-terminal-wrap-paused", session.runtimeState !== "live");
+
+  header.innerHTML = `
+    <div class="session-pane-header-row">
+      <div class="session-pane-title-row">
+        <button class="ghost session-pane-drag-handle" draggable="true" data-drag-session-id="${session.id}" data-drag-source="pane" title="Drag ${escapeAttribute(session.title)}" aria-label="Drag ${escapeAttribute(session.title)}">Drag</button>
+        <div class="session-pane-title-copy">
+          <div class="session-title-row">
+            <div class="session-title">${escapeHtml(session.title)}</div>
+            <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
+          </div>
+          <div class="muted">${escapeHtml(repo?.name || "Unknown Repo")} · ${escapeHtml(abbreviateHome(repo?.path || ""))}</div>
         </div>
-        ${
-          session.blocker.kind === "approval" && session.runtimeState === "live"
-            ? `<div class="session-actions">
-                <button class="primary" data-action="approve-blocker" data-session-id="${session.id}">Approve</button>
-                <button data-action="deny-blocker" data-session-id="${session.id}">Deny</button>
-              </div>`
-            : ""
-        }
       </div>
-    `
-    : "";
+      <div class="session-pane-actions">
+        ${
+          session.runtimeState === "live"
+            ? ""
+            : `<button class="primary" data-action="restart-session" data-session-id="${session.id}">${escapeHtml(resumeSessionActionLabel(session))}</button>`
+        }
+        <button data-action="remove-session-pane" data-session-id="${session.id}">Hide</button>
+      </div>
+    </div>
+  `;
+
+  blockerElement.innerHTML = renderSessionBlocker(session);
+  pausedNotice.innerHTML = renderPausedSessionNotice(session);
+}
+
+function renderSessionBlocker(session) {
+  if (!session.blocker) {
+    return "";
+  }
+
+  return `
+    <div class="blocker-banner">
+      <div>
+        <div class="row-title">${escapeHtml(blockerLabel(session.blocker.kind))}</div>
+        <div class="row-subtitle">${escapeHtml(session.blocker.summary)}</div>
+      </div>
+      ${
+        session.blocker.kind === "approval" && session.runtimeState === "live"
+          ? `<div class="session-actions">
+              <button class="primary" data-action="approve-blocker" data-session-id="${session.id}">Approve</button>
+              <button data-action="deny-blocker" data-session-id="${session.id}">Deny</button>
+            </div>`
+          : ""
+      }
+    </div>
+  `;
 }
 
 function renderPausedSessionNotice(session) {
@@ -757,18 +908,23 @@ function sessionOpenFocusSection(session): SectionId {
   return session?.runtimeState === "live" ? "terminal" : "main";
 }
 
-function mountTerminal(session) {
-  const terminalElement = document.getElementById("terminal");
-  const shellElement = document.getElementById("terminal-shell");
+function mountSessionWorkspaceTerminals(layout: WorkspaceLayoutNode) {
+  destroySessionWorkspaceTerminals();
 
-  if (!terminalElement || !shellElement) {
-    return;
-  }
+  for (const sessionId of collectWorkspaceSessionIds(layout)) {
+    const session = sessionById(sessionId);
+    const terminalElement = detailElement.querySelector(
+      `.session-terminal[data-session-id="${CSS.escape(sessionId)}"]`
+    ) as HTMLElement | null;
+    const shellElement = detailElement.querySelector(
+      `.session-terminal-shell[data-session-id="${CSS.escape(sessionId)}"]`
+    ) as HTMLElement | null;
 
-  if (ui.terminalSessionId !== session.id) {
-    destroyTerminal();
+    if (!session || !terminalElement || !shellElement) {
+      continue;
+    }
 
-    ui.terminal = new Terminal({
+    const terminal = new Terminal({
       allowTransparency: false,
       convertEol: false,
       cursorBlink: true,
@@ -783,89 +939,125 @@ function mountTerminal(session) {
       theme: buildTerminalTheme()
     });
 
-    ui.fitAddon = new FitAddon.FitAddon();
-    ui.terminal.loadAddon(ui.fitAddon);
-    ui.terminal.open(terminalElement);
-    ui.terminal.attachCustomKeyEventHandler((event) => handleTerminalCustomKeyEvent(event));
-    ui.terminal.onData((data) => {
-      if (ui.terminalSessionId) {
-        api.sendInput(ui.terminalSessionId, data);
-      }
+    const fitAddon = new FitAddon.FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(terminalElement);
+    terminal.attachCustomKeyEventHandler((event) => handleTerminalCustomKeyEvent(event));
+    terminal.onData((data) => {
+      api.sendInput(session.id, data);
     });
-    ui.terminal.onBinary((data) => {
-      if (ui.terminalSessionId) {
-        api.sendBinaryInput(ui.terminalSessionId, data);
-      }
+    terminal.onBinary((data) => {
+      api.sendBinaryInput(session.id, data);
     });
-    ui.terminal.onResize((size) => {
-      if (ui.terminalSessionId) {
-        api.resizeSession(ui.terminalSessionId, size.cols, size.rows);
-      }
+    terminal.onResize((size) => {
+      api.resizeSession(session.id, size.cols, size.rows);
     });
 
-    ui.resizeObserver = new ResizeObserver(() => {
-      if (ui.fitAddon) {
-        ui.fitAddon.fit();
-      }
+    const resizeObserver = new ResizeObserver(() => {
+      fitAddon.fit();
     });
-    ui.resizeObserver.observe(shellElement);
+    resizeObserver.observe(shellElement);
 
-    ui.terminalSessionId = session.id;
-    ui.terminal.reset();
-    ui.terminal.write(terminalReplayText(session));
-  }
+    ui.terminalMounts.set(session.id, {
+      terminal,
+      fitAddon,
+      resizeObserver
+    });
 
-  syncTerminalLiveState(session);
-  if (ui.fitAddon) {
-    ui.fitAddon.fit();
-    if (ui.terminalSessionId) {
-      api.resizeSession(ui.terminalSessionId, ui.terminal.cols, ui.terminal.rows);
-    }
+    terminal.reset();
+    terminal.write(terminalReplayText(session));
+    syncSessionTerminalLiveState(session);
+    fitAddon.fit();
+    api.resizeSession(session.id, terminal.cols, terminal.rows);
     requestAnimationFrame(() => {
-      if (!ui.fitAddon || !ui.terminal || ui.terminalSessionId !== session.id) {
+      const mount = ui.terminalMounts.get(session.id);
+      if (!mount) {
         return;
       }
 
-      ui.fitAddon.fit();
-      api.resizeSession(ui.terminalSessionId, ui.terminal.cols, ui.terminal.rows);
+      mount.fitAddon.fit();
+      api.resizeSession(session.id, mount.terminal.cols, mount.terminal.rows);
+      if (
+        ui.selection.type === "session" &&
+        ui.selection.id === session.id &&
+        ui.focusSection === "terminal" &&
+        !isAnyDialogOpen()
+      ) {
+        mount.terminal.focus();
+      }
     });
-  }
-  if (session.runtimeState === "live" && ui.focusSection === "terminal" && !isAnyDialogOpen()) {
-    ui.terminal.focus();
   }
 }
 
-function syncTerminalLiveState(session) {
-  if (!ui.terminal) {
+function mountTerminal(session) {
+  if (!isSessionVisible(session.id)) {
     return;
   }
 
-  ui.terminal.options.disableStdin = session.runtimeState !== "live";
+  const mount = ui.terminalMounts.get(session.id);
+  if (mount && ui.focusSection === "terminal" && ui.selection.type === "session" && ui.selection.id === session.id) {
+    mount.terminal.focus();
+  }
+}
+
+function writeSessionTerminalOutput(sessionId, data) {
+  const mount = ui.terminalMounts.get(sessionId);
+  if (!mount) {
+    return;
+  }
+
+  mount.terminal.write(data);
+}
+
+function syncTerminalLiveState(session) {
+  syncSessionTerminalLiveState(session);
+}
+
+function syncSessionTerminalLiveState(session) {
+  const mount = ui.terminalMounts.get(session.id);
+  if (!mount) {
+    return;
+  }
+
+  mount.terminal.options.disableStdin = session.runtimeState !== "live";
 }
 
 function destroyTerminal() {
-  if (ui.resizeObserver) {
-    ui.resizeObserver.disconnect();
-    ui.resizeObserver = null;
+  destroySessionWorkspaceTerminals();
+}
+
+function destroySessionWorkspaceTerminals() {
+  for (const mount of ui.terminalMounts.values()) {
+    mount.resizeObserver.disconnect();
+    mount.terminal.dispose();
   }
 
-  if (ui.terminal) {
-    ui.terminal.dispose();
-  }
-
-  ui.terminal = null;
-  ui.fitAddon = null;
-  ui.terminalSessionId = null;
+  ui.terminalMounts.clear();
+  ui.workspaceStructureSignature = "";
 }
 
 function terminalReplayText(session) {
   return session.rawTranscript || session.transcript || "";
 }
 
+function sessionPaneElement(sessionId) {
+  return detailElement.querySelector(
+    `.session-pane[data-session-id="${CSS.escape(sessionId)}"]`
+  ) as HTMLElement | null;
+}
+
+function activeTerminalMount() {
+  if (ui.selection.type !== "session") {
+    return null;
+  }
+
+  return ui.terminalMounts.get(ui.selection.id) || null;
+}
+
 function renderInboxCard(session) {
   const repo = repoById(session.repoID);
   return `
-    <button class="inbox-card ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}">
+    <button class="inbox-card ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
       <div class="row-title">
         <span>${escapeHtml(session.title)}</span>
         <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
@@ -878,7 +1070,7 @@ function renderInboxCard(session) {
 
 function renderRepoSession(session, repo) {
   return `
-    <button class="session-row ${selectionMatches("session", session.id) ? "active" : ""} ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}">
+    <button class="session-row ${selectionMatches("session", session.id) ? "active" : ""} ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
       <div class="row-title">
         <span>${escapeHtml(session.title)}</span>
         <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
@@ -1598,6 +1790,9 @@ async function handleClick(event) {
       await selectSession(target.dataset.sessionId, sessionOpenFocusSection(session));
       break;
     }
+    case "select-session-pane":
+      await activateVisibleSession(target.dataset.sessionId, "main");
+      break;
     case "collapse-sidebar-project":
       collapseSidebarProjectDrawer(target.dataset.repoId);
       break;
@@ -1625,14 +1820,23 @@ async function handleClick(event) {
       }
       break;
     case "close-session":
+      removeSessionFromWorkspace(target.dataset.sessionId, { persistSelection: false });
       await api.closeSession(target.dataset.sessionId);
       if (ui.selection.type === "session" && ui.selection.id === target.dataset.sessionId) {
-        await selectInbox();
+        const nextVisibleSessionId = workspaceVisibleSessionIds()[0] || null;
+        if (nextVisibleSessionId) {
+          await selectSession(nextVisibleSessionId, "main");
+        } else {
+          await selectInbox();
+        }
       }
       break;
     case "restart-session":
       setFocusSection("terminal");
       await api.reopenSession(target.dataset.sessionId);
+      break;
+    case "remove-session-pane":
+      await hideSessionPane(target.dataset.sessionId);
       break;
     case "approve-blocker":
       await api.sendInput(target.dataset.sessionId, "1\r");
@@ -1659,6 +1863,15 @@ async function handleClick(event) {
     case "toggle-port-status-table":
       ui.portStatusShowAll = !ui.portStatusShowAll;
       renderDetail();
+      break;
+    case "workspace-layout-columns":
+      applyWorkspacePreset("columns");
+      break;
+    case "workspace-layout-stack":
+      applyWorkspacePreset("stack");
+      break;
+    case "workspace-layout-grid":
+      applyWorkspacePreset("grid");
       break;
     case "switch-session":
       quickSwitcherDialog.close();
@@ -1750,6 +1963,15 @@ function handlePointerDown(event) {
     return;
   }
 
+  const paneSessionId = sessionIdForPaneTarget(target);
+  if (paneSessionId && ui.selection.type === "session" && ui.selection.id !== paneSessionId) {
+    void activateVisibleSession(
+      paneSessionId,
+      isTerminalTarget(target) ? "terminal" : "main"
+    );
+    return;
+  }
+
   if (isTerminalTarget(target)) {
     setFocusSection("terminal");
     return;
@@ -1769,6 +1991,105 @@ function handlePointerDown(event) {
   if (detailElement.contains(target)) {
     setFocusSection("main");
   }
+}
+
+function handleDragStart(event: DragEvent) {
+  const target = event.target as HTMLElement | null;
+  const draggable = target?.closest("[data-drag-session-id]") as HTMLElement | null;
+  const sessionId = draggable?.dataset.dragSessionId;
+
+  if (!sessionId) {
+    return;
+  }
+
+  ui.draggingSessionId = sessionId;
+  ui.draggingSessionSource = draggable?.dataset.dragSource || "list";
+  ui.dragTargetSessionId = null;
+  ui.dragTargetZone = null;
+
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", sessionId);
+  }
+
+  updateSessionDropUi();
+}
+
+function handleDragEnd() {
+  clearSessionDragState();
+}
+
+function handleDragOver(event: DragEvent) {
+  if (!ui.draggingSessionId || ui.selection.type !== "session") {
+    return;
+  }
+
+  const target = event.target as HTMLElement | null;
+  const pane = target?.closest(".session-pane") as HTMLElement | null;
+  const targetSessionId = pane?.dataset.sessionId;
+
+  if (!pane || !targetSessionId) {
+    clearSessionDropTarget();
+    return;
+  }
+
+  const zone = workspaceDropZoneForEvent(pane, event);
+  if (!canDropSessionAtTarget(ui.draggingSessionId, targetSessionId, zone)) {
+    clearSessionDropTarget();
+    return;
+  }
+
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "move";
+  }
+
+  ui.dragTargetSessionId = targetSessionId;
+  ui.dragTargetZone = zone;
+  updateSessionDropUi();
+}
+
+function handleDrop(event: DragEvent) {
+  if (!ui.draggingSessionId || ui.selection.type !== "session") {
+    return;
+  }
+
+  const target = event.target as HTMLElement | null;
+  const pane = target?.closest(".session-pane") as HTMLElement | null;
+  const targetSessionId = pane?.dataset.sessionId;
+
+  if (!pane || !targetSessionId) {
+    clearSessionDragState();
+    return;
+  }
+
+  const zone = workspaceDropZoneForEvent(pane, event);
+  if (!canDropSessionAtTarget(ui.draggingSessionId, targetSessionId, zone)) {
+    clearSessionDragState();
+    return;
+  }
+
+  event.preventDefault();
+  applySessionWorkspaceDrop(ui.draggingSessionId, targetSessionId, zone);
+  clearSessionDragState();
+}
+
+function clearSessionDragState() {
+  ui.draggingSessionId = null;
+  ui.draggingSessionSource = null;
+  ui.dragTargetSessionId = null;
+  ui.dragTargetZone = null;
+  updateSessionDropUi();
+}
+
+function clearSessionDropTarget() {
+  if (!ui.dragTargetSessionId && !ui.dragTargetZone) {
+    return;
+  }
+
+  ui.dragTargetSessionId = null;
+  ui.dragTargetZone = null;
+  updateSessionDropUi();
 }
 
 async function handleContextMenu(event) {
@@ -2011,18 +2332,108 @@ async function selectSession(
   sessionId,
   nextFocusSection: SectionId | null = null
 ) {
+  const session = sessionById(sessionId);
+  if (!session) {
+    return;
+  }
+
+  if (ui.selection.type === "session" && isSessionVisible(sessionId)) {
+    await activateVisibleSession(sessionId, nextFocusSection);
+    return;
+  }
+
   if (nextFocusSection) {
     ui.focusSection = nextFocusSection;
   }
+
+  const nextLayout = addSessionToWorkspaceLayout(
+    syncStoredSessionWorkspaceLayout(),
+    sessionId,
+    ui.selection.type === "session" ? ui.selection.id : null
+  );
+  setStoredSessionWorkspaceLayout(nextLayout);
+
   ui.selection = { type: "session", id: sessionId };
   if (ui.sidebarExpandedRepoId) {
-    ui.sidebarExpandedRepoId = sessionById(sessionId)?.repoID || ui.sidebarExpandedRepoId;
+    ui.sidebarExpandedRepoId = session.repoID || ui.sidebarExpandedRepoId;
   }
-  ui.sidebarNavItem = sessionById(sessionId)?.repoID || ui.sidebarNavItem;
+  ui.sidebarNavItem = session.repoID || ui.sidebarNavItem;
   ui.mainListSessionId = sessionId;
   normalizeFocusSection();
   await api.setFocusedSession(sessionId);
   renderSidebar();
+  renderDetail();
+}
+
+async function activateVisibleSession(
+  sessionId,
+  nextFocusSection: SectionId | null = null
+) {
+  const session = sessionById(sessionId);
+  if (!session) {
+    return;
+  }
+
+  if (nextFocusSection) {
+    ui.focusSection = nextFocusSection;
+  }
+
+  ui.selection = { type: "session", id: sessionId };
+  if (ui.sidebarExpandedRepoId) {
+    ui.sidebarExpandedRepoId = session.repoID || ui.sidebarExpandedRepoId;
+  }
+  ui.sidebarNavItem = session.repoID || ui.sidebarNavItem;
+  ui.mainListSessionId = sessionId;
+  normalizeFocusSection();
+  await api.setFocusedSession(sessionId);
+  renderSidebar();
+  updateSessionWorkspaceToolbar();
+  updateAllSessionPanes();
+  syncSectionFocusUi();
+}
+
+async function hideSessionPane(sessionId) {
+  removeSessionFromWorkspace(sessionId, { persistSelection: false });
+
+  if (ui.selection.type === "session" && ui.selection.id === sessionId) {
+    const nextVisibleSessionId = workspaceVisibleSessionIds()[0] || null;
+    if (nextVisibleSessionId) {
+      await activateVisibleSession(nextVisibleSessionId, "main");
+      renderDetail();
+      return;
+    }
+
+    await selectInbox();
+    return;
+  }
+
+  renderDetail();
+}
+
+function applyWorkspacePreset(preset: "columns" | "stack" | "grid") {
+  if (ui.selection.type !== "session") {
+    return;
+  }
+
+  const sessionIds = workspaceVisibleSessionIds();
+  if (!sessionIds.length) {
+    return;
+  }
+
+  switch (preset) {
+    case "columns":
+      setStoredSessionWorkspaceLayout(buildAxisWorkspaceLayout(sessionIds, "row"));
+      break;
+    case "stack":
+      setStoredSessionWorkspaceLayout(buildAxisWorkspaceLayout(sessionIds, "column"));
+      break;
+    case "grid":
+      setStoredSessionWorkspaceLayout(buildGridWorkspaceLayout(sessionIds));
+      break;
+    default:
+      break;
+  }
+
   renderDetail();
 }
 
@@ -2654,6 +3065,504 @@ function appendSessionOutput(sessionId, chunk, summary) {
   return session;
 }
 
+function renderSessionDragAttributes(sessionId, source = "list") {
+  return `draggable="true" data-drag-session-id="${escapeAttribute(sessionId)}" data-drag-source="${escapeAttribute(source)}"`;
+}
+
+function cloneWorkspaceLayout(layout: WorkspaceLayoutNode | null = null) {
+  return layout ? JSON.parse(JSON.stringify(layout)) : null;
+}
+
+function workspaceLayoutSignature(layout: WorkspaceLayoutNode | null = null) {
+  return JSON.stringify(layout || null);
+}
+
+function createWorkspaceLeaf(sessionId: string): WorkspaceLeafNode {
+  return {
+    type: "leaf",
+    sessionId
+  };
+}
+
+function collectWorkspaceSessionIds(layout: WorkspaceLayoutNode | null): string[] {
+  if (!layout) {
+    return [];
+  }
+
+  if (layout.type === "leaf") {
+    return [layout.sessionId];
+  }
+
+  return layout.children.flatMap((child) => collectWorkspaceSessionIds(child));
+}
+
+function normalizeWorkspaceLayout(
+  layout: WorkspaceLayoutNode | null,
+  validSessionIds = new Set(state.sessions.map((session) => session.id))
+) {
+  const normalized = normalizeWorkspaceNode(cloneWorkspaceLayout(layout), validSessionIds);
+  const visibleIds = collectWorkspaceSessionIds(normalized);
+
+  if (visibleIds.length <= MAX_VISIBLE_SESSION_PANES) {
+    return normalized;
+  }
+
+  return normalizeWorkspaceNode(
+    normalized,
+    new Set(visibleIds.slice(0, MAX_VISIBLE_SESSION_PANES))
+  );
+}
+
+function normalizeWorkspaceNode(
+  layout: WorkspaceLayoutNode | null,
+  validSessionIds: Set<string>
+): WorkspaceLayoutNode | null {
+  if (!layout) {
+    return null;
+  }
+
+  if (layout.type === "leaf") {
+    return validSessionIds.has(layout.sessionId) ? layout : null;
+  }
+
+  const normalizedChildren: WorkspaceLayoutNode[] = [];
+  for (const child of layout.children || []) {
+    const normalizedChild = normalizeWorkspaceNode(child, validSessionIds);
+    if (!normalizedChild) {
+      continue;
+    }
+
+    if (normalizedChild.type === "split" && normalizedChild.axis === layout.axis) {
+      normalizedChildren.push(...normalizedChild.children);
+    } else {
+      normalizedChildren.push(normalizedChild);
+    }
+  }
+
+  if (normalizedChildren.length === 0) {
+    return null;
+  }
+
+  if (normalizedChildren.length === 1) {
+    return normalizedChildren[0];
+  }
+
+  return {
+    type: "split",
+    axis: layout.axis === "column" ? "column" : "row",
+    children: normalizedChildren
+  };
+}
+
+function buildAxisWorkspaceLayout(sessionIds: string[], axis: WorkspaceSplitAxis) {
+  const visibleIds = uniqueWorkspaceSessionIds(sessionIds);
+  if (!visibleIds.length) {
+    return null;
+  }
+
+  if (visibleIds.length === 1) {
+    return createWorkspaceLeaf(visibleIds[0]);
+  }
+
+  return {
+    type: "split",
+    axis,
+    children: visibleIds.map((sessionId) => createWorkspaceLeaf(sessionId))
+  } satisfies WorkspaceLayoutNode;
+}
+
+function buildGridWorkspaceLayout(sessionIds: string[]) {
+  const visibleIds = uniqueWorkspaceSessionIds(sessionIds);
+  if (visibleIds.length <= 2) {
+    return buildAxisWorkspaceLayout(visibleIds, "row");
+  }
+
+  const rows = [visibleIds.slice(0, 2), visibleIds.slice(2)];
+  const rowLayouts = rows
+    .filter((row) => row.length)
+    .map((row) => buildAxisWorkspaceLayout(row, "row"))
+    .filter(Boolean) as WorkspaceLayoutNode[];
+
+  if (rowLayouts.length === 1) {
+    return rowLayouts[0];
+  }
+
+  return {
+    type: "split",
+    axis: "column",
+    children: rowLayouts
+  } satisfies WorkspaceLayoutNode;
+}
+
+function uniqueWorkspaceSessionIds(sessionIds: string[]) {
+  return [...new Set(sessionIds.filter((sessionId) => !!sessionById(sessionId)))].slice(
+    0,
+    MAX_VISIBLE_SESSION_PANES
+  );
+}
+
+function setStoredSessionWorkspaceLayout(layout: WorkspaceLayoutNode | null) {
+  const normalized = normalizeWorkspaceLayout(layout);
+  const nextSignature = workspaceLayoutSignature(normalized);
+  const currentSignature = workspaceLayoutSignature(
+    state.preferences.sessionWorkspaceLayout || null
+  );
+
+  if (currentSignature === nextSignature) {
+    return normalized;
+  }
+
+  state.preferences = {
+    ...state.preferences,
+    sessionWorkspaceLayout: normalized
+  };
+  void api.updatePreferences({ sessionWorkspaceLayout: normalized });
+  return normalized;
+}
+
+function syncStoredSessionWorkspaceLayout(activeSessionId: string | null = null) {
+  let layout = normalizeWorkspaceLayout(state.preferences.sessionWorkspaceLayout || null);
+
+  if (activeSessionId && sessionById(activeSessionId)) {
+    layout = addSessionToWorkspaceLayout(layout, activeSessionId, activeSessionId);
+  }
+
+  return setStoredSessionWorkspaceLayout(layout);
+}
+
+function workspaceVisibleSessionIds() {
+  return collectWorkspaceSessionIds(syncStoredSessionWorkspaceLayout());
+}
+
+function isSessionVisible(sessionId) {
+  return workspaceVisibleSessionIds().includes(sessionId);
+}
+
+function workspaceContainsSession(layout: WorkspaceLayoutNode | null, sessionId: string) {
+  return collectWorkspaceSessionIds(layout).includes(sessionId);
+}
+
+function addSessionToWorkspaceLayout(
+  layout: WorkspaceLayoutNode | null,
+  sessionId: string,
+  targetSessionId: string | null = null
+) {
+  if (!sessionById(sessionId)) {
+    return layout;
+  }
+
+  if (!layout) {
+    return createWorkspaceLeaf(sessionId);
+  }
+
+  if (workspaceContainsSession(layout, sessionId)) {
+    return layout;
+  }
+
+  const visibleIds = collectWorkspaceSessionIds(layout);
+  const replaceTargetId =
+    targetSessionId && workspaceContainsSession(layout, targetSessionId)
+      ? targetSessionId
+      : visibleIds[visibleIds.length - 1];
+
+  if (visibleIds.length >= MAX_VISIBLE_SESSION_PANES) {
+    return replaceSessionInWorkspaceLayout(layout, replaceTargetId, sessionId);
+  }
+
+  return insertLeafNextToTarget(
+    layout,
+    replaceTargetId,
+    createWorkspaceLeaf(sessionId),
+    "row",
+    false
+  );
+}
+
+function replaceSessionInWorkspaceLayout(
+  layout: WorkspaceLayoutNode | null,
+  targetSessionId: string,
+  newSessionId: string
+) {
+  if (!layout) {
+    return createWorkspaceLeaf(newSessionId);
+  }
+
+  if (layout.type === "leaf") {
+    return layout.sessionId === targetSessionId ? createWorkspaceLeaf(newSessionId) : layout;
+  }
+
+  return normalizeWorkspaceLayout({
+    ...layout,
+    children: layout.children.map((child) =>
+      replaceSessionInWorkspaceLayout(child, targetSessionId, newSessionId)
+    )
+  });
+}
+
+function removeSessionFromLayout(layout: WorkspaceLayoutNode | null, sessionId: string) {
+  if (!layout) {
+    return null;
+  }
+
+  if (layout.type === "leaf") {
+    return layout.sessionId === sessionId ? null : layout;
+  }
+
+  return normalizeWorkspaceLayout({
+    ...layout,
+    children: layout.children
+      .map((child) => removeSessionFromLayout(child, sessionId))
+      .filter(Boolean) as WorkspaceLayoutNode[]
+  });
+}
+
+function removeSessionFromWorkspace(
+  sessionId: string,
+  options: { persistSelection?: boolean } = {}
+) {
+  const nextLayout = removeSessionFromLayout(syncStoredSessionWorkspaceLayout(), sessionId);
+  setStoredSessionWorkspaceLayout(nextLayout);
+
+  if (options.persistSelection === false) {
+    return nextLayout;
+  }
+
+  if (ui.selection.type === "session" && ui.selection.id === sessionId) {
+    const nextVisibleSessionId = collectWorkspaceSessionIds(nextLayout)[0] || null;
+    if (nextVisibleSessionId) {
+      ui.selection = { type: "session", id: nextVisibleSessionId };
+    }
+  }
+
+  return nextLayout;
+}
+
+function swapSessionsInWorkspaceLayout(
+  layout: WorkspaceLayoutNode | null,
+  firstSessionId: string,
+  secondSessionId: string
+) {
+  if (!layout) {
+    return null;
+  }
+
+  if (layout.type === "leaf") {
+    if (layout.sessionId === firstSessionId) {
+      return createWorkspaceLeaf(secondSessionId);
+    }
+
+    if (layout.sessionId === secondSessionId) {
+      return createWorkspaceLeaf(firstSessionId);
+    }
+
+    return layout;
+  }
+
+  return normalizeWorkspaceLayout({
+    ...layout,
+    children: layout.children.map((child) =>
+      swapSessionsInWorkspaceLayout(child, firstSessionId, secondSessionId)
+    )
+  });
+}
+
+function insertLeafNextToTarget(
+  layout: WorkspaceLayoutNode | null,
+  targetSessionId: string,
+  newLeaf: WorkspaceLeafNode,
+  axis: WorkspaceSplitAxis,
+  before: boolean
+) {
+  if (!layout) {
+    return newLeaf;
+  }
+
+  if (layout.type === "leaf") {
+    if (layout.sessionId !== targetSessionId) {
+      return layout;
+    }
+
+    return normalizeWorkspaceLayout({
+      type: "split",
+      axis,
+      children: before ? [newLeaf, layout] : [layout, newLeaf]
+    });
+  }
+
+  const targetIndex = layout.children.findIndex(
+    (child) => child.type === "leaf" && child.sessionId === targetSessionId
+  );
+
+  if (targetIndex >= 0) {
+    const children = [...layout.children];
+    if (layout.axis === axis) {
+      children.splice(before ? targetIndex : targetIndex + 1, 0, newLeaf);
+    } else {
+      const targetChild = children[targetIndex];
+      children[targetIndex] = {
+        type: "split",
+        axis,
+        children: before ? [newLeaf, targetChild] : [targetChild, newLeaf]
+      };
+    }
+
+    return normalizeWorkspaceLayout({
+      ...layout,
+      children
+    });
+  }
+
+  return normalizeWorkspaceLayout({
+    ...layout,
+    children: layout.children.map((child) =>
+      insertLeafNextToTarget(child, targetSessionId, newLeaf, axis, before)
+    )
+  });
+}
+
+function applySessionWorkspaceDrop(
+  sourceSessionId: string,
+  targetSessionId: string,
+  zone: WorkspaceDropZone
+) {
+  let layout = syncStoredSessionWorkspaceLayout();
+  const sourceVisible = workspaceContainsSession(layout, sourceSessionId);
+
+  if (zone === "center") {
+    layout = sourceVisible
+      ? swapSessionsInWorkspaceLayout(layout, sourceSessionId, targetSessionId)
+      : replaceSessionInWorkspaceLayout(layout, targetSessionId, sourceSessionId);
+  } else {
+    const axis = zone === "left" || zone === "right" ? "row" : "column";
+    const before = zone === "left" || zone === "top";
+
+    if (sourceVisible) {
+      if (sourceSessionId === targetSessionId) {
+        return;
+      }
+
+      layout = removeSessionFromLayout(layout, sourceSessionId);
+    } else if (collectWorkspaceSessionIds(layout).length >= MAX_VISIBLE_SESSION_PANES) {
+      return;
+    }
+
+    layout = insertLeafNextToTarget(
+      layout,
+      targetSessionId,
+      createWorkspaceLeaf(sourceSessionId),
+      axis,
+      before
+    );
+  }
+
+  setStoredSessionWorkspaceLayout(layout);
+  ui.selection = { type: "session", id: sourceSessionId };
+  ui.sidebarNavItem = sessionById(sourceSessionId)?.repoID || ui.sidebarNavItem;
+  ui.mainListSessionId = sourceSessionId;
+  normalizeFocusSection();
+  void api.setFocusedSession(sourceSessionId);
+  renderSidebar();
+  renderDetail();
+}
+
+function canDropSessionAtTarget(
+  sourceSessionId: string,
+  targetSessionId: string,
+  zone: WorkspaceDropZone
+) {
+  if (!sourceSessionId || !targetSessionId || !sessionById(sourceSessionId) || !sessionById(targetSessionId)) {
+    return false;
+  }
+
+  const layout = syncStoredSessionWorkspaceLayout();
+  const sourceVisible = workspaceContainsSession(layout, sourceSessionId);
+  const targetVisible = workspaceContainsSession(layout, targetSessionId);
+
+  if (!targetVisible) {
+    return false;
+  }
+
+  if (zone === "center") {
+    return sourceSessionId !== targetSessionId;
+  }
+
+  if (sourceSessionId === targetSessionId) {
+    return false;
+  }
+
+  return sourceVisible || collectWorkspaceSessionIds(layout).length < MAX_VISIBLE_SESSION_PANES;
+}
+
+function workspaceDropZoneForEvent(pane: HTMLElement, event: DragEvent): WorkspaceDropZone {
+  const rect = pane.getBoundingClientRect();
+  const relativeX = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0.5;
+  const relativeY = rect.height > 0 ? (event.clientY - rect.top) / rect.height : 0.5;
+  const edgeDistances = [
+    { zone: "left", value: relativeX },
+    { zone: "right", value: 1 - relativeX },
+    { zone: "top", value: relativeY },
+    { zone: "bottom", value: 1 - relativeY }
+  ] as { zone: WorkspaceDropZone; value: number }[];
+  edgeDistances.sort((left, right) => left.value - right.value);
+
+  return edgeDistances[0].value < 0.22 ? edgeDistances[0].zone : "center";
+}
+
+function sessionIdForPaneTarget(target: HTMLElement | null) {
+  return (target?.closest(".session-pane") as HTMLElement | null)?.dataset.sessionId || null;
+}
+
+function updateSessionDropUi() {
+  const panes = detailElement.querySelectorAll(".session-pane");
+  for (const pane of panes) {
+    pane.classList.remove(
+      "session-pane-drop-center",
+      "session-pane-drop-left",
+      "session-pane-drop-right",
+      "session-pane-drop-top",
+      "session-pane-drop-bottom"
+    );
+
+    const sessionId = (pane as HTMLElement).dataset.sessionId;
+    const label = pane.querySelector(".session-pane-drop-label") as HTMLElement | null;
+    if (!sessionId || !label) {
+      continue;
+    }
+
+    if (sessionId === ui.dragTargetSessionId && ui.dragTargetZone) {
+      pane.classList.add(`session-pane-drop-${ui.dragTargetZone}`);
+      label.textContent = workspaceDropLabel(ui.dragTargetZone, ui.draggingSessionId, sessionId);
+    } else {
+      label.textContent = "";
+    }
+  }
+}
+
+function workspaceDropLabel(
+  zone: WorkspaceDropZone,
+  sourceSessionId: string | null,
+  targetSessionId: string
+) {
+  if (zone === "center") {
+    return isSessionVisible(sourceSessionId || "")
+      ? "Swap sessions"
+      : `Replace ${sessionById(targetSessionId)?.title || "pane"}`;
+  }
+
+  switch (zone) {
+    case "left":
+      return "Split left";
+    case "right":
+      return "Split right";
+    case "top":
+      return "Split top";
+    case "bottom":
+      return "Split bottom";
+    default:
+      return "";
+  }
+}
+
 function sessionById(sessionId) {
   return state.sessions.find((session) => session.id === sessionId) || null;
 }
@@ -2832,14 +3741,15 @@ function syncSectionFocusUi() {
     ui.focusSection === "main" && ui.selection.type !== "session"
   );
 
-  const sessionMainRegion = document.getElementById("session-main-region");
-  if (sessionMainRegion) {
-    sessionMainRegion.classList.toggle("section-focused", ui.focusSection === "main");
-  }
-
-  const terminalWrap = detailElement.querySelector(".terminal-wrap") as HTMLElement | null;
-  if (terminalWrap) {
-    terminalWrap.classList.toggle("section-focused", ui.focusSection === "terminal");
+  const sessionPanes = detailElement.querySelectorAll(".session-pane");
+  for (const pane of sessionPanes) {
+    const sessionId = (pane as HTMLElement).dataset.sessionId || null;
+    const active = ui.selection.type === "session" && sessionId === ui.selection.id;
+    const mainRegion = pane.querySelector(".session-pane-main") as HTMLElement | null;
+    const terminalWrap = pane.querySelector(".session-pane-terminal-wrap") as HTMLElement | null;
+    pane.classList.toggle("session-pane-active", active);
+    mainRegion?.classList.toggle("section-focused", active && ui.focusSection === "main");
+    terminalWrap?.classList.toggle("section-focused", active && ui.focusSection === "terminal");
   }
 
   if (isAnyDialogOpen()) {
@@ -2862,20 +3772,29 @@ function focusCurrentSectionElement() {
       break;
     }
     case "terminal":
-      if (ui.terminal) {
-        ui.terminal.focus();
+      if (activeTerminalMount()) {
+        activeTerminalMount()?.terminal.focus();
         break;
       }
 
-      (detailElement.querySelector(".terminal-wrap") as HTMLElement | null)?.focus({
+      (
+        sessionPaneElement(ui.selection.type === "session" ? ui.selection.id : "")?.querySelector(
+          ".session-pane-terminal-wrap"
+        ) as HTMLElement | null
+      )?.focus({
         preventScroll: true
       });
       break;
     case "main":
     default: {
-      const sessionMainRegion = document.getElementById("session-main-region") as HTMLElement | null;
+      const sessionMainRegion =
+        ui.selection.type === "session"
+          ? (sessionPaneElement(ui.selection.id)?.querySelector(".session-pane-main") as HTMLElement | null)
+          : null;
       (sessionMainRegion || detailElement).focus({ preventScroll: true });
-      scrollMainListSelectionIntoView();
+      if (ui.selection.type !== "session") {
+        scrollMainListSelectionIntoView();
+      }
       break;
     }
   }
@@ -3190,7 +4109,7 @@ function isEditableTarget(target: HTMLElement | null) {
 }
 
 function isTerminalTarget(target: HTMLElement) {
-  return !!target.closest("#terminal-shell");
+  return !!target.closest(".session-terminal-shell");
 }
 
 function isSidebarDrawerTarget(target: HTMLElement) {
@@ -3229,7 +4148,8 @@ async function activateSidebarNavItem() {
 }
 
 async function handleTerminalClipboardShortcut(event) {
-  if (!ui.terminal || terminalClipboardHandled(event)) {
+  const mount = activeTerminalMount();
+  if (!mount || terminalClipboardHandled(event)) {
     return false;
   }
 
@@ -3247,7 +4167,7 @@ async function handleTerminalClipboardShortcut(event) {
   if (isTerminalCopyShortcut(event)) {
     event.preventDefault();
     markTerminalClipboardHandled(event);
-    const selection = ui.terminal.getSelection?.() || "";
+    const selection = mount.terminal.getSelection?.() || "";
     if (selection) {
       await api.writeClipboardText(selection);
     }
@@ -3275,7 +4195,8 @@ function handleTerminalCustomKeyEvent(event) {
 }
 
 async function pasteClipboardIntoTerminal() {
-  if (!ui.terminal) {
+  const mount = activeTerminalMount();
+  if (!mount) {
     return;
   }
 
@@ -3284,13 +4205,13 @@ async function pasteClipboardIntoTerminal() {
     return;
   }
 
-  if (typeof ui.terminal.paste === "function") {
-    ui.terminal.paste(text);
+  if (typeof mount.terminal.paste === "function") {
+    mount.terminal.paste(text);
     return;
   }
 
-  if (ui.terminalSessionId) {
-    await api.sendInput(ui.terminalSessionId, text);
+  if (ui.selection.type === "session") {
+    await api.sendInput(ui.selection.id, text);
   }
 }
 
@@ -3301,7 +4222,7 @@ function isTerminalKeyboardTarget(target: EventTarget | null) {
 
   return (
     target.classList.contains("xterm-helper-textarea") ||
-    !!target.closest("#terminal-shell") ||
+    !!target.closest(".session-terminal-shell") ||
     !!target.closest(".xterm")
   );
 }

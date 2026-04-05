@@ -7,7 +7,8 @@ const DEFAULT_PREFERENCES = {
   shellExecutablePath: process.env.SHELL || "/bin/zsh",
   notificationsEnabled: true,
   showInAppBadges: true,
-  showNativeNotifications: true
+  showNativeNotifications: true,
+  sessionWorkspaceLayout: null
 };
 
 function loadState() {

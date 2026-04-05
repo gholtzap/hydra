@@ -3,6 +3,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const FILE_LAYOUTS = [
+  ["AGENTS.md", "AGENTS.md"],
   ["CLAUDE.md", "CLAUDE.md"],
   [path.join(".claude", "settings.json"), "settings.json"],
   [path.join(".claude", "settings.local.json"), "settings.local.json"]

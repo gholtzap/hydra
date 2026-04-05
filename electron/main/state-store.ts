@@ -61,7 +61,7 @@ function migrateSnapshot(snapshot) {
 
   return {
     workspaces: Array.isArray(snapshot.workspaces) ? snapshot.workspaces : [],
-    repos: Array.isArray(snapshot.repos) ? snapshot.repos : [],
+    repos: normalizeRepos(snapshot.repos),
     sessions,
     preferences
   };
@@ -79,6 +79,17 @@ function normalizeRestoredSessions(sessions) {
       }
     }
   }
+}
+
+function normalizeRepos(repos) {
+  if (!Array.isArray(repos)) {
+    return [];
+  }
+
+  return repos.map((repo) => ({
+    wikiEnabled: false,
+    ...repo
+  }));
 }
 
 function getStatePath() {

@@ -50,6 +50,11 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
   loadSettingsFile: (filePath) => ipcRenderer.invoke("settings:loadFile", filePath),
   saveSettingsFile: (filePath, contents) =>
     ipcRenderer.invoke("settings:saveFile", { filePath, contents }),
+  getWikiContext: (repoId) => ipcRenderer.invoke("wiki:getContext", repoId),
+  readWikiFile: (repoId, relativePath) =>
+    ipcRenderer.invoke("wiki:readFile", { repoId, relativePath }),
+  toggleWiki: (repoId, enabled) => ipcRenderer.invoke("wiki:toggle", { repoId, enabled }),
+  revealWiki: (repoId) => ipcRenderer.invoke("wiki:reveal", repoId),
   onStateChanged: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on("state:changed", listener);

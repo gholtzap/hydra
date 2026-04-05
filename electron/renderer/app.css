@@ -1028,6 +1028,188 @@ textarea {
   flex-wrap: wrap;
 }
 
+.wiki-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+  height: 100%;
+}
+
+.wiki-tree-panel,
+.wiki-preview-panel {
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-soft);
+}
+
+.wiki-tree-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.wiki-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.wiki-tree-scroll,
+.wiki-preview-markdown {
+  min-height: 0;
+  overflow: auto;
+}
+
+.wiki-tree-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+}
+
+.wiki-tree-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wiki-tree-group-label {
+  padding-left: calc(var(--wiki-depth, 0) * 14px);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wiki-tree-group-children {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wiki-tree-file {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  padding-left: calc(12px + var(--wiki-depth, 0) * 14px);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.wiki-tree-file.active {
+  background: var(--surface-active);
+  border-color: var(--surface-active-border);
+}
+
+.wiki-tree-file-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wiki-tree-file-path {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.wiki-preview-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.wiki-preview-markdown,
+.wiki-preview-empty,
+.wiki-empty-state {
+  padding: 18px;
+}
+
+.wiki-preview-empty,
+.wiki-empty-state {
+  justify-content: flex-start;
+}
+
+.markdown-body {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 1.2em 0 0.5em;
+  line-height: 1.2;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body pre {
+  margin: 0 0 1em;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.2rem;
+}
+
+.markdown-body blockquote {
+  margin-left: 0;
+  padding: 0.2rem 0 0.2rem 0.9rem;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
+.markdown-body code {
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+  background: var(--badge-bg);
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+.markdown-body pre {
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  overflow: auto;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.markdown-body a {
+  color: var(--accent-2);
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+
 .card-grid {
   display: grid;
   gap: 10px;
@@ -1835,6 +2017,10 @@ textarea {
 
   #detail {
     padding: 12px;
+  }
+
+  .wiki-layout {
+    grid-template-columns: 1fr;
   }
 
   .sidebar-primary-actions {

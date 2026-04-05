@@ -26,6 +26,14 @@ const {
 const { inspectTrackedPorts } = require("./port-inspector");
 const { loadState, saveState } = require("./state-store");
 const { PtyHostClient } = require("./pty-host-client");
+const {
+  disableWiki,
+  enableWiki,
+  getWikiContext,
+  readWikiFile,
+  wikiDirectoryPath,
+  wikiExists
+} = require("./wiki");
 
 app.setName("ClaudeWorkspace");
 
@@ -55,6 +63,7 @@ class AppController {
     this.terminalBuffers = new Map();
     this.signalBuffers = new Map();
     this.blockerClearStreaks = new Map();
+    this.normalizeFolderRepos();
     this.repairStoredTranscripts();
     this.ptyHost = new PtyHostClient();
     this.ptyHost.onMessage((message) => this.handlePtyMessage(message));
@@ -123,6 +132,14 @@ class AppController {
       saveSettingsFile(payload.filePath, payload.contents);
       return true;
     });
+    ipcMain.handle("wiki:getContext", (_event, repoId) => this.projectWikiContext(repoId));
+    ipcMain.handle("wiki:readFile", (_event, payload) =>
+      this.projectWikiFile(payload.repoId, payload.relativePath)
+    );
+    ipcMain.handle("wiki:toggle", (_event, payload) =>
+      this.toggleProjectWiki(payload.repoId, payload.enabled)
+    );
+    ipcMain.handle("wiki:reveal", (_event, repoId) => this.revealProjectWiki(repoId));
   }
 
   setupMenu() {
@@ -139,12 +156,12 @@ class AppController {
         label: "File",
         submenu: [
           {
-            label: "Open Workspace",
+            label: "Open Folder",
             accelerator: "CmdOrCtrl+O",
             click: () => this.openWorkspaceFolder()
           },
           {
-            label: "Create Project Folder",
+            label: "Create Folder",
             accelerator: "CmdOrCtrl+Shift+N",
             click: () => this.createProjectFolder()
           },
@@ -152,6 +169,36 @@ class AppController {
             label: "New Session",
             accelerator: "CmdOrCtrl+N",
             click: () => this.sendCommand("new-session")
+          }
+        ]
+      },
+      {
+        label: "Wiki",
+        submenu: [
+          {
+            label: "Open Wiki",
+            accelerator: "CmdOrCtrl+Shift+W",
+            click: () => this.sendCommand("open-wiki")
+          },
+          {
+            label: "Initialize Wiki",
+            click: () => this.sendCommand("initialize-wiki")
+          },
+          {
+            label: "Refresh Wiki",
+            click: () => this.sendCommand("refresh-wiki")
+          },
+          {
+            label: "Lint Wiki",
+            click: () => this.sendCommand("lint-wiki")
+          },
+          {
+            label: "Ask Wiki",
+            click: () => this.sendCommand("ask-wiki")
+          },
+          {
+            label: "Reveal .wiki",
+            click: () => this.sendCommand("reveal-wiki")
           }
         ]
       },
@@ -206,7 +253,13 @@ class AppController {
       workspaces: [...this.state.workspaces].sort((left, right) =>
         left.name.localeCompare(right.name)
       ),
-      repos: [...this.state.repos].sort((left, right) => left.name.localeCompare(right.name)),
+      repos: [...this.state.repos]
+        .map((repo) => ({
+          ...repo,
+          wikiExists: wikiExists(repo.path),
+          wikiPath: wikiDirectoryPath(repo.path)
+        }))
+        .sort((left, right) => left.name.localeCompare(right.name)),
       sessions: [...this.state.sessions].sort((left, right) =>
         right.updatedAt.localeCompare(left.updatedAt)
       )
@@ -276,7 +329,7 @@ class AppController {
   async openWorkspaceFolder() {
     const result = await dialog.showOpenDialog(this.window, {
       properties: ["openDirectory", "createDirectory"],
-      buttonLabel: "Open Workspace"
+      buttonLabel: "Open Folder"
     });
 
     if (result.canceled || result.filePaths.length === 0) {
@@ -329,8 +382,22 @@ class AppController {
     }
 
     const scannedRepos = scanWorkspace(workspace.rootPath, workspaceId);
-    const existingByPath = new Map(this.state.repos.map((repo) => [repo.path, repo]));
-    const mergedRepos = scannedRepos.map((repo) => existingByPath.get(repo.path) || repo);
+    const existingByPath = new Map<string, any>(
+      this.state.repos.map((repo) => [repo.path, repo])
+    );
+    const mergedRepos = scannedRepos.map((repo) => {
+      const existing = existingByPath.get(repo.path);
+      return existing
+        ? {
+            ...repo,
+            ...existing,
+            name: repo.name,
+            path: repo.path,
+            workspaceID: repo.workspaceID,
+            wikiEnabled: existing.wikiEnabled ?? repo.wikiEnabled
+          }
+        : repo;
+    });
     const otherRepos = this.state.repos.filter((repo) => repo.workspaceID !== workspaceId);
 
     this.state.repos = [...otherRepos, ...mergedRepos];
@@ -451,8 +518,20 @@ class AppController {
         }
       },
       {
-        label: "Reveal Repo",
+        label: "Open Wiki",
+        click: () => this.sendCommand("open-wiki", { repoId })
+      },
+      {
+        label: repo.wikiEnabled ? "Disable Wiki" : "Enable Wiki",
+        click: () => this.sendCommand("toggle-wiki", { repoId })
+      },
+      {
+        label: "Reveal Folder",
         click: () => this.revealRepo(repoId)
+      },
+      {
+        label: "Reveal .wiki",
+        click: () => this.sendCommand("reveal-wiki", { repoId })
       }
     ]);
 
@@ -466,6 +545,62 @@ class AppController {
   nextUnreadSession() {
     const next = this.inboxSessions()[0];
     return next ? next.id : null;
+  }
+
+  normalizeFolderRepos() {
+    const reposByWorkspaceId = new Map();
+
+    for (const repo of this.state.repos) {
+      if (!reposByWorkspaceId.has(repo.workspaceID)) {
+        reposByWorkspaceId.set(repo.workspaceID, []);
+      }
+
+      reposByWorkspaceId.get(repo.workspaceID).push({
+        wikiEnabled: false,
+        ...repo
+      });
+    }
+
+    const normalizedRepos = [];
+
+    for (const workspace of this.state.workspaces) {
+      const workspaceRepos = reposByWorkspaceId.get(workspace.id) || [];
+      const rootRepo =
+        workspaceRepos.find((repo) => path.resolve(repo.path) === path.resolve(workspace.rootPath)) ||
+        workspaceRepos[0] ||
+        {
+          id: randomUUID(),
+          workspaceID: workspace.id,
+          name: path.basename(workspace.rootPath) || workspace.rootPath,
+          path: path.resolve(workspace.rootPath),
+          wikiEnabled: false,
+          discoveredAt: now()
+        };
+
+      const normalizedRepo = {
+        ...rootRepo,
+        workspaceID: workspace.id,
+        name: path.basename(workspace.rootPath) || workspace.rootPath,
+        path: path.resolve(workspace.rootPath),
+        wikiEnabled: rootRepo.wikiEnabled ?? false
+      };
+
+      for (const repo of workspaceRepos) {
+        if (repo.id === normalizedRepo.id) {
+          continue;
+        }
+
+        for (const session of this.state.sessions) {
+          if (session.repoID === repo.id) {
+            session.repoID = normalizedRepo.id;
+          }
+        }
+      }
+
+      normalizedRepos.push(normalizedRepo);
+    }
+
+    this.state.repos = normalizedRepos;
   }
 
   updatePreferences(patch) {
@@ -694,6 +829,53 @@ class AppController {
 
   repoById(repoId) {
     return this.state.repos.find((repo) => repo.id === repoId) || null;
+  }
+
+  projectWikiContext(repoId) {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      return null;
+    }
+
+    return getWikiContext(repo.path, repo.wikiEnabled);
+  }
+
+  projectWikiFile(repoId, relativePath) {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      throw new Error("Folder not found.");
+    }
+
+    return readWikiFile(repo.path, relativePath);
+  }
+
+  toggleProjectWiki(repoId, enabled) {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      return null;
+    }
+
+    if (enabled) {
+      enableWiki(repo.path);
+    } else {
+      disableWiki(repo.path);
+    }
+
+    repo.wikiEnabled = enabled;
+    repo.updatedAt = now();
+    this.scheduleSave();
+    this.broadcastState();
+    return this.projectWikiContext(repoId);
+  }
+
+  revealProjectWiki(repoId) {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      return;
+    }
+
+    const targetPath = wikiExists(repo.path) ? wikiDirectoryPath(repo.path) : repo.path;
+    shell.showItemInFolder(targetPath);
   }
 
   sessionById(sessionId) {

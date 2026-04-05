@@ -26,10 +26,16 @@ interface ClaudeWorkspaceApi {
   getClaudeSettingsContext: (repoId: string | null) => Promise<any>;
   loadSettingsFile: (filePath: string) => Promise<string>;
   saveSettingsFile: (filePath: string, contents: string) => Promise<any>;
+  getWikiContext: (repoId: string) => Promise<any>;
+  readWikiFile: (repoId: string, relativePath: string) => Promise<any>;
+  toggleWiki: (repoId: string, enabled: boolean) => Promise<any>;
+  revealWiki: (repoId: string) => Promise<any>;
   onStateChanged: (callback: (payload: any) => void) => Unsubscribe;
   onSessionOutput: (callback: (payload: any) => void) => Unsubscribe;
   onSessionUpdated: (callback: (payload: any) => void) => Unsubscribe;
-  onCommand: (callback: (payload: { command: string; sessionId?: string }) => void) => Unsubscribe;
+  onCommand: (
+    callback: (payload: { command: string; sessionId?: string; repoId?: string }) => void
+  ) => Unsubscribe;
 }
 
 declare global {

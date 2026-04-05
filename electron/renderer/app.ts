@@ -25,6 +25,13 @@ type TerminalMount = {
   resizeObserver: ResizeObserver;
 };
 
+type WikiTreeNode = {
+  type: "directory" | "file";
+  name: string;
+  relativePath: string;
+  children?: WikiTreeNode[];
+};
+
 const state = {
   workspaces: [] as any[],
   repos: [] as any[],
@@ -56,6 +63,12 @@ const ui = {
   portStatusLoading: false,
   portStatusShowAll: false,
   portStatusPollTimer: null as number | null,
+  wikiContextRepoId: null as string | null,
+  wikiContext: null as any,
+  wikiSelectedPath: null as string | null,
+  wikiPreviewMarkdown: "",
+  wikiStatusMessage: "",
+  wikiLoading: false,
   workspaceStructureSignature: "",
   draggingSessionId: null as string | null,
   draggingSessionSource: null as string | null,
@@ -146,10 +159,33 @@ api.onSessionUpdated((payload) => {
   }
 });
 
-api.onCommand(async ({ command, sessionId }) => {
+api.onCommand(async ({ command, sessionId, repoId }) => {
   switch (command) {
     case "new-session":
       openLauncher();
+      break;
+    case "open-wiki":
+      await openWiki(repoId || currentRepoId());
+      break;
+    case "initialize-wiki":
+      await initializeWiki(repoId || currentRepoId());
+      break;
+    case "refresh-wiki":
+      await runWikiAgentAction("refresh", repoId || currentRepoId());
+      break;
+    case "lint-wiki":
+      await runWikiAgentAction("lint", repoId || currentRepoId());
+      break;
+    case "ask-wiki":
+      await runWikiAgentAction("ask", repoId || currentRepoId());
+      break;
+    case "reveal-wiki":
+      if (repoId || currentRepoId()) {
+        await api.revealWiki(repoId || currentRepoId());
+      }
+      break;
+    case "toggle-wiki":
+      await toggleWiki(repoId || currentRepoId());
       break;
     case "quick-switcher":
       openQuickSwitcher();
@@ -246,6 +282,9 @@ function replaceState(nextState) {
   if (ui.mainListSessionId && !sessionById(ui.mainListSessionId)) {
     ui.mainListSessionId = null;
   }
+  if (ui.wikiContextRepoId && !repoById(ui.wikiContextRepoId)) {
+    clearWikiState();
+  }
   syncSidebarNavSelection();
   syncMainListSelection();
 }
@@ -266,6 +305,11 @@ function ensureValidSelection() {
     ui.selection = { type: "inbox", id: null };
   }
 
+  if (ui.selection.type === "wiki" && !repoById(ui.selection.id)) {
+    clearWikiState();
+    ui.selection = { type: "inbox", id: null };
+  }
+
   syncSidebarNavSelection();
   syncMainListSelection();
   normalizeFocusSection();
@@ -283,7 +327,7 @@ function renderSidebar() {
           ${renderProjectRailButtons()}
         </div>
         <div class="sidebar-rail-bottom">
-          <button class="sidebar-rail-button sidebar-utility-button ${sidebarNavMatches(sidebarActionNavId("open-workspace")) ? "keyboard-active" : ""}" data-action="open-workspace" data-tooltip="Add Workspace" title="Add Workspace" aria-label="Add Workspace">
+          <button class="sidebar-rail-button sidebar-utility-button ${sidebarNavMatches(sidebarActionNavId("open-workspace")) ? "keyboard-active" : ""}" data-action="open-workspace" data-tooltip="Add Folder" title="Add Folder" aria-label="Add Folder">
             ${renderUtilityIcon("workspace")}
           </button>
           <button class="sidebar-rail-button sidebar-utility-button ${sidebarNavMatches(sidebarActionNavId("create-project")) ? "keyboard-active" : ""}" data-action="create-project" data-tooltip="New Folder" title="New Folder" aria-label="New Folder">
@@ -317,7 +361,7 @@ function renderInboxRailButton() {
 
 function renderProjectRailButtons() {
   if (!state.repos.length) {
-    return `<div class="sidebar-rail-empty" data-tooltip="Add a workspace to start">?</div>`;
+    return `<div class="sidebar-rail-empty" data-tooltip="Add a folder to start">?</div>`;
   }
 
   return [...state.repos]
@@ -363,6 +407,11 @@ function renderSidebarProjectDrawer(repo) {
         </div>
         <button class="ghost sidebar-project-drawer-close" data-action="collapse-sidebar-project" data-repo-id="${repo.id}" aria-label="Collapse ${escapeAttribute(repo.name)}">Close</button>
       </div>
+      <div class="detail-actions">
+        <button data-action="open-wiki" data-repo-id="${repo.id}">Wiki</button>
+        <button data-action="toggle-wiki" data-repo-id="${repo.id}">${repo.wikiEnabled ? "Disable" : "Enable"}</button>
+        <button class="primary" data-action="open-launcher" data-repo-id="${repo.id}">New Session</button>
+      </div>
       <div class="sidebar-project-drawer-section-label">Sessions</div>
       <div class="sidebar-project-drawer-list">
         ${
@@ -403,6 +452,12 @@ function renderDetail() {
     return;
   }
 
+  if (ui.selection.type === "wiki") {
+    destroyTerminal();
+    renderWikiDetail(repoById(ui.selection.id));
+    return;
+  }
+
   if (ui.selection.type === "session") {
     renderSessionDetail(sessionById(ui.selection.id));
     return;
@@ -430,6 +485,7 @@ function renderInbox() {
         </div>
         <div class="detail-actions">
           <button class="primary" data-action="open-launcher">New Session</button>
+          <button data-action="open-wiki" ${currentRepoId() ? "" : "disabled"}>Open Wiki</button>
           <button data-action="open-quick-switcher">Jump To</button>
         </div>
       </div>
@@ -446,7 +502,7 @@ function renderInbox() {
 
 function renderRepoDetail(repo) {
   if (!repo) {
-    detailElement.innerHTML = `<div class="empty-state">This repo is no longer available.</div>`;
+    detailElement.innerHTML = `<div class="empty-state">This folder is no longer available.</div>`;
     syncSectionFocusUi();
     return;
   }
@@ -459,25 +515,161 @@ function renderRepoDetail(repo) {
     <section class="detail-panel">
       <div class="detail-hero">
         <div>
-          <div class="eyebrow">Repository</div>
+          <div class="eyebrow">Folder</div>
           <h1 class="detail-title">${escapeHtml(repo.name)}</h1>
           <div class="muted">${escapeHtml(abbreviateHome(repo.path))}</div>
         </div>
         <div class="detail-actions">
-          <button data-action="reveal-repo" data-repo-id="${repo.id}">Reveal</button>
-          <button data-action="rescan-workspace" data-workspace-id="${repo.workspaceID}">Refresh</button>
+          <button data-action="reveal-repo" data-repo-id="${repo.id}">Reveal Folder</button>
+          <button data-action="rescan-workspace" data-workspace-id="${repo.workspaceID}">Refresh Folder</button>
+          <button data-action="open-wiki" data-repo-id="${repo.id}">Open Wiki</button>
+          <button data-action="toggle-wiki" data-repo-id="${repo.id}">${repo.wikiEnabled ? "Disable Wiki" : "Enable Wiki"}</button>
           <button class="primary" data-action="open-launcher" data-repo-id="${repo.id}">New Session</button>
         </div>
       </div>
       ${
         sessions.length
           ? `<div class="repo-session-list">${sessions.map((session) => renderRepoSession(session, repo)).join("")}</div>`
-          : `<div class="empty-state">Start a shell session for this repo.</div>`
+          : `<div class="empty-state">Start a shell session for this folder.</div>`
       }
     </section>
   `;
 
   syncSectionFocusUi();
+}
+
+function renderWikiDetail(repo) {
+  if (!repo) {
+    detailElement.innerHTML = `<div class="empty-state">This folder is no longer available.</div>`;
+    syncSectionFocusUi();
+    return;
+  }
+
+  const wikiContext = ui.wikiContextRepoId === repo.id ? ui.wikiContext : null;
+
+  detailElement.innerHTML = `
+    <section class="detail-panel">
+      <div class="detail-hero">
+        <div>
+          <div class="eyebrow">Wiki</div>
+          <h1 class="detail-title">${escapeHtml(repo.name)}</h1>
+          <div class="muted">${escapeHtml(abbreviateHome(repo.wikiPath || `${repo.path}/.wiki`))}</div>
+        </div>
+        <div class="detail-actions">
+          <button data-action="toggle-wiki" data-repo-id="${repo.id}">${repo.wikiEnabled ? "Disable Wiki" : "Enable Wiki"}</button>
+          <button data-action="reveal-wiki" data-repo-id="${repo.id}">Reveal .wiki</button>
+          <button data-action="reload-wiki" data-repo-id="${repo.id}" ${repo.wikiEnabled ? "" : "disabled"}>Reload Files</button>
+          <button data-action="refresh-wiki" data-repo-id="${repo.id}" ${repo.wikiEnabled ? "" : "disabled"}>Refresh Wiki</button>
+          <button data-action="lint-wiki" data-repo-id="${repo.id}" ${repo.wikiEnabled ? "" : "disabled"}>Lint Wiki</button>
+          <button data-action="ask-wiki" data-repo-id="${repo.id}" ${repo.wikiEnabled ? "" : "disabled"}>Ask Wiki</button>
+        </div>
+      </div>
+      ${
+        ui.wikiStatusMessage
+          ? `<div class="settings-save-message">${escapeHtml(ui.wikiStatusMessage)}</div>`
+          : ""
+      }
+      ${
+        !repo.wikiEnabled
+          ? `
+            <div class="empty-state wiki-empty-state">
+              <div>
+                <div class="row-title">Wiki is disabled for this folder.</div>
+                <div class="row-subtitle">Enable it to patch the project instruction file and let agents maintain durable knowledge in <span class="mono">.wiki/</span>.</div>
+              </div>
+            </div>
+          `
+          : ui.wikiLoading && !wikiContext
+            ? `<div class="empty-state wiki-empty-state">Loading wiki files...</div>`
+            : !wikiContext?.exists
+              ? `
+                <div class="empty-state wiki-empty-state">
+                  <div>
+                    <div class="row-title">The wiki is enabled, but no files exist yet.</div>
+                    <div class="row-subtitle">Agents can create narrow, high-signal pages under <span class="mono">.wiki/</span> as they finish meaningful work.</div>
+                  </div>
+                </div>
+              `
+              : `
+                <div class="wiki-layout">
+                  <aside class="wiki-tree-panel">
+                    <div class="wiki-panel-header">
+                      <div>
+                        <div class="row-title">Files</div>
+                        <div class="row-subtitle">${flattenWikiFiles(wikiContext.tree || []).length} tracked ${pluralize(flattenWikiFiles(wikiContext.tree || []).length, "file", "files")}</div>
+                      </div>
+                    </div>
+                    <div class="wiki-tree-scroll">
+                      ${renderWikiTree(repo.id, wikiContext.tree || [])}
+                    </div>
+                  </aside>
+                  <article class="wiki-preview-panel">
+                    ${renderWikiPreview()}
+                  </article>
+                </div>
+              `
+      }
+    </section>
+  `;
+
+  syncSectionFocusUi();
+}
+
+function renderWikiTree(repoId, nodes: WikiTreeNode[]) {
+  if (!nodes.length) {
+    return `<div class="sidebar-project-drawer-empty">No wiki files yet.</div>`;
+  }
+
+  return nodes.map((node) => renderWikiTreeNode(repoId, node, 0)).join("");
+}
+
+function renderWikiTreeNode(repoId, node: WikiTreeNode, depth: number) {
+  if (node.type === "directory") {
+    return `
+      <div class="wiki-tree-group" style="--wiki-depth:${depth}">
+        <div class="wiki-tree-group-label">${escapeHtml(node.name)}</div>
+        <div class="wiki-tree-group-children">
+          ${(node.children || []).map((child) => renderWikiTreeNode(repoId, child, depth + 1)).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <button
+      type="button"
+      class="wiki-tree-file ${ui.wikiSelectedPath === node.relativePath ? "active" : ""}"
+      data-action="wiki-select-file"
+      data-repo-id="${repoId}"
+      data-wiki-path="${escapeAttribute(node.relativePath)}"
+      style="--wiki-depth:${depth}">
+      <span class="wiki-tree-file-name">${escapeHtml(node.name)}</span>
+      <span class="wiki-tree-file-path">${escapeHtml(node.relativePath)}</span>
+    </button>
+  `;
+}
+
+function renderWikiPreview() {
+  if (!ui.wikiSelectedPath) {
+    return `
+      <div class="wiki-preview-empty">
+        <div class="row-title">Select a wiki file</div>
+        <div class="row-subtitle">The preview renders Markdown and keeps raw sources readable without leaving the app.</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="wiki-panel-header">
+      <div>
+        <div class="row-title">${escapeHtml(pathLabel(ui.wikiSelectedPath))}</div>
+        <div class="row-subtitle mono">${escapeHtml(ui.wikiSelectedPath)}</div>
+      </div>
+    </div>
+    <div class="wiki-preview-markdown markdown-body">
+      ${renderMarkdownDocument(ui.wikiPreviewMarkdown)}
+    </div>
+  `;
 }
 
 function renderPortStatusDetail() {
@@ -782,15 +974,16 @@ function updateSessionWorkspaceToolbar() {
       <div>
         <div class="eyebrow">Workspace</div>
         <h1 class="detail-title">${escapeHtml(session.title)}</h1>
-        <div class="muted">${escapeHtml(repo?.name || "Unknown Repo")} · ${visibleSessionCount} visible ${pluralize(visibleSessionCount, "session", "sessions")} · Drag a session onto a pane edge to split it.</div>
+        <div class="muted">${escapeHtml(repo?.name || "Unknown Folder")} · ${visibleSessionCount} visible ${pluralize(visibleSessionCount, "session", "sessions")} · Drag a session onto a pane edge to split it.</div>
       </div>
       <div class="detail-actions workspace-detail-actions">
         <button data-action="open-launcher" data-repo-id="${repo?.id || ""}">New Session</button>
+        <button data-action="open-wiki" data-repo-id="${repo?.id || ""}">Open Wiki</button>
         <button data-action="workspace-layout-columns">Columns</button>
         <button data-action="workspace-layout-stack">Stack</button>
         <button data-action="workspace-layout-grid" ${visibleSessionCount > 1 ? "" : "disabled"}>Grid</button>
-        <button data-action="reveal-repo" data-repo-id="${repo?.id || ""}">Reveal Repo</button>
-        <button data-action="open-settings" data-settings-tab="claude">Claude Files</button>
+        <button data-action="reveal-repo" data-repo-id="${repo?.id || ""}">Reveal Folder</button>
+        <button data-action="open-settings" data-settings-tab="claude">Agent Files</button>
         ${
           session.runtimeState === "live"
             ? `<button data-action="close-session" data-session-id="${session.id}">Close Session</button>`
@@ -834,14 +1027,14 @@ function updateSessionPane(session) {
     <div class="session-pane-header-row">
       <div class="session-pane-title-row">
         <button class="ghost session-pane-drag-handle" draggable="true" data-drag-session-id="${session.id}" data-drag-source="pane" title="Drag ${escapeAttribute(session.title)}" aria-label="Drag ${escapeAttribute(session.title)}">Drag</button>
-        <div class="session-pane-title-copy">
-          <div class="session-title-row">
-            <div class="session-title">${escapeHtml(session.title)}</div>
-            <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
+          <div class="session-pane-title-copy">
+            <div class="session-title-row">
+              <div class="session-title">${escapeHtml(session.title)}</div>
+              <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
+            </div>
+          <div class="muted">${escapeHtml(repo?.name || "Unknown Folder")} · ${escapeHtml(abbreviateHome(repo?.path || ""))}</div>
           </div>
-          <div class="muted">${escapeHtml(repo?.name || "Unknown Repo")} · ${escapeHtml(abbreviateHome(repo?.path || ""))}</div>
         </div>
-      </div>
       <div class="session-pane-actions">
         ${
           session.runtimeState === "live"
@@ -1109,11 +1302,11 @@ function renderLauncherDialog() {
         <div>
           <div class="eyebrow">Session Launcher</div>
           <h2 class="dialog-title">New session</h2>
-          <div class="muted">Open a shell in any repo, then optionally start Claude.</div>
+          <div class="muted">Open a shell in any folder, then optionally start Claude.</div>
         </div>
         <button value="cancel">Close</button>
       </div>
-      <input id="launcher-query" placeholder="Find a repo" value="${escapeAttribute(ui.launcherQuery)}" />
+      <input id="launcher-query" placeholder="Find a folder" value="${escapeAttribute(ui.launcherQuery)}" />
       <div class="dialog-grid">
         <div class="dialog-list">
           ${
@@ -1138,7 +1331,7 @@ function renderLauncherDialog() {
         <div class="dialog-panel">
           <div>
             <div class="row-title">Shell-backed session</div>
-            <div class="row-subtitle">The terminal starts in the selected repo so you can enter and exit Claude normally.</div>
+            <div class="row-subtitle">The terminal starts in the selected folder so you can enter and exit Claude normally.</div>
           </div>
           <label class="inline-toggle">
             <input type="checkbox" id="launcher-launches-claude" ${ui.launcherLaunchesClaudeOnStart ? "checked" : ""} />
@@ -1181,7 +1374,7 @@ function renderQuickSwitcherDialog() {
         </div>
         <button value="cancel">Close</button>
       </div>
-      <input id="quick-switcher-query" placeholder="Search sessions or repos" value="${escapeAttribute(ui.quickSwitcherQuery)}" />
+      <input id="quick-switcher-query" placeholder="Search sessions or folders" value="${escapeAttribute(ui.quickSwitcherQuery)}" />
       <div class="dialog-panel">
         <div class="section-label">Sessions</div>
         <div class="dialog-list">
@@ -1197,7 +1390,7 @@ function renderQuickSwitcherDialog() {
             )
             .join("")}
         </div>
-        <div class="section-label">Repos</div>
+        <div class="section-label">Folders</div>
         <div class="dialog-list">
           ${repos
             .slice(0, 20)
@@ -1218,9 +1411,15 @@ function renderQuickSwitcherDialog() {
 
 function renderCommandPaletteDialog() {
   const commands = [
-    { id: "open-workspace", label: "Open Workspace", action: "open-workspace" },
-    { id: "create-project", label: "Create Project Folder", action: "create-project" },
+    { id: "open-workspace", label: "Open Folder", action: "open-workspace" },
+    { id: "create-project", label: "Create Folder", action: "create-project" },
     { id: "open-launcher", label: "New Session", action: "open-launcher" },
+    { id: "open-wiki", label: "Open Wiki", action: "open-wiki" },
+    { id: "initialize-wiki", label: "Initialize Wiki", action: "initialize-wiki" },
+    { id: "refresh-wiki", label: "Refresh Wiki", action: "refresh-wiki" },
+    { id: "lint-wiki", label: "Lint Wiki", action: "lint-wiki" },
+    { id: "ask-wiki", label: "Ask Wiki", action: "ask-wiki" },
+    { id: "reveal-wiki", label: "Reveal .wiki", action: "reveal-wiki" },
     { id: "open-status", label: "Open Dev Port Status", action: "open-status" },
     { id: "open-settings", label: "Open Settings", action: "open-settings" },
     { id: "open-quick-switcher", label: "Open Quick Switcher", action: "open-quick-switcher" },
@@ -1278,15 +1477,15 @@ async function renderSettingsDialog() {
       <div class="dialog-header">
         <div>
           <div class="eyebrow">Settings</div>
-          <h2 class="dialog-title">Preferences and Claude files</h2>
-          <div class="muted">Edit app preferences, Claude instructions, and JSON settings in a format people can actually read.</div>
+          <h2 class="dialog-title">Preferences and agent files</h2>
+          <div class="muted">Edit app preferences, project instructions, and JSON settings in a format people can actually read.</div>
         </div>
         <button value="cancel">Close</button>
       </div>
 
       <div class="settings-tabs">
         <button type="button" class="settings-tab ${ui.settingsTab === "general" ? "active" : ""}" data-action="settings-tab" data-tab="general">General</button>
-        <button type="button" class="settings-tab ${ui.settingsTab === "claude" ? "active" : ""}" data-action="settings-tab" data-tab="claude">Claude Files</button>
+        <button type="button" class="settings-tab ${ui.settingsTab === "claude" ? "active" : ""}" data-action="settings-tab" data-tab="claude">Agent Files</button>
       </div>
 
       ${
@@ -1508,8 +1707,8 @@ function renderResolvedSettingsPanel(resolvedValues) {
   return `
     <div class="settings-effective-panel">
       <div class="settings-help-row">
-        <div>
-          <div class="row-title">What Claude Will Use</div>
+          <div>
+          <div class="row-title">Resolved JSON Values</div>
           <div class="muted">Project JSON files override global ones. This list shows the effective value for each resolved key.</div>
         </div>
         <span class="settings-chip">${resolvedValues.length} Resolved</span>
@@ -1785,6 +1984,9 @@ async function handleClick(event) {
     case "select-repo":
       await selectRepo(target.dataset.repoId);
       break;
+    case "open-wiki":
+      await openWiki(target.dataset.repoId || currentRepoId());
+      break;
     case "select-session": {
       const session = sessionById(target.dataset.sessionId);
       await selectSession(target.dataset.sessionId, sessionOpenFocusSection(session));
@@ -1813,11 +2015,40 @@ async function handleClick(event) {
       break;
     case "rescan-workspace":
       await api.rescanWorkspace(target.dataset.workspaceId);
+      if (ui.selection.type === "wiki" && ui.selection.id) {
+        await loadWikiContext(ui.selection.id);
+      }
       break;
     case "reveal-repo":
       if (target.dataset.repoId) {
         await api.openRepoInFinder(target.dataset.repoId);
       }
+      break;
+    case "reveal-wiki":
+      if (target.dataset.repoId || currentRepoId()) {
+        await api.revealWiki(target.dataset.repoId || currentRepoId());
+      }
+      break;
+    case "toggle-wiki":
+      await toggleWiki(target.dataset.repoId || currentRepoId());
+      break;
+    case "initialize-wiki":
+      await initializeWiki(target.dataset.repoId || currentRepoId());
+      break;
+    case "reload-wiki":
+      await loadWikiContext(target.dataset.repoId || currentRepoId(), ui.wikiSelectedPath);
+      break;
+    case "refresh-wiki":
+      await runWikiAgentAction("refresh", target.dataset.repoId || currentRepoId());
+      break;
+    case "lint-wiki":
+      await runWikiAgentAction("lint", target.dataset.repoId || currentRepoId());
+      break;
+    case "ask-wiki":
+      await runWikiAgentAction("ask", target.dataset.repoId || currentRepoId());
+      break;
+    case "wiki-select-file":
+      await selectWikiFile(target.dataset.repoId || currentRepoId(), target.dataset.wikiPath);
       break;
     case "close-session":
       removeSessionFromWorkspace(target.dataset.sessionId, { persistSelection: false });
@@ -2328,6 +2559,62 @@ async function selectRepo(
   renderDetail();
 }
 
+async function openWiki(
+  repoId,
+  nextFocusSection: SectionId | null = null
+) {
+  if (!repoId) {
+    return;
+  }
+
+  if (nextFocusSection) {
+    ui.focusSection = nextFocusSection;
+  }
+
+  ui.selection = { type: "wiki", id: repoId };
+  ui.sidebarExpandedRepoId = repoId;
+  ui.sidebarNavItem = repoId;
+  syncMainListSelection();
+  normalizeFocusSection();
+  await api.setFocusedSession(null);
+  renderSidebar();
+  renderDetail();
+  await loadWikiContext(repoId);
+}
+
+async function initializeWiki(repoId) {
+  if (!repoId) {
+    window.alert("Select a folder first.");
+    return;
+  }
+
+  await api.toggleWiki(repoId, true);
+  ui.wikiStatusMessage = "Wiki enabled. Agents can now maintain durable knowledge in .wiki/.";
+  await openWiki(repoId);
+}
+
+async function toggleWiki(repoId) {
+  if (!repoId) {
+    window.alert("Select a folder first.");
+    return;
+  }
+
+  const repo = repoById(repoId);
+  if (!repo) {
+    return;
+  }
+
+  await api.toggleWiki(repoId, !repo.wikiEnabled);
+  ui.wikiStatusMessage = !repo.wikiEnabled
+    ? "Wiki enabled."
+    : "Wiki disabled. The existing .wiki/ directory was left on disk.";
+
+  if (ui.selection.type === "wiki" && ui.selection.id === repoId) {
+    await loadWikiContext(repoId);
+    renderDetail();
+  }
+}
+
 async function selectSession(
   sessionId,
   nextFocusSection: SectionId | null = null
@@ -2562,6 +2849,161 @@ async function startSessionForRepo(
   }
 
   return sessionId;
+}
+
+function clearWikiState() {
+  ui.wikiContextRepoId = null;
+  ui.wikiContext = null;
+  ui.wikiSelectedPath = null;
+  ui.wikiPreviewMarkdown = "";
+  ui.wikiStatusMessage = "";
+  ui.wikiLoading = false;
+}
+
+async function loadWikiContext(repoId, preferredPath = null) {
+  if (!repoId) {
+    clearWikiState();
+    return null;
+  }
+
+  ui.wikiLoading = true;
+  if (ui.selection.type === "wiki" && ui.selection.id === repoId) {
+    renderDetail();
+  }
+
+  try {
+    const context = await api.getWikiContext(repoId);
+    ui.wikiContextRepoId = repoId;
+    ui.wikiContext = context;
+
+    const files = flattenWikiFiles(context?.tree || []);
+    const preferredFile =
+      files.find((file) => file.relativePath === preferredPath) ||
+      files.find((file) => file.relativePath === ui.wikiSelectedPath) ||
+      preferredWikiFile(files);
+
+    if (preferredFile) {
+      await selectWikiFile(repoId, preferredFile.relativePath, { suppressReload: true });
+    } else {
+      ui.wikiSelectedPath = null;
+      ui.wikiPreviewMarkdown = "";
+    }
+
+    return context;
+  } catch (error) {
+    ui.wikiStatusMessage = error instanceof Error ? error.message : "Failed to load the wiki.";
+    ui.wikiSelectedPath = null;
+    ui.wikiPreviewMarkdown = "";
+    return null;
+  } finally {
+    ui.wikiLoading = false;
+    if (ui.selection.type === "wiki" && ui.selection.id === repoId) {
+      renderDetail();
+    }
+  }
+}
+
+async function selectWikiFile(repoId, relativePath, options: { suppressReload?: boolean } = {}) {
+  if (!repoId || !relativePath) {
+    return;
+  }
+
+  if (!options.suppressReload && ui.wikiContextRepoId !== repoId) {
+    await loadWikiContext(repoId, relativePath);
+    return;
+  }
+
+  const payload = await api.readWikiFile(repoId, relativePath);
+  ui.wikiContextRepoId = repoId;
+  ui.wikiSelectedPath = payload.relativePath;
+  ui.wikiPreviewMarkdown = payload.contents || "";
+
+  if (ui.selection.type === "wiki" && ui.selection.id === repoId) {
+    renderDetail();
+  }
+}
+
+async function runWikiAgentAction(action: "refresh" | "lint" | "ask", repoId) {
+  if (!repoId) {
+    window.alert("Select a folder first.");
+    return;
+  }
+
+  const repo = repoById(repoId);
+  if (!repo?.wikiEnabled) {
+    window.alert("Enable the wiki for this folder first.");
+    return;
+  }
+
+  const session = activeClaudeSessionForRepo(repoId);
+  if (!session) {
+    window.alert("Start a live Claude session in this folder to run wiki actions.");
+    return;
+  }
+
+  let prompt = "";
+
+  if (action === "ask") {
+    const question = window.prompt("Question for the wiki");
+    if (!question?.trim()) {
+      return;
+    }
+
+    prompt = wikiPromptForAction(action, question.trim());
+  } else {
+    prompt = wikiPromptForAction(action);
+  }
+
+  await selectSession(session.id, "terminal");
+  await api.sendInput(session.id, `${prompt}\r`);
+}
+
+function activeClaudeSessionForRepo(repoId) {
+  if (ui.selection.type === "session") {
+    const selectedSession = sessionById(ui.selection.id);
+    if (
+      selectedSession?.repoID === repoId &&
+      selectedSession.launchesClaudeOnStart &&
+      selectedSession.runtimeState === "live"
+    ) {
+      return selectedSession;
+    }
+  }
+
+  return sessionsForRepo(repoId).find(
+    (session) => session.launchesClaudeOnStart && session.runtimeState === "live"
+  );
+}
+
+function wikiPromptForAction(action: "refresh" | "lint" | "ask", question = "") {
+  switch (action) {
+    case "refresh":
+      return "Review what you learned in this task and update `.wiki/` only if there is durable, high-signal knowledge worth preserving. Prefer updating existing narrow pages such as `known-issues.md` or `commands.md` when relevant. Trust code over the wiki, avoid filler, avoid secrets, avoid speculation, and skip the write entirely if nothing durable changed.";
+    case "lint":
+      return "Lint `.wiki/` for stale claims, contradictions with the codebase, broken or missing cross-links, duplicate pages, and pages that are no longer useful for future agents. Update or delete pages directly where helpful, then summarize what changed.";
+    case "ask":
+      return `Use relevant pages from \`.wiki/\` as context, verify against code when needed, and answer this question: ${JSON.stringify(question)}. If the answer reveals durable project knowledge that future agents should keep, update the wiki after answering.`;
+    default:
+      return "";
+  }
+}
+
+function preferredWikiFile(files: WikiTreeNode[]) {
+  return (
+    files.find((file) => file.relativePath.endsWith(".md")) ||
+    files[0] ||
+    null
+  );
+}
+
+function flattenWikiFiles(nodes: WikiTreeNode[]): WikiTreeNode[] {
+  return nodes.flatMap((node) => {
+    if (node.type === "file") {
+      return [node];
+    }
+
+    return flattenWikiFiles(node.children || []);
+  });
 }
 
 async function saveCurrentSettingsFile() {
@@ -2912,17 +3354,22 @@ function settingsFileOrder(file) {
       return 0;
     case "settings.local.json":
       return 1;
-    case "CLAUDE.md":
+    case "AGENTS.md":
       return 2;
-    default:
+    case "CLAUDE.md":
       return 3;
+    default:
+      return 4;
   }
 }
 
 function friendlySettingsFileTitle(file) {
   const name = pathLabel(file.path);
+  if (name === "AGENTS.md") {
+    return file.scope === "global" ? "Global AGENTS Instructions" : "Project AGENTS Instructions";
+  }
   if (name === "CLAUDE.md") {
-    return file.scope === "global" ? "Global Instructions" : "Project Instructions";
+    return file.scope === "global" ? "Global CLAUDE Instructions" : "Project CLAUDE Instructions";
   }
   if (name === "settings.json") {
     return file.scope === "global" ? "Global Settings" : "Project Settings";
@@ -2935,46 +3382,56 @@ function friendlySettingsFileTitle(file) {
 
 function friendlySettingsFileListSubtitle(file) {
   const name = pathLabel(file.path);
+  if (name === "AGENTS.md") {
+    return file.scope === "global"
+      ? "Shared agent instructions for every session"
+      : "Folder-specific agent instructions";
+  }
   if (name === "CLAUDE.md") {
     return file.scope === "global"
-      ? "Shared Markdown instructions for every session"
-      : "Repo-specific Markdown instructions";
+      ? "Shared Claude-specific instructions for every session"
+      : "Folder-specific Claude instructions";
   }
   if (name === "settings.json") {
     return file.scope === "global"
       ? "Shared Claude defaults in JSON"
-      : "Repo-level JSON overrides";
+      : "Project JSON overrides";
   }
   if (name === "settings.local.json") {
     return file.scope === "global"
       ? "Machine-specific JSON overrides"
-      : "Repo-local JSON overrides";
+      : "Project-local JSON overrides";
   }
   return file.title;
 }
 
 function friendlySettingsFileSummary(file) {
   const name = pathLabel(file.path);
+  if (name === "AGENTS.md") {
+    return file.scope === "global"
+      ? "Keep broad, agent-agnostic instructions here. This file stays as Markdown and applies across projects."
+      : "Keep folder-specific, agent-agnostic guidance here. This file stays as Markdown and travels with the project.";
+  }
   if (name === "CLAUDE.md") {
     return file.scope === "global"
-      ? "Keep broad Claude guidance here. This file stays as Markdown and applies across your workspaces."
-      : "Keep repo-specific Claude guidance here. This file stays as Markdown and travels with the project.";
+      ? "Keep broad Claude guidance here. This file stays as Markdown and applies across your projects."
+      : "Keep folder-specific Claude guidance here. This file stays as Markdown and travels with the project.";
   }
   if (name === "settings.json") {
     return file.scope === "global"
       ? "Edit shared Claude defaults in a form instead of reading raw JSON. Saving writes back to the underlying file."
-      : "Edit repo-level Claude overrides in a form. These settings can replace your global defaults for this project.";
+      : "Edit project-level Claude overrides in a form. These settings can replace your global defaults for this folder.";
   }
   if (name === "settings.local.json") {
     return file.scope === "global"
       ? "Use local overrides for machine-specific Claude behavior that should sit on top of your shared defaults."
-      : "Use repo-local overrides for settings that should win inside this project without changing broader defaults.";
+      : "Use project-local overrides for settings that should win inside this folder without changing broader defaults.";
   }
   return file.title;
 }
 
 function settingsScopeLabel(file) {
-  return file.scope === "global" ? "Global Claude Defaults" : "Project Claude Override";
+  return file.scope === "global" ? "Global Agent Defaults" : "Project Agent Override";
 }
 
 function friendlySourceLabel(sourceLabel) {
@@ -3573,6 +4030,10 @@ function repoById(repoId) {
 
 function currentRepoId() {
   if (ui.selection.type === "repo") {
+    return ui.selection.id;
+  }
+
+  if (ui.selection.type === "wiki") {
     return ui.selection.id;
   }
 
@@ -4302,6 +4763,143 @@ function trimRawTranscript(value) {
 function pathLabel(filePath) {
   const parts = filePath.split("/");
   return parts[parts.length - 1] || filePath;
+}
+
+function renderMarkdownDocument(markdown) {
+  const normalized = String(markdown || "").replace(/\r\n/g, "\n");
+  if (!normalized.trim()) {
+    return `<p class="muted">This file is empty.</p>`;
+  }
+
+  const lines = normalized.split("\n");
+  const blocks: string[] = [];
+  const paragraph: string[] = [];
+  const unorderedList: string[] = [];
+  const orderedList: string[] = [];
+  const codeFence: string[] = [];
+  let inCodeFence = false;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) {
+      return;
+    }
+
+    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(" "))}</p>`);
+    paragraph.length = 0;
+  };
+
+  const flushUnorderedList = () => {
+    if (!unorderedList.length) {
+      return;
+    }
+
+    blocks.push(`<ul>${unorderedList.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ul>`);
+    unorderedList.length = 0;
+  };
+
+  const flushOrderedList = () => {
+    if (!orderedList.length) {
+      return;
+    }
+
+    blocks.push(`<ol>${orderedList.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ol>`);
+    orderedList.length = 0;
+  };
+
+  const flushCodeFence = () => {
+    if (!codeFence.length) {
+      return;
+    }
+
+    blocks.push(`<pre><code>${escapeHtml(codeFence.join("\n"))}</code></pre>`);
+    codeFence.length = 0;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\t/g, "  ");
+
+    if (/^```/.test(line.trim())) {
+      if (inCodeFence) {
+        flushCodeFence();
+        inCodeFence = false;
+      } else {
+        flushParagraph();
+        flushUnorderedList();
+        flushOrderedList();
+        inCodeFence = true;
+      }
+      continue;
+    }
+
+    if (inCodeFence) {
+      codeFence.push(rawLine);
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      flushParagraph();
+      flushUnorderedList();
+      flushOrderedList();
+      const level = heading[1].length;
+      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`);
+      continue;
+    }
+
+    const quote = line.match(/^\s*>\s?(.*)$/);
+    if (quote) {
+      flushParagraph();
+      flushUnorderedList();
+      flushOrderedList();
+      blocks.push(`<blockquote>${renderInlineMarkdown(quote[1])}</blockquote>`);
+      continue;
+    }
+
+    const unordered = line.match(/^\s*[-*]\s+(.*)$/);
+    if (unordered) {
+      flushParagraph();
+      flushOrderedList();
+      unorderedList.push(unordered[1].trim());
+      continue;
+    }
+
+    const ordered = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (ordered) {
+      flushParagraph();
+      flushUnorderedList();
+      orderedList.push(ordered[1].trim());
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushParagraph();
+      flushUnorderedList();
+      flushOrderedList();
+      continue;
+    }
+
+    paragraph.push(line.trim());
+  }
+
+  flushParagraph();
+  flushUnorderedList();
+  flushOrderedList();
+  flushCodeFence();
+
+  return blocks.join("");
+}
+
+function renderInlineMarkdown(value) {
+  let html = escapeHtml(value);
+
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) => {
+    return `<a href="${escapeAttribute(url)}">${label}</a>`;
+  });
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+
+  return html;
 }
 
 function escapeHtml(value) {

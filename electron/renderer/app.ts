@@ -162,7 +162,7 @@ api.onSessionUpdated((payload) => {
 api.onCommand(async ({ command, sessionId, repoId }) => {
   switch (command) {
     case "new-session":
-      openLauncher();
+      await startDefaultClaudeSession(repoId || currentRepoId());
       break;
     case "open-wiki":
       await openWiki(repoId || currentRepoId());
@@ -1999,7 +1999,7 @@ async function handleClick(event) {
       collapseSidebarProjectDrawer(target.dataset.repoId);
       break;
     case "open-launcher":
-      openLauncher(target.dataset.repoId || currentRepoId());
+      await startDefaultClaudeSession(target.dataset.repoId || currentRepoId());
       break;
     case "open-status":
       await selectStatus();
@@ -2832,6 +2832,23 @@ function openCommandPalette() {
 
 async function startClaudeSessionForRepo(repoId) {
   await startSessionForRepo(repoId, true, "terminal");
+}
+
+async function startDefaultClaudeSession(explicitRepoId = null) {
+  const repoId =
+    explicitRepoId ||
+    currentRepoId() ||
+    ui.sidebarExpandedRepoId ||
+    state.sessions[0]?.repoID ||
+    state.repos[0]?.id ||
+    null;
+
+  if (!repoId) {
+    window.alert("Open a folder first.");
+    return;
+  }
+
+  await startClaudeSessionForRepo(repoId);
 }
 
 async function startSessionForRepo(

@@ -1,5 +1,27 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+async function getTrackedPortStatus() {
+  try {
+    return await ipcRenderer.invoke("status:ports");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "");
+    if (message.includes("No handler registered for 'status:ports'")) {
+      return {
+        available: false,
+        scannedAt: new Date().toISOString(),
+        trackedPortCount: 0,
+        activeCount: 0,
+        ports: [],
+        activePorts: [],
+        groups: [],
+        error: "Dev Ports is available after a full app restart. Quit Claude Workspace and launch it again."
+      };
+    }
+
+    throw error;
+  }
+}
+
 contextBridge.exposeInMainWorld("claudeWorkspace", {
   getState: () => ipcRenderer.invoke("state:get"),
   openWorkspaceFolder: () => ipcRenderer.invoke("workspace:open"),
@@ -23,6 +45,7 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
   revealPath: (filePath) => ipcRenderer.invoke("path:reveal", filePath),
   nextUnreadSession: () => ipcRenderer.invoke("session:nextUnread"),
   updatePreferences: (patch) => ipcRenderer.invoke("preferences:update", patch),
+  getTrackedPortStatus,
   getClaudeSettingsContext: (repoId) => ipcRenderer.invoke("settings:context", repoId),
   loadSettingsFile: (filePath) => ipcRenderer.invoke("settings:loadFile", filePath),
   saveSettingsFile: (filePath, contents) =>

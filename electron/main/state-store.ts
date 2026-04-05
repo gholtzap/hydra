@@ -48,6 +48,7 @@ function migrateSnapshot(snapshot) {
     ? snapshot.sessions.map((session) => ({
         initialPrompt: "",
         launchesClaudeOnStart: true,
+        claudeSessionId: null,
         rawTranscript: "",
         transcript: "",
         unreadCount: 0,

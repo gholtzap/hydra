@@ -23,6 +23,7 @@ const {
   loadSettingsFile,
   saveSettingsFile
 } = require("./claude-settings");
+const { inspectTrackedPorts } = require("./port-inspector");
 const { loadState, saveState } = require("./state-store");
 const { PtyHostClient } = require("./pty-host-client");
 
@@ -38,6 +39,8 @@ class AppController {
   pendingClaudeLaunchTimers: Map<string, NodeJS.Timeout>;
   sessionSizes: Map<string, { cols: number; rows: number }>;
   terminalBuffers: Map<string, any>;
+  signalBuffers: Map<string, string>;
+  blockerClearStreaks: Map<string, number>;
   ptyHost: any;
 
   constructor() {
@@ -50,6 +53,8 @@ class AppController {
     this.pendingClaudeLaunchTimers = new Map();
     this.sessionSizes = new Map();
     this.terminalBuffers = new Map();
+    this.signalBuffers = new Map();
+    this.blockerClearStreaks = new Map();
     this.repairStoredTranscripts();
     this.ptyHost = new PtyHostClient();
     this.ptyHost.onMessage((message) => this.handlePtyMessage(message));
@@ -88,7 +93,7 @@ class AppController {
     ipcMain.handle("session:reopen", (_event, sessionId) => this.reopenSession(sessionId));
     ipcMain.handle("session:close", (_event, sessionId) => this.closeSession(sessionId));
     ipcMain.handle("session:input", (_event, payload) => {
-      this.ptyHost.sendInput(payload.sessionId, payload.data);
+      this.handleSessionInput(payload.sessionId, payload.data);
     });
     ipcMain.handle("session:binaryInput", (_event, payload) => {
       this.ptyHost.sendInput(payload.sessionId, payload.data);
@@ -109,6 +114,7 @@ class AppController {
     ipcMain.handle("path:reveal", (_event, filePath) => shell.showItemInFolder(filePath));
     ipcMain.handle("session:nextUnread", () => this.nextUnreadSession());
     ipcMain.handle("preferences:update", (_event, patch) => this.updatePreferences(patch));
+    ipcMain.handle("status:ports", () => inspectTrackedPorts());
     ipcMain.handle("settings:context", (_event, repoId) =>
       buildClaudeSettingsContext(this.repoById(repoId) || null)
     );
@@ -339,12 +345,14 @@ class AppController {
     }
 
     const count = this.state.sessions.filter((session) => session.repoID === repoId).length + 1;
+    const sessionId = randomUUID();
     const session = {
-      id: randomUUID(),
+      id: sessionId,
       repoID: repoId,
       title: `${launchesClaudeOnStart ? "Claude" : "Shell"} ${count}`,
       initialPrompt: "",
       launchesClaudeOnStart: launchesClaudeOnStart !== false,
+      claudeSessionId: launchesClaudeOnStart !== false ? sessionId : null,
       status: "running",
       runtimeState: "live",
       blocker: null,
@@ -384,6 +392,7 @@ class AppController {
     const bannerChunk = `\r\n${banner}\r\n`;
     session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${bannerChunk}`);
     session.transcript = trimTranscript(this.terminalBuffer(session.id, session.transcript).consume(bannerChunk));
+    this.resetSignalTracking(session.id);
 
     this.launchRuntime(session, repo);
     this.scheduleSave();
@@ -394,6 +403,7 @@ class AppController {
     this.cancelPendingClaudeLaunch(sessionId);
     this.sessionSizes.delete(sessionId);
     this.terminalBuffers.delete(sessionId);
+    this.resetSignalTracking(sessionId);
     this.ptyHost.killSession(sessionId);
     this.focusedSessionId = this.focusedSessionId === sessionId ? null : this.focusedSessionId;
     this.state.sessions = this.state.sessions.filter((session) => session.id !== sessionId);
@@ -477,6 +487,11 @@ class AppController {
     });
   }
 
+  handleSessionInput(sessionId, data) {
+    this.ptyHost.sendInput(sessionId, data);
+    this.resolveInteractiveBlockerFromInput(sessionId, data);
+  }
+
   handlePtyMessage(message) {
     switch (message.type) {
       case "created":
@@ -510,6 +525,7 @@ class AppController {
     }
 
     const visibleChunk = sanitizeVisibleText(rawChunk);
+    const signalContext = this.appendSignalBuffer(sessionId, visibleChunk);
     const buffer = this.terminalBuffer(session.id, session.transcript);
     session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${rawChunk}`);
     session.transcript = trimTranscript(buffer.consume(rawChunk));
@@ -521,14 +537,28 @@ class AppController {
       session.unreadCount += 1;
     }
 
-    const signal = detectSignal(visibleChunk);
+    const signal = detectSignal(signalContext);
     const previousBlockerKey = blockerKey(session.blocker);
 
     if (signal) {
       session.status = signal.status;
       session.blocker = signal.blocker;
+      this.signalBuffers.delete(sessionId);
+      this.blockerClearStreaks.delete(sessionId);
+    } else if (session.blocker && hasMeaningfulVisibleOutput(visibleChunk)) {
+      const streak = (this.blockerClearStreaks.get(sessionId) || 0) + 1;
+      this.blockerClearStreaks.set(sessionId, streak);
+
+      if (streak >= blockerClearThreshold(session.blocker.kind)) {
+        session.blocker = null;
+        if (session.runtimeState === "live") {
+          session.status = "running";
+        }
+        this.resetSignalTracking(sessionId);
+      }
     } else if (!session.blocker) {
       session.status = "running";
+      this.blockerClearStreaks.delete(sessionId);
     }
 
     const nextBlockerKey = blockerKey(session.blocker);
@@ -552,6 +582,7 @@ class AppController {
     }
 
     this.cancelPendingClaudeLaunch(sessionId);
+    this.resetSignalTracking(sessionId);
     this.sessionSizes.delete(sessionId);
     session.runtimeState = "stopped";
     session.stoppedAt = now();
@@ -627,6 +658,38 @@ class AppController {
     });
 
     notification.show();
+  }
+
+  appendSignalBuffer(sessionId, visibleChunk) {
+    const next = `${this.signalBuffers.get(sessionId) || ""}${visibleChunk || ""}`;
+    const trimmed = next.length > 1600 ? next.slice(-1600) : next;
+    this.signalBuffers.set(sessionId, trimmed);
+    return trimmed;
+  }
+
+  resolveInteractiveBlockerFromInput(sessionId, data) {
+    if (!/[\r\n]/.test(data || "")) {
+      return;
+    }
+
+    const session = this.sessionById(sessionId);
+    if (!session?.blocker || !interactiveBlockerKinds().has(session.blocker.kind)) {
+      return;
+    }
+
+    session.blocker = null;
+    if (session.runtimeState === "live") {
+      session.status = "running";
+    }
+    session.updatedAt = now();
+    this.resetSignalTracking(sessionId);
+    this.scheduleSave();
+    this.sendSessionUpdated(sessionId);
+  }
+
+  resetSignalTracking(sessionId) {
+    this.signalBuffers.delete(sessionId);
+    this.blockerClearStreaks.delete(sessionId);
   }
 
   repoById(repoId) {
@@ -731,7 +794,10 @@ class AppController {
       }
 
       this.pendingClaudeLaunch.delete(sessionId);
-      this.ptyHost.sendInput(sessionId, `${resolvedClaudeCommand(this.state.preferences)}\r`);
+      this.ptyHost.sendInput(
+        sessionId,
+        `${resolvedClaudeCommand(this.state.preferences, currentSession)}\r`
+      );
     }, 120);
 
     this.pendingClaudeLaunchTimers.set(sessionId, timer);
@@ -755,6 +821,7 @@ function summarizeSession(session) {
     title: session.title,
     initialPrompt: session.initialPrompt,
     launchesClaudeOnStart: session.launchesClaudeOnStart,
+    claudeSessionId: session.claudeSessionId,
     status: session.status,
     runtimeState: session.runtimeState,
     blocker: session.blocker,
@@ -791,9 +858,29 @@ function resolvedShellPath(preferences) {
   return candidate || process.env.SHELL || "/bin/zsh";
 }
 
-function resolvedClaudeCommand(preferences) {
-  const candidate = preferences.claudeExecutablePath?.trim();
-  return candidate || "claude";
+function resolvedClaudeCommand(preferences, session) {
+  const executable = shellEscape(preferences.claudeExecutablePath?.trim() || "claude");
+  if (!session?.launchesClaudeOnStart) {
+    return executable;
+  }
+
+  if (session.launchCount > 1) {
+    if (session.claudeSessionId) {
+      return `${executable} --resume ${shellEscape(session.claudeSessionId)}`;
+    }
+
+    return `${executable} --continue`;
+  }
+
+  if (session.claudeSessionId) {
+    return `${executable} --session-id ${shellEscape(session.claudeSessionId)}`;
+  }
+
+  return executable;
+}
+
+function shellEscape(value) {
+  return `'${String(value || "").replace(/'/g, `'\\''`)}'`;
 }
 
 function blockerKey(blocker) {
@@ -821,6 +908,26 @@ function blockerLabel(kind) {
     default:
       return "Needs Attention";
   }
+}
+
+function hasMeaningfulVisibleOutput(chunk) {
+  return /\S/.test(chunk || "");
+}
+
+function blockerClearThreshold(kind) {
+  switch (kind) {
+    case "approval":
+    case "question":
+      return 4;
+    case "crashed":
+      return Number.POSITIVE_INFINITY;
+    default:
+      return 2;
+  }
+}
+
+function interactiveBlockerKinds() {
+  return new Set(["approval", "question"]);
 }
 
 function now() {

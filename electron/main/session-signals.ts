@@ -5,12 +5,18 @@ function sanitizeVisibleText(text) {
 }
 
 function detectSignal(chunk) {
-  const lowered = chunk.toLowerCase();
+  const lowered = normalizeSignalText(chunk);
+
+  if (!lowered) {
+    return null;
+  }
 
   if (
     lowered.includes("allow once") ||
     lowered.includes("allow always") ||
-    lowered.includes("permission prompt")
+    lowered.includes("permission prompt") ||
+    lowered.includes("yes, allow once") ||
+    lowered.includes("yes, allow always")
   ) {
     return {
       status: "blocked",
@@ -55,6 +61,13 @@ function detectSignal(chunk) {
   }
 
   return null;
+}
+
+function normalizeSignalText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function blocker(kind, summary) {

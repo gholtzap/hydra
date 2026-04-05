@@ -22,6 +22,7 @@ interface ClaudeWorkspaceApi {
   revealPath: (filePath: string) => Promise<any>;
   nextUnreadSession: () => Promise<string | null>;
   updatePreferences: (patch: Record<string, unknown>) => Promise<any>;
+  getTrackedPortStatus: () => Promise<any>;
   getClaudeSettingsContext: (repoId: string | null) => Promise<any>;
   loadSettingsFile: (filePath: string) => Promise<string>;
   saveSettingsFile: (filePath: string, contents: string) => Promise<any>;

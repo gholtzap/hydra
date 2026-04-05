@@ -31,7 +31,11 @@ const ui = {
   settingsSaveMessage: "",
   settingsJsonDraft: null,
   settingsJsonError: "",
-  settingsShowRawJson: false
+  settingsShowRawJson: false,
+  portStatusData: null,
+  portStatusLoading: false,
+  portStatusShowAll: false,
+  portStatusPollTimer: null as number | null
 };
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
@@ -247,6 +251,9 @@ function renderSidebar() {
           <button class="sidebar-rail-button sidebar-utility-button ${sidebarNavMatches(sidebarActionNavId("create-project")) ? "keyboard-active" : ""}" data-action="create-project" data-tooltip="New Folder" title="New Folder" aria-label="New Folder">
             ${renderUtilityIcon("folder")}
           </button>
+          <button class="sidebar-rail-button sidebar-utility-button ${selectionMatches("status") ? "active" : ""} ${sidebarNavMatches(sidebarActionNavId("open-status")) ? "keyboard-active" : ""}" data-action="open-status" data-tooltip="Dev Ports" title="Dev Ports" aria-label="Dev Ports">
+            ${renderUtilityIcon("status")}
+          </button>
           <button class="sidebar-rail-button sidebar-utility-button ${sidebarNavMatches(sidebarActionNavId("open-settings")) ? "keyboard-active" : ""}" data-action="open-settings" data-tooltip="Settings" title="Settings" aria-label="Settings">
             ${renderUtilityIcon("settings")}
           </button>
@@ -344,6 +351,8 @@ function renderSidebarDrawerSession(session, repo) {
 }
 
 function renderDetail() {
+  syncPortStatusPolling();
+
   if (ui.selection.type === "inbox") {
     destroyTerminal();
     renderInbox();
@@ -358,6 +367,12 @@ function renderDetail() {
 
   if (ui.selection.type === "session") {
     renderSessionDetail(sessionById(ui.selection.id));
+    return;
+  }
+
+  if (ui.selection.type === "status") {
+    destroyTerminal();
+    renderPortStatusDetail();
     return;
   }
 
@@ -427,11 +442,216 @@ function renderRepoDetail(repo) {
   syncSectionFocusUi();
 }
 
+function renderPortStatusDetail() {
+  const portStatus = ui.portStatusData;
+  const activePorts = portStatus?.activePorts || [];
+  const groups = portStatus?.groups || [];
+  const trackedPortCount = portStatus?.trackedPortCount || 0;
+  const activeCount = portStatus?.activeCount || 0;
+  const canRenderTrackedTable = !!portStatus?.available && !!portStatus?.ports?.length;
+
+  detailElement.innerHTML = `
+    <section class="detail-panel">
+      <div class="detail-hero">
+        <div>
+          <div class="eyebrow">Status</div>
+          <h1 class="detail-title">Dev Ports</h1>
+          <div class="muted">Watch common local dev ports without leaving the app.</div>
+        </div>
+        <div class="detail-actions">
+          <button data-action="toggle-port-status-table">${ui.portStatusShowAll ? "Hide Quiet Ports" : "Show All Tracked Ports"}</button>
+          <button class="primary" data-action="refresh-port-status">${ui.portStatusLoading ? "Refreshing..." : "Refresh"}</button>
+        </div>
+      </div>
+      ${
+        portStatus?.error
+          ? `<div class="status-alert">${escapeHtml(portStatus.error)}</div>`
+          : ""
+      }
+      <div class="status-stat-grid">
+        ${renderPortStatusStat("Active Listeners", String(activeCount), activeCount ? "live" : "idle")}
+        ${renderPortStatusStat("Tracked Ports", trackedPortCount ? String(trackedPortCount) : "Waiting", "neutral")}
+        ${renderPortStatusStat("Last Scan", formatPortStatusScan(portStatus?.scannedAt), portStatus?.available === false ? "danger" : "neutral")}
+      </div>
+      <section class="status-panel">
+        <div class="status-panel-header">
+          <div>
+            <div class="row-title">Live Now</div>
+            <div class="row-subtitle">Processes listening on the ports this view watches.</div>
+          </div>
+          <span class="status-badge ${activeCount ? "status-running" : "status-idle"}">${activeCount ? `${activeCount} active` : "Quiet"}</span>
+        </div>
+        ${
+          ui.portStatusLoading && !portStatus
+            ? `<div class="status-empty-state">Scanning watched ports...</div>`
+            : !portStatus?.available && portStatus
+              ? `<div class="status-empty-state">Port data is unavailable until the scan succeeds.</div>`
+              : activePorts.length
+                ? `<div class="card-grid">${activePorts.map(renderLivePortCard).join("")}</div>`
+                : `<div class="status-empty-state">Nothing in the watched ranges is listening right now.</div>`
+        }
+      </section>
+      <section class="status-panel">
+        <div class="status-panel-header">
+          <div>
+            <div class="row-title">Watched Ranges</div>
+            <div class="row-subtitle">Grouped by the local ports developers usually care about.</div>
+          </div>
+        </div>
+        ${
+          portStatus?.available
+            ? `<div class="status-group-grid">${groups.map(renderPortGroupCard).join("")}</div>`
+            : `<div class="status-empty-state">The watched ranges will appear here after the next successful scan.</div>`
+        }
+      </section>
+      ${
+        ui.portStatusShowAll && canRenderTrackedTable
+          ? `
+            <section class="status-panel">
+              <div class="status-panel-header">
+                <div>
+                  <div class="row-title">Tracked Ports</div>
+                  <div class="row-subtitle">Every watched port, including quiet ones.</div>
+                </div>
+              </div>
+              ${renderTrackedPortTable(portStatus.ports)}
+            </section>
+          `
+          : ""
+      }
+    </section>
+  `;
+
+  syncSectionFocusUi();
+}
+
+function renderPortStatusStat(label, value, tone = "neutral") {
+  return `
+    <div class="status-stat-card status-stat-card-${tone}">
+      <div class="status-stat-label">${escapeHtml(label)}</div>
+      <div class="status-stat-value">${escapeHtml(value)}</div>
+    </div>
+  `;
+}
+
+function renderLivePortCard(port) {
+  const extraListeners = Math.max(port.listeners.length - 2, 0);
+
+  return `
+    <article class="status-port-card">
+      <div class="row-title">
+        <span class="mono">:${escapeHtml(String(port.port))}</span>
+        <span class="status-badge status-running">Listening</span>
+      </div>
+      <div class="row-subtitle">${escapeHtml(port.primaryCommand || "Unknown process")}${port.primaryPid ? ` · pid ${escapeHtml(String(port.primaryPid))}` : ""}</div>
+      <div class="status-listener-list">
+        ${port.listeners
+          .slice(0, 2)
+          .map(
+            (listener) => `
+              <div class="row-meta mono">${escapeHtml(listener.command)} · pid ${escapeHtml(String(listener.pid))} · ${escapeHtml(listener.address)}</div>
+            `
+          )
+          .join("")}
+        ${extraListeners ? `<div class="row-meta">+${extraListeners} more ${pluralize(extraListeners, "listener", "listeners")}</div>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderPortGroupCard(group) {
+  return `
+    <article class="status-group-card">
+      <div class="row-title">
+        <span>${escapeHtml(group.label)}</span>
+        <span class="status-badge ${group.activeCount ? "status-running" : "status-idle"}">${group.activeCount ? `${group.activeCount} live` : "Quiet"}</span>
+      </div>
+      <div class="row-subtitle">${escapeHtml(group.description)}</div>
+      ${
+        group.activePorts.length
+          ? `
+            <div class="status-chip-row">
+              ${group.activePorts
+                .map(
+                  (port) => `
+                    <span class="status-port-chip">
+                      <span class="mono">:${escapeHtml(String(port.port))}</span>
+                      <span>${escapeHtml(port.primaryCommand || "process")}</span>
+                    </span>
+                  `
+                )
+                .join("")}
+            </div>
+          `
+          : `<div class="row-meta">No listeners in this range.</div>`
+      }
+    </article>
+  `;
+}
+
+function renderTrackedPortTable(ports) {
+  return `
+    <div class="status-table-wrap">
+      <table class="status-table">
+        <thead>
+          <tr>
+            <th>Port</th>
+            <th>Status</th>
+            <th>Process</th>
+            <th>Listener</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${ports
+            .map(
+              (port) => `
+                <tr>
+                  <td class="mono">:${escapeHtml(String(port.port))}</td>
+                  <td><span class="status-badge ${port.status === "listening" ? "status-running" : "status-idle"}">${port.status === "listening" ? "Listening" : "Closed"}</span></td>
+                  <td>${escapeHtml(port.primaryCommand || "None")}${port.primaryPid ? ` · pid ${escapeHtml(String(port.primaryPid))}` : ""}</td>
+                  <td class="mono">${escapeHtml(port.addressSummary[0] || "Not listening")}</td>
+                </tr>
+              `
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function formatPortStatusScan(value) {
+  if (!value) {
+    return ui.portStatusLoading ? "Scanning..." : "Not scanned";
+  }
+
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return "Unknown";
+  }
+
+  return timestamp.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
+
+function pluralize(count, singular, plural) {
+  return count === 1 ? singular : plural;
+}
+
 function renderSessionDetail(session) {
   if (!session) {
     detailElement.innerHTML = `<div class="empty-state">This session is no longer available.</div>`;
     destroyTerminal();
     return;
+  }
+
+  // Re-rendering the selected session replaces the terminal container node,
+  // so the current xterm instance must be recreated for the same session.
+  if (ui.terminalSessionId === session.id) {
+    destroyTerminal();
   }
 
   detailElement.innerHTML = `
@@ -440,10 +660,11 @@ function renderSessionDetail(session) {
         <div id="session-chrome"></div>
         <div id="session-blocker"></div>
       </div>
-      <div class="terminal-wrap" tabindex="-1">
+      <div class="terminal-wrap ${session.runtimeState === "live" ? "" : "terminal-wrap-paused"}" tabindex="-1">
         <div id="terminal-shell">
           <div id="terminal"></div>
         </div>
+        ${renderPausedSessionNotice(session)}
       </div>
     </section>
   `;
@@ -481,7 +702,7 @@ function updateSessionChrome(session) {
         ${
           session.runtimeState === "live"
             ? `<button data-action="close-session" data-session-id="${session.id}">Close Session</button>`
-            : `<button data-action="restart-session" data-session-id="${session.id}">Restart Session</button>
+            : `<button class="primary" data-action="restart-session" data-session-id="${session.id}">${escapeHtml(resumeSessionActionLabel(session))}</button>
                <button data-action="close-session" data-session-id="${session.id}">Close Session</button>`
         }
       </div>
@@ -506,6 +727,34 @@ function updateSessionChrome(session) {
       </div>
     `
     : "";
+}
+
+function renderPausedSessionNotice(session) {
+  if (session.runtimeState === "live") {
+    return "";
+  }
+
+  const body = session.launchesClaudeOnStart
+    ? "This Claude conversation was restored from history. Resume it to send another message in this project."
+    : "This shell session was restored from history. Restart it to type in the terminal again.";
+
+  return `
+    <div class="terminal-paused-notice">
+      <div>
+        <div class="row-title">${escapeHtml(resumeSessionActionLabel(session))}</div>
+        <div class="row-subtitle">${escapeHtml(body)}</div>
+      </div>
+      <button class="primary" data-action="restart-session" data-session-id="${session.id}">${escapeHtml(resumeSessionActionLabel(session))}</button>
+    </div>
+  `;
+}
+
+function resumeSessionActionLabel(session) {
+  return session.launchesClaudeOnStart ? "Resume Claude" : "Restart Shell";
+}
+
+function sessionOpenFocusSection(session): SectionId {
+  return session?.runtimeState === "live" ? "terminal" : "main";
 }
 
 function mountTerminal(session) {
@@ -780,6 +1029,7 @@ function renderCommandPaletteDialog() {
     { id: "open-workspace", label: "Open Workspace", action: "open-workspace" },
     { id: "create-project", label: "Create Project Folder", action: "create-project" },
     { id: "open-launcher", label: "New Session", action: "open-launcher" },
+    { id: "open-status", label: "Open Dev Port Status", action: "open-status" },
     { id: "open-settings", label: "Open Settings", action: "open-settings" },
     { id: "open-quick-switcher", label: "Open Quick Switcher", action: "open-quick-switcher" },
     { id: "next-unread", label: "Jump to Next Unread Session", action: "next-unread" }
@@ -1343,14 +1593,19 @@ async function handleClick(event) {
     case "select-repo":
       await selectRepo(target.dataset.repoId);
       break;
-    case "select-session":
-      await selectSession(target.dataset.sessionId);
+    case "select-session": {
+      const session = sessionById(target.dataset.sessionId);
+      await selectSession(target.dataset.sessionId, sessionOpenFocusSection(session));
       break;
+    }
     case "collapse-sidebar-project":
       collapseSidebarProjectDrawer(target.dataset.repoId);
       break;
     case "open-launcher":
       openLauncher(target.dataset.repoId || currentRepoId());
+      break;
+    case "open-status":
+      await selectStatus();
       break;
     case "open-settings":
       await openSettings(target.dataset.settingsTab || "general");
@@ -1376,6 +1631,7 @@ async function handleClick(event) {
       }
       break;
     case "restart-session":
+      setFocusSection("terminal");
       await api.reopenSession(target.dataset.sessionId);
       break;
     case "approve-blocker":
@@ -1397,9 +1653,19 @@ async function handleClick(event) {
     case "open-quick-switcher":
       openQuickSwitcher();
       break;
+    case "refresh-port-status":
+      await refreshPortStatus();
+      break;
+    case "toggle-port-status-table":
+      ui.portStatusShowAll = !ui.portStatusShowAll;
+      renderDetail();
+      break;
     case "switch-session":
       quickSwitcherDialog.close();
-      await selectSession(target.dataset.sessionId, "terminal");
+      await selectSession(
+        target.dataset.sessionId,
+        sessionOpenFocusSection(sessionById(target.dataset.sessionId))
+      );
       break;
     case "switch-repo":
       quickSwitcherDialog.close();
@@ -1597,6 +1863,18 @@ async function handleKeyDown(event) {
   }
 
   if (ui.focusSection === "main" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (event.key === "Enter" && ui.selection.type === "session") {
+      event.preventDefault();
+      const session = sessionById(ui.selection.id);
+      if (session?.runtimeState === "live") {
+        setFocusSection("terminal");
+      } else if (session?.id) {
+        setFocusSection("terminal");
+        await api.reopenSession(session.id);
+      }
+      return;
+    }
+
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
       event.preventDefault();
       navigateMainListSessions(event.key === "ArrowDown" ? 1 : -1);
@@ -1605,7 +1883,10 @@ async function handleKeyDown(event) {
 
     if (event.key === "Enter" && ui.mainListSessionId) {
       event.preventDefault();
-      void selectSession(ui.mainListSessionId, "terminal");
+      void selectSession(
+        ui.mainListSessionId,
+        sessionOpenFocusSection(sessionById(ui.mainListSessionId))
+      );
     }
   }
 }
@@ -1692,6 +1973,21 @@ async function selectInbox(nextFocusSection: SectionId | null = null) {
   renderDetail();
 }
 
+async function selectStatus(nextFocusSection: SectionId | null = null) {
+  if (nextFocusSection) {
+    ui.focusSection = nextFocusSection;
+  }
+  ui.selection = { type: "status", id: null };
+  ui.sidebarExpandedRepoId = null;
+  ui.sidebarNavItem = sidebarActionNavId("open-status");
+  syncMainListSelection();
+  normalizeFocusSection();
+  await api.setFocusedSession(null);
+  renderSidebar();
+  renderDetail();
+  await refreshPortStatus();
+}
+
 async function selectRepo(
   repoId,
   nextFocusSection: SectionId | null = null
@@ -1728,6 +2024,58 @@ async function selectSession(
   await api.setFocusedSession(sessionId);
   renderSidebar();
   renderDetail();
+}
+
+async function refreshPortStatus() {
+  if (ui.portStatusLoading) {
+    return;
+  }
+
+  ui.portStatusLoading = true;
+  if (ui.selection.type === "status") {
+    renderPortStatusDetail();
+  }
+
+  try {
+    ui.portStatusData = await api.getTrackedPortStatus();
+  } catch (error) {
+    ui.portStatusData = {
+      available: false,
+      scannedAt: new Date().toISOString(),
+      trackedPortCount: 0,
+      activeCount: 0,
+      ports: [],
+      activePorts: [],
+      groups: [],
+      error: error instanceof Error ? error.message : "Port inspection failed."
+    };
+  } finally {
+    ui.portStatusLoading = false;
+  }
+
+  if (ui.selection.type === "status") {
+    renderPortStatusDetail();
+  }
+}
+
+function syncPortStatusPolling() {
+  if (ui.selection.type === "status") {
+    if (ui.portStatusPollTimer === null) {
+      ui.portStatusPollTimer = window.setInterval(() => {
+        void refreshPortStatus();
+      }, 5000);
+    }
+
+    if (!ui.portStatusData && !ui.portStatusLoading) {
+      void refreshPortStatus();
+    }
+    return;
+  }
+
+  if (ui.portStatusPollTimer !== null) {
+    window.clearInterval(ui.portStatusPollTimer);
+    ui.portStatusPollTimer = null;
+  }
 }
 
 function openLauncher(repoId = null) {
@@ -2336,6 +2684,7 @@ function sidebarNavItems() {
     ...sortedRepos().map((repo) => repo.id),
     sidebarActionNavId("open-workspace"),
     sidebarActionNavId("create-project"),
+    sidebarActionNavId("open-status"),
     sidebarActionNavId("open-settings")
   ];
 }
@@ -2348,6 +2697,11 @@ function syncSidebarNavSelection() {
 
   if (ui.selection.type === "inbox") {
     ui.sidebarNavItem = "inbox";
+    return;
+  }
+
+  if (ui.selection.type === "status") {
+    ui.sidebarNavItem = sidebarActionNavId("open-status");
     return;
   }
 
@@ -2376,6 +2730,7 @@ function syncSidebarNavItemFromTarget(target) {
       break;
     case "open-workspace":
     case "create-project":
+    case "open-status":
     case "open-settings":
       ui.sidebarNavItem = sidebarActionNavId(action);
       break;
@@ -2733,6 +3088,13 @@ function renderUtilityIcon(kind) {
           <path d="M12 10v5M9.5 12.5h5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
         </svg>
       `;
+    case "status":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 18V13M12 18V8M19 18V5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+          <path d="M4 19.5h16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+      `;
     case "settings":
       return `
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2845,6 +3207,9 @@ async function activateSidebarNavItem() {
         break;
       case "create-project":
         await api.createProjectFolder();
+        break;
+      case "open-status":
+        await selectStatus("sidebar");
         break;
       case "open-settings":
         await openSettings("general");

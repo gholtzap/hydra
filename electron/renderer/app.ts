@@ -2358,13 +2358,17 @@ async function handleKeyDown(event) {
 
   if (isSectionNavigationKey(event)) {
     const direction = event.key === "ArrowLeft" ? -1 : 1;
-    const nextSection = adjacentSection(direction);
-    if (!nextSection) {
+    const handledSessionNavigation = await handleSessionWorkspaceSectionNavigation(direction);
+    if (handledSessionNavigation) {
+      event.preventDefault();
       return;
     }
 
-    event.preventDefault();
-    setFocusSection(nextSection);
+    const nextSection = adjacentSection(direction);
+    if (nextSection) {
+      event.preventDefault();
+      setFocusSection(nextSection);
+    }
     return;
   }
 
@@ -4200,6 +4204,150 @@ function adjacentSection(direction: number) {
   const currentIndex = sections.indexOf(ui.focusSection);
   const nextIndex = currentIndex + direction;
   return sections[nextIndex] || null;
+}
+
+async function handleSessionWorkspaceSectionNavigation(direction: number) {
+  if (ui.selection.type !== "session") {
+    return false;
+  }
+
+  const paneOrder = orderedVisibleSessionPaneIds();
+  if (!paneOrder.length) {
+    return false;
+  }
+
+  if (ui.focusSection === "sidebar") {
+    if (direction < 0) {
+      return false;
+    }
+
+    if (expandedSidebarRepo()) {
+      setFocusSection("sidebar-drawer");
+      return true;
+    }
+
+    await focusOrderedSessionPane(paneOrder[0], sessionPaneFocusSectionForHorizontalNavigation());
+    return true;
+  }
+
+  if (ui.focusSection === "sidebar-drawer") {
+    if (direction < 0) {
+      setFocusSection("sidebar");
+      return true;
+    }
+
+    await focusOrderedSessionPane(paneOrder[0], sessionPaneFocusSectionForHorizontalNavigation());
+    return true;
+  }
+
+  if (ui.focusSection !== "main" && ui.focusSection !== "terminal") {
+    return false;
+  }
+
+  const currentIndex = paneOrder.indexOf(ui.selection.id);
+  if (currentIndex < 0) {
+    await focusOrderedSessionPane(paneOrder[0], sessionPaneFocusSectionForHorizontalNavigation());
+    return true;
+  }
+
+  const nextIndex = currentIndex + direction;
+  if (nextIndex >= 0 && nextIndex < paneOrder.length) {
+    await focusOrderedSessionPane(
+      paneOrder[nextIndex],
+      sessionPaneFocusSectionForHorizontalNavigation()
+    );
+    return true;
+  }
+
+  if (direction < 0) {
+    if (expandedSidebarRepo()) {
+      setFocusSection("sidebar-drawer");
+      return true;
+    }
+
+    setFocusSection("sidebar");
+    return true;
+  }
+
+  return true;
+}
+
+function orderedVisibleSessionPaneIds() {
+  const paneElements = Array.from(
+    detailElement.querySelectorAll(".session-pane")
+  ) as HTMLElement[];
+
+  const panes = paneElements
+    .map((pane) => {
+      const sessionId = pane.dataset.sessionId;
+      if (!sessionId) {
+        return null;
+      }
+
+      const rect = pane.getBoundingClientRect();
+      return {
+        sessionId,
+        left: rect.left,
+        top: rect.top
+      };
+    })
+    .filter(Boolean) as Array<{ sessionId: string; left: number; top: number }>;
+
+  if (!panes.length) {
+    return [];
+  }
+
+  panes.sort((left, right) => {
+    const leftDelta = left.left - right.left;
+    if (Math.abs(leftDelta) > 24) {
+      return leftDelta;
+    }
+
+    return left.top - right.top;
+  });
+
+  const columns: Array<{ left: number; panes: Array<{ sessionId: string; left: number; top: number }> }> =
+    [];
+
+  for (const pane of panes) {
+    const existingColumn = columns.find((column) => Math.abs(column.left - pane.left) <= 24);
+    if (existingColumn) {
+      existingColumn.panes.push(pane);
+      continue;
+    }
+
+    columns.push({
+      left: pane.left,
+      panes: [pane]
+    });
+  }
+
+  columns.sort((left, right) => left.left - right.left);
+
+  return columns.flatMap((column) =>
+    column.panes.sort((left, right) => left.top - right.top).map((pane) => pane.sessionId)
+  );
+}
+
+function sessionPaneFocusSectionForHorizontalNavigation(): SectionId {
+  if (ui.focusSection === "main" || ui.focusSection === "terminal") {
+    return ui.focusSection;
+  }
+
+  if (ui.selection.type === "session") {
+    return sessionOpenFocusSection(sessionById(ui.selection.id));
+  }
+
+  return "terminal";
+}
+
+async function focusOrderedSessionPane(sessionId, focusSection: SectionId) {
+  if (ui.selection.type === "session" && isSessionVisible(sessionId)) {
+    await activateVisibleSession(sessionId, focusSection);
+    return;
+  }
+
+  await selectSession(sessionId, focusSection);
 }
 
 function syncSectionFocusUi() {

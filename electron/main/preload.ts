@@ -27,10 +27,11 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
   openWorkspaceFolder: () => ipcRenderer.invoke("workspace:open"),
   createProjectFolder: () => ipcRenderer.invoke("project:create"),
   rescanWorkspace: (workspaceId) => ipcRenderer.invoke("workspace:rescan", workspaceId),
-  createSession: (repoId, launchesClaudeOnStart, title) =>
-    ipcRenderer.invoke("session:create", { repoId, launchesClaudeOnStart, title }),
+  createSession: (repoId, launchesClaudeOnStart) =>
+    ipcRenderer.invoke("session:create", { repoId, launchesClaudeOnStart }),
   reopenSession: (sessionId) => ipcRenderer.invoke("session:reopen", sessionId),
   closeSession: (sessionId) => ipcRenderer.invoke("session:close", sessionId),
+  renameSession: (sessionId, title) => ipcRenderer.invoke("session:rename", { sessionId, title }),
   sendInput: (sessionId, data) => ipcRenderer.invoke("session:input", { sessionId, data }),
   sendBinaryInput: (sessionId, data) =>
     ipcRenderer.invoke("session:binaryInput", { sessionId, data }),

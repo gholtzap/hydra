@@ -5,9 +5,10 @@ interface ClaudeWorkspaceApi {
   openWorkspaceFolder: () => Promise<void>;
   createProjectFolder: () => Promise<void>;
   rescanWorkspace: (workspaceId: string) => Promise<any>;
-  createSession: (repoId: string, launchesClaudeOnStart: boolean, title: string) => Promise<any>;
+  createSession: (repoId: string, launchesClaudeOnStart: boolean) => Promise<any>;
   reopenSession: (sessionId: string) => Promise<any>;
   closeSession: (sessionId: string) => Promise<any>;
+  renameSession: (sessionId: string, title: string) => Promise<any>;
   sendInput: (sessionId: string, data: string) => Promise<any>;
   sendBinaryInput: (sessionId: string, data: string) => Promise<any>;
   resizeSession: (sessionId: string, cols: number, rows: number) => Promise<any>;

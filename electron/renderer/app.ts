@@ -56,10 +56,8 @@ const ui = {
   sidebarNavItem: "inbox" as string,
   mainListSessionId: null as string | null,
   terminalMounts: new Map<string, TerminalMount>(),
-  launcherQuery: "",
-  launcherTitle: "",
-  launcherSelectedRepoId: null,
-  launcherLaunchesClaudeOnStart: true,
+  renamingSessionId: null as string | null,
+  renamingSessionTitle: "",
   quickSwitcherQuery: "",
   commandPaletteQuery: "",
   settingsTab: "general",
@@ -117,7 +115,6 @@ const ui = {
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
 const detailElement = document.getElementById("detail") as HTMLElement;
 const appShellElement = document.getElementById("app-shell") as HTMLElement;
-const launcherDialog = document.getElementById("launcher-dialog") as HTMLDialogElement;
 const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogElement;
 const quickSwitcherDialog = document.getElementById("quick-switcher-dialog") as HTMLDialogElement;
 const commandPaletteDialog = document.getElementById("command-palette-dialog") as HTMLDialogElement;
@@ -162,6 +159,7 @@ if (typeof colorSchemeQuery.addEventListener === "function") {
 document.addEventListener("click", handleClick);
 document.addEventListener("input", handleInput);
 document.addEventListener("change", handleChange);
+document.addEventListener("focusout", handleFocusOut, true);
 document.addEventListener("pointerdown", handlePointerDown, true);
 document.addEventListener("contextmenu", handleContextMenu, true);
 document.addEventListener("keydown", handleKeyDown, true);
@@ -237,7 +235,7 @@ api.onSessionUpdated((payload) => {
 api.onCommand(async ({ command, sessionId, repoId }) => {
   switch (command) {
     case "new-session":
-      openLauncher(repoId || currentRepoId());
+      await startDefaultClaudeSession(repoId || currentRepoId());
       break;
     case "open-wiki":
       await openWiki(repoId || currentRepoId());
@@ -365,6 +363,9 @@ function replaceState(nextState) {
   state.sessions = nextState.sessions || [];
   state.preferences = nextState.preferences || {};
   state.lazygitInstalled = !!nextState.lazygitInstalled;
+  if (ui.renamingSessionId && !state.sessions.some((session) => session.id === ui.renamingSessionId)) {
+    cancelSessionRename();
+  }
   syncStoredSessionWorkspaceLayout();
   if (ui.sidebarExpandedRepoId && !repoById(ui.sidebarExpandedRepoId)) {
     ui.sidebarExpandedRepoId = null;
@@ -1430,26 +1431,53 @@ function updateSessionPane(session) {
   pane.classList.toggle("session-pane-active", selectionMatches("session", session.id));
   terminalWrap.classList.toggle("session-pane-terminal-wrap-paused", session.runtimeState !== "live");
 
-  const headerSig = `${session.title}|${session.status}|${session.runtimeState}`;
+  const isRenaming = ui.renamingSessionId === session.id;
+  const headerSig = `${session.title}|${session.status}|${session.runtimeState}|${isRenaming}`;
   if (header.dataset.sig !== headerSig) {
     header.dataset.sig = headerSig;
     header.innerHTML = `
-    <div class="pane-bar" draggable="true" data-drag-session-id="${session.id}" data-drag-source="pane" title="Drag to reorder">
+    <div class="pane-bar" ${isRenaming ? "" : `draggable="true" data-drag-session-id="${session.id}" data-drag-source="pane" title="Drag to reorder"`}>
       <div class="pane-bar-left">
         <span class="pane-grip" aria-hidden="true">\u2801\u2801\u2801</span>
-        <span class="pane-title">${escapeHtml(session.title)}</span>
+        ${
+          isRenaming
+            ? `<input
+                class="pane-title-input"
+                type="text"
+                value="${escapeAttribute(ui.renamingSessionTitle)}"
+                data-session-rename-input="true"
+                data-session-id="${session.id}"
+                aria-label="Rename session" />`
+            : `<span class="pane-title">${escapeHtml(session.title)}</span>`
+        }
         <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
       </div>
       <div class="pane-bar-right">
+        ${
+          isRenaming
+            ? `<button class="pane-action-btn" data-action="cancel-session-rename" data-session-id="${session.id}" data-no-drag="true" title="Cancel rename">Cancel</button>`
+            : `<button class="pane-action-btn" data-action="start-session-rename" data-session-id="${session.id}" data-no-drag="true" title="Rename tab">Rename</button>`
+        }
         ${
           session.runtimeState !== "live"
             ? `<button class="pane-action-btn primary" data-action="restart-session" data-session-id="${session.id}">${escapeHtml(resumeSessionActionLabel(session))}</button>`
             : ""
         }
-        <button class="pane-action-btn pane-hide-btn" data-action="remove-session-pane" data-session-id="${session.id}" title="Hide pane">&times;</button>
+        <button class="pane-action-btn pane-hide-btn" data-action="remove-session-pane" data-session-id="${session.id}" data-no-drag="true" title="Hide pane">&times;</button>
       </div>
     </div>
   `;
+  }
+
+  if (isRenaming) {
+    requestAnimationFrame(() => {
+      const input = pane.querySelector("[data-session-rename-input]") as HTMLInputElement | null;
+      if (!input || document.activeElement === input) {
+        return;
+      }
+      input.focus();
+      input.select();
+    });
   }
 
   const blockerHtml = renderSessionBlocker(session);
@@ -1510,6 +1538,52 @@ function renderPausedSessionNotice(session) {
 
 function resumeSessionActionLabel(session) {
   return session.launchesClaudeOnStart ? "Resume Claude" : "Restart Shell";
+}
+
+function startSessionRename(sessionId) {
+  const session = sessionById(sessionId);
+  if (!session) {
+    return;
+  }
+
+  ui.renamingSessionId = session.id;
+  ui.renamingSessionTitle = session.title || "";
+  updateSessionWorkspaceToolbar();
+  updateSessionPane(session);
+}
+
+function cancelSessionRename() {
+  const sessionId = ui.renamingSessionId;
+  ui.renamingSessionId = null;
+  ui.renamingSessionTitle = "";
+
+  if (!sessionId) {
+    return;
+  }
+
+  const session = sessionById(sessionId);
+  if (session) {
+    updateSessionWorkspaceToolbar();
+    updateSessionPane(session);
+  }
+}
+
+async function commitSessionRename(sessionId) {
+  if (!sessionId || ui.renamingSessionId !== sessionId) {
+    return;
+  }
+
+  const session = sessionById(sessionId);
+  const nextTitle = ui.renamingSessionTitle.trim();
+
+  if (!session || !nextTitle || nextTitle === session.title) {
+    cancelSessionRename();
+    return;
+  }
+
+  ui.renamingSessionId = null;
+  ui.renamingSessionTitle = "";
+  await api.renameSession(sessionId, nextTitle);
 }
 
 function sessionOpenFocusSection(session): SectionId {
@@ -1690,80 +1764,11 @@ function renderRepoSession(session, repo) {
 }
 
 function renderDialogs() {
-  renderLauncherDialog();
   renderQuickSwitcherDialog();
   renderCommandPaletteDialog();
   if (settingsDialog.open) {
     renderSettingsDialog();
   }
-}
-
-function renderLauncherDialog() {
-  const normalized = ui.launcherQuery.trim().toLowerCase();
-  const repos = state.repos.filter((repo) => {
-    if (!normalized) {
-      return true;
-    }
-
-    return (
-      repo.name.toLowerCase().includes(normalized) ||
-      repo.path.toLowerCase().includes(normalized)
-    );
-  });
-
-  launcherDialog.innerHTML = `
-    <form method="dialog" class="dialog-body">
-      <div class="dialog-header">
-        <div>
-          <div class="eyebrow">Session Launcher</div>
-          <h2 class="dialog-title">New session</h2>
-          <div class="muted">Open a shell in any folder, then optionally start Claude.</div>
-        </div>
-        <button value="cancel">Close</button>
-      </div>
-      <input id="launcher-title" placeholder="Session name (optional)" value="${escapeAttribute(ui.launcherTitle)}" />
-      <input id="launcher-query" placeholder="Find a folder" value="${escapeAttribute(ui.launcherQuery)}" />
-      <div class="dialog-grid">
-        <div class="dialog-list">
-          ${
-            repos.length
-              ? repos
-                  .map(
-                    (repo) => `
-                      <button
-                        type="button"
-                        class="switcher-row ${ui.launcherSelectedRepoId === repo.id ? "active" : ""}"
-                        data-action="launcher-select-repo"
-                        data-repo-id="${repo.id}">
-                        <div class="row-title">${escapeHtml(repo.name)}</div>
-                        <div class="row-subtitle">${escapeHtml(abbreviateHome(repo.path))}</div>
-                      </button>
-                    `
-                  )
-                  .join("")
-              : `<div class="muted">No repos match your search.</div>`
-          }
-        </div>
-        <div class="dialog-panel">
-          <div>
-            <div class="row-title">Shell-backed session</div>
-            <div class="row-subtitle">The terminal starts in the selected folder so you can enter and exit Claude normally.</div>
-          </div>
-          <div class="muted">Leave the name blank to get a generated codename.</div>
-          <label class="inline-toggle">
-            <input type="checkbox" id="launcher-launches-claude" ${ui.launcherLaunchesClaudeOnStart ? "checked" : ""} />
-            <span>Launch Claude immediately</span>
-          </label>
-          <div class="muted">When enabled, your login shell runs the configured Claude command.</div>
-          <div style="flex: 1;"></div>
-          <div class="dialog-footer">
-            <button type="button" data-action="launcher-close">Cancel</button>
-            <button type="button" class="primary" data-action="launcher-start" ${ui.launcherSelectedRepoId ? "" : "disabled"}>Start Session</button>
-          </div>
-        </div>
-      </div>
-    </form>
-  `;
 }
 
 function renderQuickSwitcherDialog() {
@@ -2648,7 +2653,7 @@ async function handleClick(event) {
       collapseSidebarProjectDrawer(target.dataset.repoId);
       break;
     case "open-launcher":
-      openLauncher(target.dataset.repoId || currentRepoId());
+      await startDefaultClaudeSession(target.dataset.repoId || currentRepoId());
       break;
     case "open-status":
       await selectStatus();
@@ -2726,16 +2731,7 @@ async function handleClick(event) {
       await selectWikiFile(target.dataset.repoId || currentRepoId(), target.dataset.wikiPath);
       break;
     case "close-session":
-      removeSessionFromWorkspace(target.dataset.sessionId, { persistSelection: false });
-      await api.closeSession(target.dataset.sessionId);
-      if (ui.selection.type === "session" && ui.selection.id === target.dataset.sessionId) {
-        const nextVisibleSessionId = workspaceVisibleSessionIds()[0] || null;
-        if (nextVisibleSessionId) {
-          await selectSession(nextVisibleSessionId, "main");
-        } else {
-          await selectInbox();
-        }
-      }
+      await closeSessionById(target.dataset.sessionId);
       break;
     case "restart-session":
       setFocusSection("terminal");
@@ -2744,21 +2740,17 @@ async function handleClick(event) {
     case "remove-session-pane":
       await hideSessionPane(target.dataset.sessionId);
       break;
+    case "start-session-rename":
+      startSessionRename(target.dataset.sessionId);
+      break;
+    case "cancel-session-rename":
+      cancelSessionRename();
+      break;
     case "approve-blocker":
       await api.sendInput(target.dataset.sessionId, "1\r");
       break;
     case "deny-blocker":
       await api.sendInput(target.dataset.sessionId, "3\r");
-      break;
-    case "launcher-select-repo":
-      ui.launcherSelectedRepoId = target.dataset.repoId;
-      renderLauncherDialog();
-      break;
-    case "launcher-close":
-      launcherDialog.close();
-      break;
-    case "launcher-start":
-      await startLauncherSession();
       break;
     case "open-quick-switcher":
       openQuickSwitcher();
@@ -3000,6 +2992,10 @@ function workspaceLayoutStructureSignature(layout: WorkspaceLayoutNode | null): 
 
 function handleDragStart(event: DragEvent) {
   const target = event.target as HTMLElement | null;
+  if (target?.closest("[data-no-drag]")) {
+    event.preventDefault();
+    return;
+  }
   const draggable = target?.closest("[data-drag-session-id]") as HTMLElement | null;
   const sessionId = draggable?.dataset.dragSessionId;
 
@@ -3126,7 +3122,25 @@ async function handleContextMenu(event) {
 }
 
 async function handleKeyDown(event) {
+  const renameInput = (event.target as HTMLElement | null)?.closest(
+    '[data-session-rename-input="true"]'
+  ) as HTMLInputElement | null;
+  if (renameInput) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      await commitSessionRename(renameInput.dataset.sessionId);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancelSessionRename();
+    }
+    return;
+  }
+
   if (isAnyDialogOpen()) {
+    return;
+  }
+
+  if (await handleAppShortcut(event)) {
     return;
   }
 
@@ -3165,7 +3179,7 @@ async function handleKeyDown(event) {
     const repoId = currentRepoId();
     if (repoId) {
       event.preventDefault();
-      openLauncher(repoId);
+      await startDefaultClaudeSession(repoId);
       return;
     }
   }
@@ -3221,6 +3235,20 @@ async function handleKeyDown(event) {
   }
 }
 
+async function handleAppShortcut(event) {
+  if (isEditableTarget(event.target as HTMLElement | null) || isTerminalKeyboardTarget(event.target)) {
+    return false;
+  }
+
+  if (isOpenLauncherShortcut(event)) {
+    event.preventDefault();
+    await startDefaultClaudeSession();
+    return true;
+  }
+
+  return false;
+}
+
 async function handleInput(event) {
   const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
   if (!target) {
@@ -3233,13 +3261,6 @@ async function handleInput(event) {
   }
 
   switch (target.id) {
-    case "launcher-title":
-      ui.launcherTitle = target.value;
-      break;
-    case "launcher-query":
-      ui.launcherQuery = target.value;
-      rerenderDialogInput(renderLauncherDialog, "launcher-query", target);
-      break;
     case "quick-switcher-query":
       ui.quickSwitcherQuery = target.value;
       rerenderDialogInput(renderQuickSwitcherDialog, "quick-switcher-query", target);
@@ -3248,11 +3269,15 @@ async function handleInput(event) {
       ui.commandPaletteQuery = target.value;
       rerenderDialogInput(renderCommandPaletteDialog, "command-palette-query", target);
       break;
+    default:
+      if (target.dataset.sessionRenameInput === "true") {
+        ui.renamingSessionTitle = target.value;
+        break;
+      }
+      break;
     case "settings-text-editor":
       ui.settingsEditorText = target.value;
       ui.settingsSaveMessage = "";
-      break;
-    default:
       break;
   }
 }
@@ -3277,6 +3302,15 @@ function rerenderDialogInput(
   }
 }
 
+async function handleFocusOut(event: FocusEvent) {
+  const target = event.target as HTMLInputElement | null;
+  if (target?.dataset.sessionRenameInput !== "true") {
+    return;
+  }
+
+  await commitSessionRename(target.dataset.sessionId);
+}
+
 async function handleChange(event) {
   const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
   if (!target) {
@@ -3289,9 +3323,6 @@ async function handleChange(event) {
   }
 
   switch (target.id) {
-    case "launcher-launches-claude":
-      ui.launcherLaunchesClaudeOnStart = (target as HTMLInputElement).checked;
-      break;
     case "pref-notifications-enabled":
       await api.updatePreferences({ notificationsEnabled: (target as HTMLInputElement).checked });
       break;
@@ -3577,36 +3608,39 @@ function syncPortStatusPolling() {
   }
 }
 
-function openLauncher(repoId = null) {
-  ui.launcherQuery = "";
-  ui.launcherTitle = "";
-  ui.launcherSelectedRepoId =
-    repoId ||
+function defaultSessionRepoId(explicitRepoId = null) {
+  return (
+    explicitRepoId ||
     currentRepoId() ||
+    ui.sidebarExpandedRepoId ||
+    state.sessions[0]?.repoID ||
     state.repos[0]?.id ||
-    null;
-  ui.launcherLaunchesClaudeOnStart = true;
-  renderLauncherDialog();
-  if (!launcherDialog.open) {
-    launcherDialog.showModal();
-  }
-  requestAnimationFrame(() => {
-    (document.getElementById("launcher-title") as HTMLInputElement | null)?.focus();
-  });
+    null
+  );
 }
 
-async function startLauncherSession() {
-  if (!ui.launcherSelectedRepoId) {
-    return;
+async function startDefaultClaudeSession(explicitRepoId = null) {
+  const repoId = defaultSessionRepoId(explicitRepoId);
+  if (!repoId) {
+    window.alert("Open a folder first.");
+    return null;
   }
 
-  launcherDialog.close();
-  await startSessionForRepo(
-    ui.launcherSelectedRepoId,
-    ui.launcherLaunchesClaudeOnStart,
-    ui.launcherTitle,
-    "terminal"
-  );
+  return startSessionForRepo(repoId, true, "terminal");
+}
+
+async function closeSessionById(sessionId) {
+  removeSessionFromWorkspace(sessionId, { persistSelection: false });
+  await api.closeSession(sessionId);
+
+  if (ui.selection.type === "session" && ui.selection.id === sessionId) {
+    const nextVisibleSessionId = workspaceVisibleSessionIds()[0] || null;
+    if (nextVisibleSessionId) {
+      await selectSession(nextVisibleSessionId, "main");
+    } else {
+      await selectInbox();
+    }
+  }
 }
 
 async function openSettings(initialTab = "general") {
@@ -3879,14 +3913,13 @@ function closeLazygitOverlay() {
 async function startSessionForRepo(
   repoId,
   launchesClaudeOnStart,
-  title,
   focusSection: SectionId = "terminal"
 ) {
   if (!repoId) {
     return null;
   }
 
-  const sessionId = await api.createSession(repoId, launchesClaudeOnStart, title || "");
+  const sessionId = await api.createSession(repoId, launchesClaudeOnStart);
   if (sessionId) {
     await selectSession(sessionId, focusSection);
   }
@@ -5852,7 +5885,6 @@ function hashSeed(value) {
 
 function isAnyDialogOpen() {
   return (
-    launcherDialog.open ||
     settingsDialog.open ||
     quickSwitcherDialog.open ||
     commandPaletteDialog.open ||
@@ -5942,21 +5974,54 @@ async function handleTerminalClipboardShortcut(event) {
   return false;
 }
 
+async function handleTerminalLineKillShortcut(event) {
+  const mount = activeTerminalMount();
+  if (!mount || terminalLineKillHandled(event)) {
+    return false;
+  }
+
+  if (ui.focusSection !== "terminal" && !isTerminalKeyboardTarget(event.target)) {
+    return false;
+  }
+
+  if (!isTerminalLineKillShortcut(event)) {
+    return false;
+  }
+
+  if (ui.selection.type !== "session") {
+    return false;
+  }
+
+  event.preventDefault();
+  markTerminalLineKillHandled(event);
+  await api.sendInput(ui.selection.id, "\u0015");
+  return true;
+}
+
 function handleTerminalCustomKeyEvent(event) {
   if (event.type !== "keydown") {
     return true;
   }
 
-  if (!isTerminalCopyShortcut(event) && !isTerminalPasteShortcut(event)) {
-    return true;
-  }
+  if (isTerminalLineKillShortcut(event)) {
+    if (terminalLineKillHandled(event)) {
+      return false;
+    }
 
-  if (terminalClipboardHandled(event)) {
+    void handleTerminalLineKillShortcut(event);
     return false;
   }
 
-  void handleTerminalClipboardShortcut(event);
-  return false;
+  if (isTerminalCopyShortcut(event) || isTerminalPasteShortcut(event)) {
+    if (terminalClipboardHandled(event)) {
+      return false;
+    }
+
+    void handleTerminalClipboardShortcut(event);
+    return false;
+  }
+
+  return true;
 }
 
 async function pasteClipboardIntoTerminal() {
@@ -6000,12 +6065,28 @@ function terminalClipboardHandled(event) {
   return !!(event as KeyboardEvent & { __claudeWorkspaceTerminalClipboardHandled?: boolean }).__claudeWorkspaceTerminalClipboardHandled;
 }
 
+function markTerminalLineKillHandled(event) {
+  (event as KeyboardEvent & { __claudeWorkspaceTerminalLineKillHandled?: boolean }).__claudeWorkspaceTerminalLineKillHandled = true;
+}
+
+function terminalLineKillHandled(event) {
+  return !!(event as KeyboardEvent & { __claudeWorkspaceTerminalLineKillHandled?: boolean }).__claudeWorkspaceTerminalLineKillHandled;
+}
+
 function isTerminalCopyShortcut(event) {
   return event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "c";
 }
 
 function isTerminalPasteShortcut(event) {
   return event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "v";
+}
+
+function isTerminalLineKillShortcut(event) {
+  return event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key === "Backspace";
+}
+
+function isOpenLauncherShortcut(event) {
+  return event.metaKey && !event.ctrlKey && !event.altKey && event.shiftKey && event.key.toLowerCase() === "a";
 }
 
 function isSectionNavigationKey(event: KeyboardEvent) {

@@ -1563,6 +1563,26 @@ textarea {
   min-width: 0;
 }
 
+.pane-title-input {
+  min-width: 0;
+  width: 220px;
+  max-width: min(30vw, 280px);
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--surface-active-border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pane-title-input:focus {
+  outline: none;
+  box-shadow:
+    0 0 0 1px var(--surface-active-border),
+    0 0 0 4px var(--focus-ring);
+}
+
 .pane-bar-right {
   display: flex;
   align-items: center;

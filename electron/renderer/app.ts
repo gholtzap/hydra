@@ -3338,9 +3338,25 @@ async function openLazygitOverlay(repoId: string | null) {
   if (!repoId) return;
   if (lazygitDialog.open) return;
 
-  const sessionId = await api.launchLazygit(repoId);
-  if (!sessionId) return;
+  const result = await api.launchLazygit(repoId);
+  if (!result) return;
 
+  if ("error" in result && result.error === "not-installed") {
+    const install = confirm(
+      "lazygit is not installed. Would you like to install it via Homebrew?"
+    );
+    if (!install) return;
+    const installSessionId = await api.installLazygit(repoId);
+    if (!installSessionId) return;
+    mountLazygitTerminalOverlay(installSessionId);
+    return;
+  }
+
+  if (!("sessionId" in result)) return;
+  mountLazygitTerminalOverlay(result.sessionId);
+}
+
+function mountLazygitTerminalOverlay(sessionId: string) {
   ui.lazygitSessionId = sessionId;
 
   // Buffer output that arrives before the terminal is mounted.

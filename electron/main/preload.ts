@@ -56,6 +56,10 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     ipcRenderer.invoke("wiki:readFile", { repoId, relativePath }),
   toggleWiki: (repoId, enabled) => ipcRenderer.invoke("wiki:toggle", { repoId, enabled }),
   revealWiki: (repoId) => ipcRenderer.invoke("wiki:reveal", repoId),
+  querySessionSearch: (repoId, query) =>
+    ipcRenderer.invoke("sessionSearch:query", { repoId, query }),
+  resumeFromClaudeSession: (repoId, claudeSessionId) =>
+    ipcRenderer.invoke("session:resumeFromClaude", { repoId, claudeSessionId }),
   readDirectory: (repoId) => ipcRenderer.invoke("fs:readDir", repoId),
   readFile: (filePath) => ipcRenderer.invoke("fs:readFile", filePath),
   onStateChanged: (callback) => {

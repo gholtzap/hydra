@@ -1,4 +1,5 @@
 const api = window.claudeWorkspace;
+let sessionSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 const SECTION_ORDER = ["sidebar", "sidebar-drawer", "main", "terminal"] as const;
 type SectionId = (typeof SECTION_ORDER)[number];
 const MAX_VISIBLE_SESSION_PANES = 4;
@@ -41,6 +42,16 @@ type FileTreeNode = {
   children?: FileTreeNode[];
 };
 
+type SessionSearchResult = {
+  source: "claude" | "codex";
+  filePath: string;
+  sessionId: string | null;
+  hydraSessionId?: string | null;
+  lineNumber: number | null;
+  preview: string;
+  title: string;
+};
+
 const state = {
   workspaces: [] as any[],
   repos: [] as any[],
@@ -59,6 +70,13 @@ const ui = {
   renamingSessionId: null as string | null,
   renamingSessionTitle: "",
   quickSwitcherQuery: "",
+  sessionSearchQuery: "",
+  sessionSearchRepoId: null as string | null,
+  sessionSearchResults: [] as SessionSearchResult[],
+  sessionSearchError: "",
+  sessionSearchLoading: false,
+  sessionSearchSelectedIndex: 0,
+  sessionSearchLoadId: 0,
   commandPaletteQuery: "",
   settingsTab: "general",
   settingsContext: null,
@@ -117,6 +135,7 @@ const detailElement = document.getElementById("detail") as HTMLElement;
 const appShellElement = document.getElementById("app-shell") as HTMLElement;
 const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogElement;
 const quickSwitcherDialog = document.getElementById("quick-switcher-dialog") as HTMLDialogElement;
+const sessionSearchDialog = document.getElementById("session-search-dialog") as HTMLDialogElement;
 const commandPaletteDialog = document.getElementById("command-palette-dialog") as HTMLDialogElement;
 const tokscaleDialog = document.getElementById("tokscale-dialog") as HTMLDialogElement;
 const lazygitDialog = document.getElementById("lazygit-dialog") as HTMLDialogElement;
@@ -262,6 +281,15 @@ api.onCommand(async ({ command, sessionId, repoId }) => {
       break;
     case "quick-switcher":
       openQuickSwitcher();
+      break;
+    case "search-session-files":
+      if (
+        isEditableTarget(document.activeElement as HTMLElement | null) ||
+        isTerminalKeyboardTarget(document.activeElement)
+      ) {
+        break;
+      }
+      openSessionSearch(repoId || currentRepoId() || state.repos[0]?.id || null);
       break;
     case "command-palette":
       openCommandPalette();
@@ -1765,6 +1793,7 @@ function renderRepoSession(session, repo) {
 
 function renderDialogs() {
   renderQuickSwitcherDialog();
+  renderSessionSearchDialog();
   renderCommandPaletteDialog();
   if (settingsDialog.open) {
     renderSettingsDialog();
@@ -1836,6 +1865,7 @@ function renderCommandPaletteDialog() {
     { id: "open-workspace", label: "Open Folder", action: "open-workspace" },
     { id: "create-project", label: "Create Folder", action: "create-project" },
     { id: "open-launcher", label: "New Session", action: "open-launcher" },
+    { id: "open-session-search", label: "Search Session Files", action: "open-session-search" },
     { id: "open-wiki", label: "Open Wiki", action: "open-wiki" },
     { id: "initialize-wiki", label: "Initialize Wiki", action: "initialize-wiki" },
     { id: "refresh-wiki", label: "Refresh Wiki", action: "refresh-wiki" },
@@ -1877,6 +1907,92 @@ function renderCommandPaletteDialog() {
       </div>
     </form>
   `;
+}
+
+function renderSessionSearchDialog() {
+  const repo = repoById(ui.sessionSearchRepoId || "");
+  const selectedResult = selectedSessionSearchResult();
+  const body = renderSessionSearchBody();
+
+  sessionSearchDialog.innerHTML = `
+    <form method="dialog" class="dialog-body">
+      <div class="dialog-header">
+        <div>
+          <div class="eyebrow">Session Search</div>
+          <h2 class="dialog-title">Search Claude and Codex session files</h2>
+          <div class="muted">${escapeHtml(repo ? abbreviateHome(repo.path) : "Select a project to search its session files.")}</div>
+        </div>
+        <button value="cancel">Close</button>
+      </div>
+      <input id="session-search-query" placeholder="Search this project's Claude and Codex sessions" value="${escapeAttribute(ui.sessionSearchQuery)}" />
+      <div class="dialog-panel">
+        <div class="section-label" style="display:flex;align-items:center;justify-content:space-between;">
+          <span>Matches</span>
+          ${ui.sessionSearchResults.length > 0 ? `<span class="session-search-kbd-hint"><span class="session-search-kbd">↑</span><span class="session-search-kbd">↓</span> navigate &nbsp;<span class="session-search-kbd">↵</span> open</span>` : ""}
+        </div>
+        <div class="dialog-list session-search-list">${body}</div>
+      </div>
+      ${
+        selectedResult
+          ? `
+            <div class="dialog-footer">
+              <button type="button" data-action="reveal-session-search-result" data-result-index="${ui.sessionSearchSelectedIndex}">Reveal File</button>
+              ${selectedResult.source === "claude" && selectedResult.sessionId ? `<button type="button" class="primary" data-action="resume-session-search-result" data-result-index="${ui.sessionSearchSelectedIndex}">Resume from here</button>` : ""}
+            </div>
+          `
+          : ""
+      }
+    </form>
+  `;
+}
+
+function renderSessionSearchBody() {
+  if (!ui.sessionSearchRepoId) {
+    return `<div class="empty-state">Open or select a project first.</div>`;
+  }
+
+  if (ui.sessionSearchError) {
+    return `<div class="empty-state">${escapeHtml(ui.sessionSearchError)}</div>`;
+  }
+
+  if (!ui.sessionSearchQuery.trim()) {
+    return `<div class="empty-state">Type to search only this project's Claude and Codex session files.</div>`;
+  }
+
+  if (ui.sessionSearchLoading) {
+    return `<div class="session-search-loading-state"><div class="session-search-spinner"></div>Searching session files…</div>`;
+  }
+
+  if (!ui.sessionSearchResults.length) {
+    return `<div class="empty-state">No matching session content found for this project.</div>`;
+  }
+
+  return ui.sessionSearchResults
+    .map((result, index) => {
+      const sourceLabel = result.source === "claude" ? "Claude" : "Codex";
+      const normalizedPreview = normalizeJsonlPreview(result.preview);
+      const canResume = result.source === "claude" && result.sessionId;
+      const shortId = result.sessionId ? result.sessionId.slice(0, 8) : null;
+      return `
+        <div
+          class="session-search-row ${index === ui.sessionSearchSelectedIndex ? "active" : ""}"
+          data-action="select-session-search-result"
+          data-result-index="${index}"
+        >
+          <div class="row-title">
+            <span>${escapeHtml(result.title)}</span>
+            <span class="session-search-source session-search-source-${escapeHtml(result.source)}">${escapeHtml(sourceLabel)}</span>
+          </div>
+          <div class="row-subtitle mono">${shortId ? escapeHtml(shortId) + " · " : ""}${escapeHtml(pathLeafLabel(result.filePath))}:${escapeHtml(String(result.lineNumber || 1))}</div>
+          <div class="row-meta">${escapeHtml(normalizedPreview)}</div>
+          <div class="session-search-actions">
+            <button type="button" data-action="reveal-session-search-result" data-result-index="${index}">Reveal</button>
+            ${canResume ? `<button type="button" class="primary" data-action="resume-session-search-result" data-result-index="${index}">Resume from here</button>` : ""}
+          </div>
+        </div>
+      `;
+    })
+    .join("");
 }
 
 async function renderSettingsDialog() {
@@ -2661,6 +2777,9 @@ async function handleClick(event) {
     case "open-settings":
       await openSettings(target.dataset.settingsTab || "general");
       break;
+    case "open-session-search":
+      openSessionSearch(target.dataset.repoId || currentRepoId() || state.repos[0]?.id || null);
+      break;
     case "open-workspace":
       await api.openWorkspaceFolder();
       break;
@@ -2754,6 +2873,19 @@ async function handleClick(event) {
       break;
     case "open-quick-switcher":
       openQuickSwitcher();
+      break;
+    case "open-session-search-result":
+      await activateSessionSearchResult(Number(target.dataset.resultIndex));
+      break;
+    case "resume-session-search-result":
+      await resumeFromSessionSearchResult(Number(target.dataset.resultIndex));
+      break;
+    case "select-session-search-result":
+      ui.sessionSearchSelectedIndex = Number(target.dataset.resultIndex) || 0;
+      renderSessionSearchDialog();
+      break;
+    case "reveal-session-search-result":
+      await revealSessionSearchResult(Number(target.dataset.resultIndex));
       break;
     case "refresh-port-status":
       await refreshPortStatus();
@@ -3136,6 +3268,12 @@ async function handleKeyDown(event) {
     return;
   }
 
+  if (sessionSearchDialog.open) {
+    if (await handleSessionSearchKeyDown(event)) {
+      return;
+    }
+  }
+
   if (isAnyDialogOpen()) {
     return;
   }
@@ -3240,6 +3378,12 @@ async function handleAppShortcut(event) {
     return false;
   }
 
+  if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
+    event.preventDefault();
+    openSessionSearch(currentRepoId() || state.repos[0]?.id || null);
+    return true;
+  }
+
   if (isOpenLauncherShortcut(event)) {
     event.preventDefault();
     await startDefaultClaudeSession();
@@ -3264,6 +3408,17 @@ async function handleInput(event) {
     case "quick-switcher-query":
       ui.quickSwitcherQuery = target.value;
       rerenderDialogInput(renderQuickSwitcherDialog, "quick-switcher-query", target);
+      break;
+    case "session-search-query":
+      ui.sessionSearchQuery = target.value;
+      rerenderDialogInput(renderSessionSearchDialog, "session-search-query", target);
+      if (sessionSearchDebounceTimer !== null) {
+        clearTimeout(sessionSearchDebounceTimer);
+      }
+      sessionSearchDebounceTimer = setTimeout(() => {
+        sessionSearchDebounceTimer = null;
+        void refreshSessionSearchResults();
+      }, 250);
       break;
     case "command-palette-query":
       ui.commandPaletteQuery = target.value;
@@ -3665,6 +3820,23 @@ function openQuickSwitcher() {
   if (!quickSwitcherDialog.open) {
     quickSwitcherDialog.showModal();
   }
+}
+
+function openSessionSearch(repoId: string | null) {
+  ui.sessionSearchRepoId = repoId;
+  ui.sessionSearchQuery = "";
+  ui.sessionSearchResults = [];
+  ui.sessionSearchError = "";
+  ui.sessionSearchLoading = false;
+  ui.sessionSearchSelectedIndex = 0;
+  ui.sessionSearchLoadId += 1;
+  renderSessionSearchDialog();
+  if (!sessionSearchDialog.open) {
+    sessionSearchDialog.showModal();
+  }
+
+  const input = document.getElementById("session-search-query") as HTMLInputElement | null;
+  input?.focus();
 }
 
 function openCommandPalette() {
@@ -5233,6 +5405,19 @@ function currentRepoId() {
   return null;
 }
 
+function selectedSessionSearchResult() {
+  if (!ui.sessionSearchResults.length) {
+    return null;
+  }
+
+  const index = Math.min(
+    Math.max(ui.sessionSearchSelectedIndex, 0),
+    ui.sessionSearchResults.length - 1
+  );
+  ui.sessionSearchSelectedIndex = index;
+  return ui.sessionSearchResults[index] || null;
+}
+
 function sidebarActionNavId(action) {
   return `action:${action}`;
 }
@@ -5887,6 +6072,7 @@ function isAnyDialogOpen() {
   return (
     settingsDialog.open ||
     quickSwitcherDialog.open ||
+    sessionSearchDialog.open ||
     commandPaletteDialog.open ||
     tokscaleDialog.open ||
     lazygitDialog.open
@@ -6055,6 +6241,211 @@ function isTerminalKeyboardTarget(target: EventTarget | null) {
     !!target.closest(".session-terminal-shell") ||
     !!target.closest(".xterm")
   );
+}
+
+async function refreshSessionSearchResults() {
+  const query = ui.sessionSearchQuery.trim();
+  const repoId = ui.sessionSearchRepoId;
+  const loadId = ++ui.sessionSearchLoadId;
+
+  if (!repoId) {
+    ui.sessionSearchResults = [];
+    ui.sessionSearchError = "Open or select a project first.";
+    ui.sessionSearchLoading = false;
+    renderSessionSearchDialogKeepFocus();
+    return;
+  }
+
+  if (!query) {
+    ui.sessionSearchResults = [];
+    ui.sessionSearchError = "";
+    ui.sessionSearchLoading = false;
+    ui.sessionSearchSelectedIndex = 0;
+    renderSessionSearchDialogKeepFocus();
+    return;
+  }
+
+  ui.sessionSearchLoading = true;
+  ui.sessionSearchError = "";
+  renderSessionSearchDialogKeepFocus();
+
+  const response = await api.querySessionSearch(repoId, query);
+  if (loadId !== ui.sessionSearchLoadId) {
+    return;
+  }
+
+  if (!response?.ok) {
+    ui.sessionSearchResults = [];
+    ui.sessionSearchError = response?.error || "Session search failed.";
+    ui.sessionSearchLoading = false;
+    ui.sessionSearchSelectedIndex = 0;
+    renderSessionSearchDialogKeepFocus();
+    return;
+  }
+
+  ui.sessionSearchResults = response.results || [];
+  ui.sessionSearchError = "";
+  ui.sessionSearchLoading = false;
+  ui.sessionSearchSelectedIndex = Math.min(
+    ui.sessionSearchSelectedIndex,
+    Math.max(ui.sessionSearchResults.length - 1, 0)
+  );
+  renderSessionSearchDialogKeepFocus();
+}
+
+async function handleSessionSearchKeyDown(event: KeyboardEvent) {
+  if (!sessionSearchDialog.open) {
+    return false;
+  }
+
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if (!ui.sessionSearchResults.length) {
+      return false;
+    }
+
+    event.preventDefault();
+    const delta = event.key === "ArrowDown" ? 1 : -1;
+    const lastIndex = ui.sessionSearchResults.length - 1;
+    ui.sessionSearchSelectedIndex = Math.max(
+      0,
+      Math.min(lastIndex, ui.sessionSearchSelectedIndex + delta)
+    );
+    renderSessionSearchDialog();
+    const input = document.getElementById("session-search-query") as HTMLInputElement | null;
+    input?.focus();
+    const activeRow = document.querySelector(".session-search-row.active");
+    activeRow?.scrollIntoView({ block: "nearest" });
+    return true;
+  }
+
+  if (event.key === "Enter") {
+    const target = event.target as HTMLElement | null;
+    if (target?.id === "session-search-query" || target?.closest(".session-search-row")) {
+      event.preventDefault();
+      await activateSessionSearchResult(ui.sessionSearchSelectedIndex);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function activateSessionSearchResult(index: number) {
+  const result = ui.sessionSearchResults[index];
+  if (!result) {
+    return;
+  }
+
+  if (result.source === "claude" && result.sessionId) {
+    await resumeFromSessionSearchResult(index);
+    return;
+  }
+
+  await api.revealPath(result.filePath);
+}
+
+async function resumeFromSessionSearchResult(index: number) {
+  const result = ui.sessionSearchResults[index];
+  if (!result || !ui.sessionSearchRepoId) {
+    return;
+  }
+
+  if (result.hydraSessionId) {
+    sessionSearchDialog.close();
+    await selectSession(result.hydraSessionId, sessionOpenFocusSection(sessionById(result.hydraSessionId)));
+    return;
+  }
+
+  if (result.source === "claude" && result.sessionId) {
+    sessionSearchDialog.close();
+    const newSessionId = await api.resumeFromClaudeSession(ui.sessionSearchRepoId, result.sessionId);
+    if (newSessionId) {
+      await selectSession(newSessionId, "terminal");
+    }
+    return;
+  }
+
+  await api.revealPath(result.filePath);
+}
+
+async function revealSessionSearchResult(index: number) {
+  const result = ui.sessionSearchResults[index];
+  if (!result) {
+    return;
+  }
+
+  await api.revealPath(result.filePath);
+}
+
+function pathLeafLabel(filePath: string) {
+  const normalized = filePath.replace(/\\/g, "/");
+  const parts = normalized.split("/");
+  return parts.slice(-2).join("/");
+}
+
+function normalizeJsonlPreview(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw);
+
+    // last-prompt record: {"type":"last-prompt","lastPrompt":"..."}
+    if (parsed?.lastPrompt) {
+      return String(parsed.lastPrompt).slice(0, 300).trim();
+    }
+
+    // custom-title record: {"type":"custom-title","customTitle":"..."}
+    if (parsed?.customTitle) {
+      return String(parsed.customTitle).slice(0, 300).trim();
+    }
+
+    // user / assistant message — message.content is string or array of blocks
+    const msgContent = parsed?.message?.content;
+    if (msgContent) {
+      if (typeof msgContent === "string") return msgContent.slice(0, 300).trim();
+      if (Array.isArray(msgContent)) {
+        for (const block of msgContent) {
+          if (block?.type === "text" && block?.text) {
+            return String(block.text).slice(0, 300).trim();
+          }
+          if (block?.type === "tool_result") {
+            const inner = typeof block.content === "string"
+              ? block.content
+              : Array.isArray(block.content)
+                ? block.content.find((b: any) => b?.type === "text")?.text
+                : null;
+            if (inner) return String(inner).slice(0, 300).trim();
+          }
+        }
+      }
+    }
+
+    // top-level content field (tool results, etc.)
+    if (parsed?.content) {
+      const c = parsed.content;
+      if (typeof c === "string") return c.slice(0, 300).trim();
+      if (Array.isArray(c)) {
+        const tp = c.find((b: any) => b?.type === "text" && b?.text);
+        if (tp?.text) return String(tp.text).slice(0, 300).trim();
+      }
+    }
+  } catch {
+    // not valid JSON
+  }
+  return raw.slice(0, 300).trim();
+}
+
+function renderSessionSearchDialogKeepFocus() {
+  const prev = document.getElementById("session-search-query") as HTMLInputElement | null;
+  const wasFocused = document.activeElement === prev;
+  const selStart = wasFocused && prev ? prev.selectionStart : null;
+  const selEnd = wasFocused && prev ? prev.selectionEnd : null;
+  renderSessionSearchDialog();
+  if (wasFocused) {
+    const next = document.getElementById("session-search-query") as HTMLInputElement | null;
+    next?.focus();
+    if (selStart !== null && selEnd !== null) {
+      next?.setSelectionRange(selStart, selEnd);
+    }
+  }
 }
 
 function markTerminalClipboardHandled(event) {

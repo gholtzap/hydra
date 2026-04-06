@@ -25,6 +25,7 @@ const {
   saveSettingsFile
 } = require("./claude-settings");
 const { inspectTrackedPorts } = require("./port-inspector");
+const { queryProjectSessions } = require("./session-search");
 const { loadState, saveState } = require("./state-store");
 const { PtyHostClient } = require("./pty-host-client");
 const {
@@ -198,6 +199,12 @@ class AppController {
       this.toggleProjectWiki(payload.repoId, payload.enabled)
     );
     ipcMain.handle("wiki:reveal", (_event, repoId) => this.revealProjectWiki(repoId));
+    ipcMain.handle("sessionSearch:query", (_event, payload) =>
+      this.querySessionFiles(payload.repoId, payload.query)
+    );
+    ipcMain.handle("session:resumeFromClaude", (_event, payload) =>
+      this.resumeFromClaudeSession(payload.repoId, payload.claudeSessionId)
+    );
     ipcMain.handle("fs:readDir", (_event, repoId) => {
       const repo = this.repoById(repoId);
       if (!repo) return null;
@@ -315,6 +322,11 @@ class AppController {
             label: "Quick Switcher",
             accelerator: "CmdOrCtrl+K",
             click: () => this.sendCommand("quick-switcher")
+          },
+          {
+            label: "Search Session Files",
+            accelerator: "CmdOrCtrl+F",
+            click: () => this.sendCommand("search-session-files")
           },
           {
             label: "Command Palette",
@@ -696,6 +708,66 @@ class AppController {
     return next ? next.id : null;
   }
 
+  querySessionFiles(repoId, query) {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      return {
+        ok: false,
+        error: "Select a project before searching session files.",
+        installCommand: "brew install fzf ripgrep",
+        missingTools: []
+      };
+    }
+
+    const response = queryProjectSessions(repo.path, query);
+    if (!response?.ok) {
+      return response;
+    }
+
+    return {
+      ...response,
+      results: response.results.map((result) => ({
+        ...result,
+        hydraSessionId: this.findHydraSessionIdForSearchResult(repo.id, result.sessionId)
+      }))
+    };
+  }
+
+  resumeFromClaudeSession(repoId, claudeSessionId) {
+    const repo = this.repoById(repoId);
+    if (!repo || !claudeSessionId) {
+      return null;
+    }
+
+    const sessionId = randomUUID();
+    const session = {
+      id: sessionId,
+      repoID: repoId,
+      title: repo.name,
+      initialPrompt: "",
+      launchesClaudeOnStart: true,
+      claudeSessionId,
+      status: "running",
+      runtimeState: "live",
+      blocker: null,
+      unreadCount: 0,
+      createdAt: now(),
+      updatedAt: now(),
+      lastActivityAt: null,
+      stoppedAt: null,
+      launchCount: 2,
+      transcript: "",
+      rawTranscript: ""
+    };
+
+    this.state.sessions.unshift(session);
+    this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(session.transcript));
+    this.launchRuntime(session, repo);
+    this.scheduleSave();
+    this.broadcastState();
+    return session.id;
+  }
+
   normalizeFolderRepos() {
     const reposByWorkspaceId = new Map();
 
@@ -760,6 +832,19 @@ class AppController {
 
     this.scheduleSave();
     this.broadcastState();
+  }
+
+  findHydraSessionIdForSearchResult(repoId, externalSessionId) {
+    if (!externalSessionId) {
+      return null;
+    }
+
+    const match = this.state.sessions.find((session) =>
+      session.repoID === repoId &&
+      (session.id === externalSessionId || session.claudeSessionId === externalSessionId)
+    );
+
+    return match ? match.id : null;
   }
 
   launchRuntime(session, repo) {

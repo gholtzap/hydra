@@ -20,6 +20,7 @@ type KeybindingAction =
   | "open-lazygit"
   | "open-tokscale"
   | "open-launcher"
+  | "search-project-sessions"
   | "navigate-section-left"
   | "navigate-section-right";
 
@@ -37,6 +38,7 @@ const DEFAULT_KEYBINDINGS: KeybindingMap = {
   "open-lazygit": "CmdOrCtrl+Shift+G",
   "open-tokscale": "CmdOrCtrl+Shift+T",
   "open-launcher": "CmdOrCtrl+C",
+  "search-project-sessions": "CmdOrCtrl+F",
   "navigate-section-left": "CmdOrCtrl+ArrowLeft",
   "navigate-section-right": "CmdOrCtrl+ArrowRight"
 };
@@ -53,6 +55,7 @@ const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   "open-lazygit": "Open Lazygit",
   "open-tokscale": "Open Token Usage",
   "open-launcher": "Open Launcher",
+  "search-project-sessions": "Search Project Sessions",
   "navigate-section-left": "Navigate Section Left",
   "navigate-section-right": "Navigate Section Right"
 };
@@ -4351,7 +4354,8 @@ async function handleAppShortcut(event) {
     return false;
   }
 
-  if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
+  const kb = getKeybindings();
+  if (matchesAccelerator(event, kb["search-project-sessions"])) {
     event.preventDefault();
     openSessionSearch(currentRepoId() || state.repos[0]?.id || null);
     return true;

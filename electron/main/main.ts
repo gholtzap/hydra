@@ -327,7 +327,7 @@ class AppController {
           },
           {
             label: "Search Session Files",
-            accelerator: "CmdOrCtrl+F",
+            accelerator: kb["search-project-sessions"],
             click: () => this.sendCommand("search-session-files")
           },
           {

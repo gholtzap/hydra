@@ -17,6 +17,7 @@ export type KeybindingAction =
   | "open-lazygit"
   | "open-tokscale"
   | "open-launcher"
+  | "search-project-sessions"
   | "navigate-section-left"
   | "navigate-section-right";
 
@@ -34,6 +35,7 @@ export const DEFAULT_KEYBINDINGS: KeybindingMap = {
   "open-lazygit": "CmdOrCtrl+Shift+G",
   "open-tokscale": "CmdOrCtrl+Shift+T",
   "open-launcher": "CmdOrCtrl+C",
+  "search-project-sessions": "CmdOrCtrl+F",
   "navigate-section-left": "CmdOrCtrl+ArrowLeft",
   "navigate-section-right": "CmdOrCtrl+ArrowRight"
 };
@@ -50,6 +52,7 @@ export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   "open-lazygit": "Open Lazygit",
   "open-tokscale": "Open Token Usage",
   "open-launcher": "Open Launcher",
+  "search-project-sessions": "Search Project Sessions",
   "navigate-section-left": "Navigate Section Left",
   "navigate-section-right": "Navigate Section Right"
 };

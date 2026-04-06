@@ -2032,6 +2032,10 @@ textarea {
   width: min(1120px, calc(100vw - 48px));
 }
 
+.app-dialog-session-search {
+  width: min(1320px, calc(100vw - 48px));
+}
+
 .app-dialog::backdrop {
   background: var(--dialog-backdrop);
   backdrop-filter: blur(10px);
@@ -2105,8 +2109,8 @@ textarea {
 }
 
 .session-search-list {
-  min-height: 280px;
-  max-height: 440px;
+  min-height: 360px;
+  max-height: 600px;
   overflow-y: auto;
   scroll-padding: 4px;
 }

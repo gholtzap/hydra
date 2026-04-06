@@ -289,7 +289,7 @@ function runListCommand(commandPath, args, stdinText = "") {
 }
 
 function claudeProjectKey(repoPath) {
-  return path.resolve(repoPath).replace(/[\\/]/g, "-");
+  return path.resolve(repoPath).replace(/[^a-zA-Z0-9]/g, "-");
 }
 
 function resolveCommandPath(command) {

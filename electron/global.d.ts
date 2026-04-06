@@ -38,8 +38,7 @@ interface ClaudeWorkspaceApi {
   onCommand: (
     callback: (payload: { command: string; sessionId?: string; repoId?: string }) => void
   ) => Unsubscribe;
-  launchLazygit: (repoId: string) => Promise<{ sessionId: string } | { error: string } | null>;
-  installLazygit: (repoId: string) => Promise<string | null>;
+  launchLazygit: (repoId: string) => Promise<string | null>;
   closeLazygit: (sessionId: string) => Promise<any>;
   sendLazygitInput: (sessionId: string, data: string) => Promise<any>;
   sendLazygitBinaryInput: (sessionId: string, data: string) => Promise<any>;

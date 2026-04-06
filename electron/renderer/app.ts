@@ -45,7 +45,8 @@ const state = {
   workspaces: [] as any[],
   repos: [] as any[],
   sessions: [] as any[],
-  preferences: {} as Record<string, any>
+  preferences: {} as Record<string, any>,
+  lazygitInstalled: false
 };
 
 const ui = {
@@ -328,6 +329,7 @@ function replaceState(nextState) {
   state.repos = nextState.repos || [];
   state.sessions = nextState.sessions || [];
   state.preferences = nextState.preferences || {};
+  state.lazygitInstalled = !!nextState.lazygitInstalled;
   syncStoredSessionWorkspaceLayout();
   if (ui.sidebarExpandedRepoId && !repoById(ui.sidebarExpandedRepoId)) {
     ui.sidebarExpandedRepoId = null;
@@ -3338,25 +3340,19 @@ async function openLazygitOverlay(repoId: string | null) {
   if (!repoId) return;
   if (lazygitDialog.open) return;
 
-  const result = await api.launchLazygit(repoId);
-  if (!result) return;
-
-  if ("error" in result && result.error === "not-installed") {
-    const install = confirm(
-      "lazygit is not installed. Would you like to install it via Homebrew?"
-    );
-    if (!install) return;
-    const installSessionId = await api.installLazygit(repoId);
-    if (!installSessionId) return;
-    mountLazygitTerminalOverlay(installSessionId);
+  if (!state.lazygitInstalled) {
+    const host = document.getElementById("lazygit-terminal-host") as HTMLElement;
+    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-family:var(--font-mono);font-size:14px;flex-direction:column;gap:8px;">
+      <span>lazygit is not installed</span>
+      <code style="color:var(--text);background:var(--surface);padding:4px 10px;border-radius:6px;font-size:13px;">brew install lazygit</code>
+    </div>`;
+    lazygitDialog.showModal();
     return;
   }
 
-  if (!("sessionId" in result)) return;
-  mountLazygitTerminalOverlay(result.sessionId);
-}
+  const sessionId = await api.launchLazygit(repoId);
+  if (!sessionId) return;
 
-function mountLazygitTerminalOverlay(sessionId: string) {
   ui.lazygitSessionId = sessionId;
 
   // Buffer output that arrives before the terminal is mounted.

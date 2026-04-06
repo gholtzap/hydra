@@ -78,7 +78,6 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     return () => ipcRenderer.removeListener("app:command", listener);
   },
   launchLazygit: (repoId) => ipcRenderer.invoke("lazygit:launch", { repoId }),
-  installLazygit: (repoId) => ipcRenderer.invoke("lazygit:install", { repoId }),
   closeLazygit: (sessionId) => ipcRenderer.invoke("lazygit:close", { sessionId }),
   sendLazygitInput: (sessionId, data) =>
     ipcRenderer.invoke("lazygit:input", { sessionId, data }),

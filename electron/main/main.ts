@@ -1,5 +1,6 @@
 import type { BrowserWindow as ElectronBrowserWindow } from "electron";
 
+const { execSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
@@ -99,6 +100,7 @@ class AppController {
   blockerClearStreaks: Map<string, number>;
   ptyHost: any;
   ephemeralSessions: Map<string, { repoId: string }>;
+  lazygitPath: string | null;
 
   constructor() {
     this.state = loadState();
@@ -113,6 +115,7 @@ class AppController {
     this.signalBuffers = new Map();
     this.blockerClearStreaks = new Map();
     this.ephemeralSessions = new Map();
+    this.lazygitPath = resolveCommandPath("lazygit");
     this.normalizeFolderRepos();
     this.repairStoredTranscripts();
     this.ptyHost = new PtyHostClient();
@@ -196,7 +199,6 @@ class AppController {
       return { path: repo.path, tree: buildFileTree(repo.path, repo.path, 0) };
     });
     ipcMain.handle("lazygit:launch", (_event, p) => this.createLazygitSession(p.repoId));
-    ipcMain.handle("lazygit:install", (_event, p) => this.installLazygit(p.repoId));
     ipcMain.handle("lazygit:close", (_event, p) => this.closeLazygitSession(p.sessionId));
     ipcMain.handle("lazygit:input", (_event, p) => {
       if (this.ephemeralSessions.has(p.sessionId)) this.ptyHost.sendInput(p.sessionId, p.data);
@@ -334,6 +336,7 @@ class AppController {
   snapshot() {
     return structuredClone({
       ...this.state,
+      lazygitInstalled: this.lazygitPath !== null,
       workspaces: [...this.state.workspaces].sort((left, right) =>
         left.name.localeCompare(right.name)
       ),
@@ -716,44 +719,15 @@ class AppController {
     });
   }
 
-  resolvedLazygitPath() {
-    for (const p of ["/opt/homebrew/bin/lazygit", "/usr/local/bin/lazygit"]) {
-      if (fs.existsSync(p)) return p;
-    }
-    try {
-      const { spawnSync } = require("node:child_process");
-      const { status, stdout } = spawnSync("which", ["lazygit"], { encoding: "utf-8", timeout: 3000 });
-      if (status === 0 && stdout.trim()) return stdout.trim();
-    } catch {}
-    return null;
-  }
-
   createLazygitSession(repoId) {
     const repo = this.repoById(repoId);
-    if (!repo) return null;
-
-    const lazygitBin = this.resolvedLazygitPath();
-    if (!lazygitBin) return { error: "not-installed" };
-
+    if (!repo || !this.lazygitPath) return null;
     const sessionId = randomUUID();
     this.ephemeralSessions.set(sessionId, { repoId });
     this.ptyHost.createSession({
       sessionId,
       cwd: repo.path,
-      command: [lazygitBin]
-    });
-    return { sessionId };
-  }
-
-  installLazygit(repoId) {
-    const repo = this.repoById(repoId);
-    if (!repo) return null;
-    const sessionId = randomUUID();
-    this.ephemeralSessions.set(sessionId, { repoId });
-    this.ptyHost.createSession({
-      sessionId,
-      cwd: repo.path,
-      command: ["brew", "install", "lazygit"]
+      command: [this.lazygitPath]
     });
     return sessionId;
   }
@@ -1189,6 +1163,34 @@ function rebuildTranscript(session) {
 function resolvedShellPath(preferences) {
   const candidate = preferences.shellExecutablePath?.trim();
   return candidate || process.env.SHELL || "/bin/zsh";
+}
+
+function resolveCommandPath(command) {
+  // Electron doesn't inherit the user's shell PATH, so `which` may miss
+  // binaries installed via Homebrew or other package managers.
+  // Try `which` first, then check well-known paths directly.
+  try {
+    return execSync(`which ${command}`, { stdio: ["ignore", "pipe", "ignore"], encoding: "utf-8" }).trim();
+  } catch {
+    // which failed — check well-known paths directly
+  }
+  const searchPaths = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+    path.join(process.env.HOME || "", ".local/bin")
+  ];
+  for (const dir of searchPaths) {
+    const fullPath = path.join(dir, command);
+    try {
+      fs.accessSync(fullPath, fs.constants.X_OK);
+      return fullPath;
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 function resolvedClaudeCommand(preferences, session) {

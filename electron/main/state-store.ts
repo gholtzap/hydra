@@ -8,7 +8,8 @@ const DEFAULT_PREFERENCES = {
   notificationsEnabled: true,
   showInAppBadges: true,
   showNativeNotifications: true,
-  sessionWorkspaceLayout: null
+  sessionWorkspaceLayout: null,
+  keybindings: {}
 };
 
 function loadState() {

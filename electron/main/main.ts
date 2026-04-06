@@ -27,6 +27,7 @@ const {
 const { inspectTrackedPorts } = require("./port-inspector");
 const { queryProjectSessions } = require("./session-search");
 const { loadState, saveState } = require("./state-store");
+const { resolveKeybindings } = require("./keybindings");
 const { PtyHostClient } = require("./pty-host-client");
 const {
   disableWiki,
@@ -248,6 +249,7 @@ class AppController {
   }
 
   setupMenu() {
+    const kb = resolveKeybindings(this.state.preferences.keybindings);
     const template = [
       {
         label: "Claude Workspace",
@@ -262,17 +264,17 @@ class AppController {
         submenu: [
           {
             label: "Open Folder",
-            accelerator: "CmdOrCtrl+O",
+            accelerator: kb["open-folder"],
             click: () => this.openWorkspaceFolder()
           },
           {
             label: "Create Folder",
-            accelerator: "CmdOrCtrl+Shift+N",
+            accelerator: kb["create-folder"],
             click: () => this.createProjectFolder()
           },
           {
             label: "New Session",
-            accelerator: "CmdOrCtrl+Shift+A",
+            accelerator: kb["new-session"],
             click: () => this.sendCommand("new-session")
           },
           {
@@ -280,7 +282,7 @@ class AppController {
           },
           {
             label: "New Session (Cmd+N)",
-            accelerator: "CmdOrCtrl+N",
+            accelerator: kb["new-session-alt"],
             click: () => this.sendCommand("new-session")
           }
         ]
@@ -290,7 +292,7 @@ class AppController {
         submenu: [
           {
             label: "Open Wiki",
-            accelerator: "CmdOrCtrl+Shift+W",
+            accelerator: kb["open-wiki"],
             click: () => this.sendCommand("open-wiki")
           },
           {
@@ -320,7 +322,7 @@ class AppController {
         submenu: [
           {
             label: "Quick Switcher",
-            accelerator: "CmdOrCtrl+K",
+            accelerator: kb["quick-switcher"],
             click: () => this.sendCommand("quick-switcher")
           },
           {
@@ -330,22 +332,22 @@ class AppController {
           },
           {
             label: "Command Palette",
-            accelerator: "CmdOrCtrl+Shift+P",
+            accelerator: kb["command-palette"],
             click: () => this.sendCommand("command-palette")
           },
           {
             label: "Next Unread Session",
-            accelerator: "CmdOrCtrl+]",
+            accelerator: kb["next-unread"],
             click: () => this.sendCommand("next-unread")
           },
           {
             label: "Open Lazygit",
-            accelerator: "CmdOrCtrl+Shift+G",
+            accelerator: kb["open-lazygit"],
             click: () => this.sendCommand("open-lazygit")
           },
           {
             label: "Open Token Usage",
-            accelerator: "CmdOrCtrl+Shift+T",
+            accelerator: kb["open-tokscale"],
             click: () => this.sendCommand("open-tokscale")
           }
         ]
@@ -829,6 +831,10 @@ class AppController {
       ...this.state.preferences,
       ...patch
     };
+
+    if (patch.keybindings) {
+      this.setupMenu();
+    }
 
     this.scheduleSave();
     this.broadcastState();

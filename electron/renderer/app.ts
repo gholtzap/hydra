@@ -4,6 +4,157 @@ const SECTION_ORDER = ["sidebar", "sidebar-drawer", "main", "terminal"] as const
 type SectionId = (typeof SECTION_ORDER)[number];
 const MAX_VISIBLE_SESSION_PANES = 4;
 
+// ---------------------------------------------------------------------------
+// Keybinding configuration
+// ---------------------------------------------------------------------------
+
+type KeybindingAction =
+  | "open-folder"
+  | "create-folder"
+  | "new-session"
+  | "new-session-alt"
+  | "open-wiki"
+  | "quick-switcher"
+  | "command-palette"
+  | "next-unread"
+  | "open-lazygit"
+  | "open-tokscale"
+  | "open-launcher"
+  | "navigate-section-left"
+  | "navigate-section-right";
+
+type KeybindingMap = Record<KeybindingAction, string>;
+
+const DEFAULT_KEYBINDINGS: KeybindingMap = {
+  "open-folder": "CmdOrCtrl+O",
+  "create-folder": "CmdOrCtrl+Shift+N",
+  "new-session": "CmdOrCtrl+Shift+A",
+  "new-session-alt": "CmdOrCtrl+N",
+  "open-wiki": "CmdOrCtrl+Shift+W",
+  "quick-switcher": "CmdOrCtrl+K",
+  "command-palette": "CmdOrCtrl+Shift+P",
+  "next-unread": "CmdOrCtrl+]",
+  "open-lazygit": "CmdOrCtrl+Shift+G",
+  "open-tokscale": "CmdOrCtrl+Shift+T",
+  "open-launcher": "CmdOrCtrl+C",
+  "navigate-section-left": "CmdOrCtrl+ArrowLeft",
+  "navigate-section-right": "CmdOrCtrl+ArrowRight"
+};
+
+const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
+  "open-folder": "Open Folder",
+  "create-folder": "Create Folder",
+  "new-session": "New Session",
+  "new-session-alt": "New Session (Alt)",
+  "open-wiki": "Open Wiki",
+  "quick-switcher": "Quick Switcher",
+  "command-palette": "Command Palette",
+  "next-unread": "Next Unread Session",
+  "open-lazygit": "Open Lazygit",
+  "open-tokscale": "Open Token Usage",
+  "open-launcher": "Open Launcher",
+  "navigate-section-left": "Navigate Section Left",
+  "navigate-section-right": "Navigate Section Right"
+};
+
+const ALL_KEYBINDING_ACTIONS: KeybindingAction[] = Object.keys(DEFAULT_KEYBINDINGS) as KeybindingAction[];
+
+function getKeybindings(): KeybindingMap {
+  return { ...DEFAULT_KEYBINDINGS, ...(state.preferences.keybindings || {}) };
+}
+
+function matchesAccelerator(event: KeyboardEvent, accelerator: string): boolean {
+  const parts = accelerator.split("+").map((p) => p.toLowerCase());
+  let needsMeta = false;
+  let needsCtrl = false;
+  let needsShift = false;
+  let needsAlt = false;
+  let targetKey = "";
+
+  for (const part of parts) {
+    if (part === "cmdorctrl" || part === "commandorcontrol") {
+      if (/mac/i.test(navigator.platform)) {
+        needsMeta = true;
+      } else {
+        needsCtrl = true;
+      }
+    } else if (part === "cmd" || part === "command" || part === "meta") {
+      needsMeta = true;
+    } else if (part === "ctrl" || part === "control") {
+      needsCtrl = true;
+    } else if (part === "shift") {
+      needsShift = true;
+    } else if (part === "alt" || part === "option") {
+      needsAlt = true;
+    } else {
+      targetKey = part;
+    }
+  }
+
+  if (event.metaKey !== needsMeta) return false;
+  if (event.ctrlKey !== needsCtrl) return false;
+  if (event.shiftKey !== needsShift) return false;
+  if (event.altKey !== needsAlt) return false;
+
+  const eventKey = event.key.toLowerCase();
+  if (targetKey === "arrowleft") return eventKey === "arrowleft";
+  if (targetKey === "arrowright") return eventKey === "arrowright";
+  if (targetKey === "arrowup") return eventKey === "arrowup";
+  if (targetKey === "arrowdown") return eventKey === "arrowdown";
+  if (targetKey === "enter" || targetKey === "return") return eventKey === "enter";
+  if (targetKey === "escape") return eventKey === "escape";
+  if (targetKey === "backspace" || targetKey === "delete") return eventKey === "backspace";
+  if (targetKey === "tab") return eventKey === "tab";
+  if (targetKey === "space") return eventKey === " ";
+  if (targetKey === "]") return eventKey === "]";
+  if (targetKey === "[") return eventKey === "[";
+
+  return eventKey === targetKey;
+}
+
+function formatAccelerator(accelerator: string): string {
+  const isMac = /mac/i.test(navigator.platform);
+  const parts = accelerator.split("+");
+  const display: string[] = [];
+
+  for (const part of parts) {
+    const normalized = part.toLowerCase();
+    if (normalized === "cmdorctrl" || normalized === "commandorcontrol") {
+      display.push(isMac ? "\u2318" : "Ctrl");
+    } else if (normalized === "cmd" || normalized === "command" || normalized === "meta") {
+      display.push(isMac ? "\u2318" : "Win");
+    } else if (normalized === "ctrl" || normalized === "control") {
+      display.push(isMac ? "\u2303" : "Ctrl");
+    } else if (normalized === "shift") {
+      display.push(isMac ? "\u21E7" : "Shift");
+    } else if (normalized === "alt" || normalized === "option") {
+      display.push(isMac ? "\u2325" : "Alt");
+    } else if (normalized === "arrowleft") {
+      display.push("\u2190");
+    } else if (normalized === "arrowright") {
+      display.push("\u2192");
+    } else if (normalized === "arrowup") {
+      display.push("\u2191");
+    } else if (normalized === "arrowdown") {
+      display.push("\u2193");
+    } else if (normalized === "enter" || normalized === "return") {
+      display.push("\u21A9");
+    } else if (normalized === "escape") {
+      display.push("Esc");
+    } else if (normalized === "backspace" || normalized === "delete") {
+      display.push(isMac ? "\u232B" : "Backspace");
+    } else if (normalized === "tab") {
+      display.push(isMac ? "\u21E5" : "Tab");
+    } else if (normalized === "space") {
+      display.push("Space");
+    } else {
+      display.push(part.length === 1 ? part.toUpperCase() : part);
+    }
+  }
+
+  return isMac ? display.join("") : display.join("+");
+}
+
 type WorkspaceSplitAxis = "row" | "column";
 type WorkspaceDropZone = "center" | "left" | "right" | "top" | "bottom";
 
@@ -127,7 +278,8 @@ const ui = {
   lazygitSessionId: null as string | null,
   lazygitTerminalMount: null as TerminalMount | null,
   lazygitUnsubOutput: null as (() => void) | null,
-  lazygitUnsubExit: null as (() => void) | null
+  lazygitUnsubExit: null as (() => void) | null,
+  keybindingRecordingAction: null as KeybindingAction | null
 };
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
@@ -1860,6 +2012,22 @@ function renderQuickSwitcherDialog() {
   `;
 }
 
+function commandPaletteShortcutForAction(action: string): string | null {
+  const kb = getKeybindings();
+  const actionToKeybinding: Record<string, KeybindingAction> = {
+    "open-workspace": "open-folder",
+    "create-project": "create-folder",
+    "open-launcher": "new-session",
+    "open-wiki": "open-wiki",
+    "open-quick-switcher": "quick-switcher",
+    "open-tokscale": "open-tokscale",
+    "next-unread": "next-unread",
+    "open-lazygit": "open-lazygit"
+  };
+  const keybindingAction = actionToKeybinding[action];
+  return keybindingAction ? formatAccelerator(kb[keybindingAction]) : null;
+}
+
 function renderCommandPaletteDialog() {
   const commands = [
     { id: "open-workspace", label: "Open Folder", action: "open-workspace" },
@@ -1884,6 +2052,19 @@ function renderCommandPaletteDialog() {
     !normalized || command.label.toLowerCase().includes(normalized)
   );
 
+  // Build command rows safely — labels and shortcuts come from internal constants,
+  // not user input, so the escapeHtml calls here are a defence-in-depth measure.
+  const rows = filtered.map((command) => {
+    const shortcut = commandPaletteShortcutForAction(command.action);
+    const shortcutHtml = shortcut
+      ? `<kbd class="shortcut-hint">${escapeHtml(shortcut)}</kbd>`
+      : "";
+    return `<button type="button" class="command-row" data-action="${command.action}">
+              <div class="row-title">${escapeHtml(command.label)}</div>
+              ${shortcutHtml}
+            </button>`;
+  });
+
   commandPaletteDialog.innerHTML = `
     <form method="dialog" class="dialog-body">
       <div class="dialog-header">
@@ -1895,15 +2076,7 @@ function renderCommandPaletteDialog() {
       </div>
       <input id="command-palette-query" placeholder="Search commands" value="${escapeAttribute(ui.commandPaletteQuery)}" />
       <div class="dialog-list">
-        ${filtered
-          .map(
-            (command) => `
-              <button type="button" class="command-row" data-action="${command.action}">
-                <div class="row-title">${escapeHtml(command.label)}</div>
-              </button>
-            `
-          )
-          .join("")}
+        ${rows.join("")}
       </div>
     </form>
   `;
@@ -2024,13 +2197,16 @@ async function renderSettingsDialog() {
 
       <div class="settings-tabs">
         <button type="button" class="settings-tab ${ui.settingsTab === "general" ? "active" : ""}" data-action="settings-tab" data-tab="general">General</button>
+        <button type="button" class="settings-tab ${ui.settingsTab === "keybindings" ? "active" : ""}" data-action="settings-tab" data-tab="keybindings">Keybindings</button>
         <button type="button" class="settings-tab ${ui.settingsTab === "claude" ? "active" : ""}" data-action="settings-tab" data-tab="claude">Agent Files</button>
       </div>
 
       ${
         ui.settingsTab === "general"
           ? renderGeneralSettingsPane()
-          : renderClaudeSettingsPane()
+          : ui.settingsTab === "keybindings"
+            ? renderKeybindingsSettingsPane()
+            : renderClaudeSettingsPane()
       }
     </form>
   `;
@@ -2063,6 +2239,38 @@ function renderGeneralSettingsPane() {
         <input type="checkbox" id="pref-in-app-badges" ${state.preferences.showInAppBadges ? "checked" : ""} />
         <span>Show In-App Badges</span>
       </label>
+    </div>
+  `;
+}
+
+function renderKeybindingsSettingsPane() {
+  const kb = getKeybindings();
+  // Build rows safely — all labels come from internal KEYBINDING_LABELS constant
+  // and accelerator values are either from DEFAULT_KEYBINDINGS or user preferences.
+  const rows = ALL_KEYBINDING_ACTIONS.map((action) => {
+    const label = KEYBINDING_LABELS[action];
+    const current = kb[action];
+    const isCustom = !!(state.preferences.keybindings && state.preferences.keybindings[action]);
+    const isRecording = ui.keybindingRecordingAction === action;
+
+    return `<div class="keybinding-row">
+        <div class="keybinding-label">${escapeHtml(label)}</div>
+        <div class="keybinding-value">
+          <button type="button" class="keybinding-key ${isRecording ? "recording" : ""} ${isCustom ? "custom" : ""}"
+            data-action="record-keybinding" data-keybinding-action="${action}">
+            ${isRecording ? "Press keys..." : escapeHtml(formatAccelerator(current))}
+          </button>
+          ${isCustom ? `<button type="button" class="keybinding-reset" data-action="reset-keybinding" data-keybinding-action="${action}" title="Reset to default">Reset</button>` : ""}
+        </div>
+      </div>`;
+  });
+
+  return `
+    <div class="dialog-panel keybindings-panel">
+      <div class="muted">Click a shortcut to record a new binding. Press Escape to cancel.</div>
+      <div class="keybinding-list">
+        ${rows.join("")}
+      </div>
     </div>
   `;
 }
@@ -2916,8 +3124,23 @@ async function handleClick(event) {
       break;
     case "settings-tab":
       ui.settingsTab = target.dataset.tab;
+      ui.keybindingRecordingAction = null;
       await renderSettingsDialog();
       break;
+    case "record-keybinding":
+      ui.keybindingRecordingAction = (target.dataset.keybindingAction || null) as KeybindingAction | null;
+      await renderSettingsDialog();
+      break;
+    case "reset-keybinding": {
+      const actionToReset = target.dataset.keybindingAction as KeybindingAction;
+      if (actionToReset) {
+        const currentOverrides = { ...(state.preferences.keybindings || {}) };
+        delete currentOverrides[actionToReset];
+        await api.updatePreferences({ keybindings: currentOverrides });
+      }
+      await renderSettingsDialog();
+      break;
+    }
     case "settings-select-file":
       await loadSelectedSettingsFile(target.dataset.filePath);
       await renderSettingsDialog();
@@ -3253,7 +3476,66 @@ async function handleContextMenu(event) {
   await api.showRepoContextMenu(repoId, { x: event.clientX, y: event.clientY });
 }
 
+function keyboardEventToAccelerator(event: KeyboardEvent): string | null {
+  // Only record when a non-modifier key is pressed
+  const modifierKeys = new Set(["shift", "control", "alt", "meta", "os"]);
+  if (modifierKeys.has(event.key.toLowerCase())) return null;
+
+  const parts: string[] = [];
+  const isMac = /mac/i.test(navigator.platform);
+
+  if (event.metaKey) parts.push(isMac ? "CmdOrCtrl" : "Meta");
+  if (event.ctrlKey) parts.push(isMac ? "Ctrl" : "CmdOrCtrl");
+  if (event.shiftKey) parts.push("Shift");
+  if (event.altKey) parts.push("Alt");
+
+  // Require at least one modifier
+  if (parts.length === 0) return null;
+
+  const key = event.key;
+  if (key === "ArrowLeft") parts.push("ArrowLeft");
+  else if (key === "ArrowRight") parts.push("ArrowRight");
+  else if (key === "ArrowUp") parts.push("ArrowUp");
+  else if (key === "ArrowDown") parts.push("ArrowDown");
+  else if (key === "Enter") parts.push("Enter");
+  else if (key === "Escape") return null; // Escape cancels recording
+  else if (key === "Backspace") parts.push("Backspace");
+  else if (key === "Tab") parts.push("Tab");
+  else if (key === " ") parts.push("Space");
+  else if (key.length === 1) parts.push(key.toUpperCase());
+  else parts.push(key);
+
+  return parts.join("+");
+}
+
 async function handleKeyDown(event) {
+  // Handle keybinding recording when the settings dialog is open
+  if (ui.keybindingRecordingAction) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.key === "Escape") {
+      ui.keybindingRecordingAction = null;
+      await renderSettingsDialog();
+      return;
+    }
+
+    const accelerator = keyboardEventToAccelerator(event);
+    if (accelerator) {
+      const currentOverrides = { ...(state.preferences.keybindings || {}) };
+      // If it matches the default, remove the override instead
+      if (accelerator === DEFAULT_KEYBINDINGS[ui.keybindingRecordingAction]) {
+        delete currentOverrides[ui.keybindingRecordingAction];
+      } else {
+        currentOverrides[ui.keybindingRecordingAction] = accelerator;
+      }
+      await api.updatePreferences({ keybindings: currentOverrides });
+      ui.keybindingRecordingAction = null;
+      await renderSettingsDialog();
+    }
+    return;
+  }
+
   const renameInput = (event.target as HTMLElement | null)?.closest(
     '[data-session-rename-input="true"]'
   ) as HTMLInputElement | null;
@@ -3282,8 +3564,10 @@ async function handleKeyDown(event) {
     return;
   }
 
-  if (isSectionNavigationKey(event)) {
-    const direction = event.key === "ArrowLeft" ? -1 : 1;
+  const kb = getKeybindings();
+
+  if (matchesAccelerator(event, kb["navigate-section-left"]) || matchesAccelerator(event, kb["navigate-section-right"])) {
+    const direction = matchesAccelerator(event, kb["navigate-section-left"]) ? -1 : 1;
     const handledSessionNavigation = await handleSessionWorkspaceSectionNavigation(direction);
     if (handledSessionNavigation) {
       event.preventDefault();
@@ -3307,11 +3591,7 @@ async function handleKeyDown(event) {
   }
 
   if (
-    event.metaKey &&
-    !event.ctrlKey &&
-    !event.altKey &&
-    !event.shiftKey &&
-    event.key.toLowerCase() === "c" &&
+    matchesAccelerator(event, kb["open-launcher"]) &&
     (ui.focusSection === "sidebar" || ui.focusSection === "sidebar-drawer")
   ) {
     const repoId = currentRepoId();
@@ -6477,14 +6757,8 @@ function isTerminalLineKillShortcut(event) {
 }
 
 function isOpenLauncherShortcut(event) {
-  return event.metaKey && !event.ctrlKey && !event.altKey && event.shiftKey && event.key.toLowerCase() === "a";
-}
-
-function isSectionNavigationKey(event: KeyboardEvent) {
-  const hasModifier = event.metaKey || event.ctrlKey;
-  return hasModifier && !event.altKey && event.key !== "ArrowUp" && event.key !== "ArrowDown"
-    ? event.key === "ArrowLeft" || event.key === "ArrowRight"
-    : false;
+  const kb = getKeybindings();
+  return matchesAccelerator(event, kb["new-session"]);
 }
 
 function statusLabel(status) {

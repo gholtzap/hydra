@@ -3343,7 +3343,7 @@ async function openLazygitOverlay(repoId: string | null) {
   if (!state.lazygitInstalled) {
     const host = document.getElementById("lazygit-terminal-host") as HTMLElement;
     host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-family:var(--font-mono);font-size:14px;flex-direction:column;gap:8px;">
-      <span>lazygit is not installed</span>
+      <span>lazygit is not installed. Install lazygit and launch app again. </span>
       <code style="color:var(--text);background:var(--surface);padding:4px 10px;border-radius:6px;font-size:13px;">brew install lazygit</code>
     </div>`;
     lazygitDialog.showModal();

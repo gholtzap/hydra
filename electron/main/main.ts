@@ -98,6 +98,7 @@ class AppController {
   signalBuffers: Map<string, string>;
   blockerClearStreaks: Map<string, number>;
   ptyHost: any;
+  ephemeralSessions: Map<string, { repoId: string }>;
 
   constructor() {
     this.state = loadState();
@@ -111,6 +112,7 @@ class AppController {
     this.terminalBuffers = new Map();
     this.signalBuffers = new Map();
     this.blockerClearStreaks = new Map();
+    this.ephemeralSessions = new Map();
     this.normalizeFolderRepos();
     this.repairStoredTranscripts();
     this.ptyHost = new PtyHostClient();
@@ -192,6 +194,18 @@ class AppController {
       const repo = this.repoById(repoId);
       if (!repo) return null;
       return { path: repo.path, tree: buildFileTree(repo.path, repo.path, 0) };
+    });
+    ipcMain.handle("lazygit:launch", (_event, p) => this.createLazygitSession(p.repoId));
+    ipcMain.handle("lazygit:close", (_event, p) => this.closeLazygitSession(p.sessionId));
+    ipcMain.handle("lazygit:input", (_event, p) => {
+      if (this.ephemeralSessions.has(p.sessionId)) this.ptyHost.sendInput(p.sessionId, p.data);
+    });
+    ipcMain.handle("lazygit:binaryInput", (_event, p) => {
+      if (this.ephemeralSessions.has(p.sessionId)) this.ptyHost.sendInput(p.sessionId, p.data);
+    });
+    ipcMain.handle("lazygit:resize", (_event, p) => {
+      if (this.ephemeralSessions.has(p.sessionId))
+        this.ptyHost.resizeSession(p.sessionId, p.cols, p.rows);
     });
     ipcMain.handle("fs:readFile", (_event, filePath) => {
       try {
@@ -283,6 +297,11 @@ class AppController {
             label: "Next Unread Session",
             accelerator: "CmdOrCtrl+]",
             click: () => this.sendCommand("next-unread")
+          },
+          {
+            label: "Open Lazygit",
+            accelerator: "CmdOrCtrl+Shift+G",
+            click: () => this.sendCommand("open-lazygit")
           }
         ]
       },
@@ -368,6 +387,16 @@ class AppController {
     }
 
     this.window.webContents.send("app:command", { command, ...payload });
+  }
+
+  sendLazygitOutput(sessionId, data) {
+    if (!this.window || this.window.isDestroyed()) return;
+    this.window.webContents.send("lazygit:output", { sessionId, data });
+  }
+
+  sendLazygitExit(sessionId) {
+    if (!this.window || this.window.isDestroyed()) return;
+    this.window.webContents.send("lazygit:exit", { sessionId });
   }
 
   scheduleSave() {
@@ -686,12 +715,40 @@ class AppController {
     });
   }
 
+  createLazygitSession(repoId) {
+    const repo = this.repoById(repoId);
+    if (!repo) return null;
+    const sessionId = randomUUID();
+    this.ephemeralSessions.set(sessionId, { repoId });
+    this.ptyHost.createSession({
+      sessionId,
+      cwd: repo.path,
+      command: ["lazygit"]
+    });
+    return sessionId;
+  }
+
+  closeLazygitSession(sessionId) {
+    if (!this.ephemeralSessions.has(sessionId)) return;
+    this.ephemeralSessions.delete(sessionId);
+    this.ptyHost.killSession(sessionId);
+  }
+
   handleSessionInput(sessionId, data) {
     this.ptyHost.sendInput(sessionId, data);
     this.resolveInteractiveBlockerFromInput(sessionId, data);
   }
 
   handlePtyMessage(message) {
+    if (this.ephemeralSessions.has(message.sessionId)) {
+      if (message.type === "data") {
+        this.sendLazygitOutput(message.sessionId, message.data);
+      } else if (message.type === "exit") {
+        this.ephemeralSessions.delete(message.sessionId);
+        this.sendLazygitExit(message.sessionId);
+      }
+      return;
+    }
     switch (message.type) {
       case "created":
         this.handleHostCreated(message.sessionId);

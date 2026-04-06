@@ -1,4 +1,5 @@
 import codecs
+import fcntl
 import json
 import os
 import pty
@@ -8,6 +9,12 @@ import subprocess
 import sys
 import termios
 import threading
+
+
+# TIOCSCTTY: set the controlling terminal for a process.
+# Required so that /dev/tty works for TUI programs (lazygit, vim, htop, etc.)
+# spawned via subprocess with start_new_session=True (which calls setsid()).
+TIOCSCTTY = getattr(termios, "TIOCSCTTY", 0x20007461 if sys.platform == "darwin" else 0x540E)
 
 
 selector = selectors.DefaultSelector()
@@ -28,7 +35,6 @@ def set_window_size(fd, cols, rows):
         size(fd, (rows, cols))
         return
 
-    import fcntl
     import struct
 
     winsz = struct.pack("HHHH", rows, cols, 0, 0)
@@ -41,6 +47,7 @@ def create_session(message):
     cwd = os.path.abspath(message["cwd"])
     cols = int(message.get("cols") or 140)
     rows = int(message.get("rows") or 42)
+    command = message.get("command")
 
     master_fd, slave_fd = pty.openpty()
     set_window_size(slave_fd, cols, rows)
@@ -48,15 +55,21 @@ def create_session(message):
     environment = dict(os.environ)
     environment["TERM"] = "xterm-256color"
 
+    argv = command if command else [shell_path, "-il"]
+
+    def set_ctty():
+        fcntl.ioctl(slave_fd, TIOCSCTTY, 0)
+
     proc = subprocess.Popen(
-        [shell_path, "-il"],
+        argv,
         cwd=cwd,
         stdin=slave_fd,
         stdout=slave_fd,
         stderr=slave_fd,
         env=environment,
         close_fds=True,
-        start_new_session=True
+        start_new_session=True,
+        preexec_fn=set_ctty
     )
 
     os.close(slave_fd)

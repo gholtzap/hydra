@@ -76,5 +76,23 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on("app:command", listener);
     return () => ipcRenderer.removeListener("app:command", listener);
+  },
+  launchLazygit: (repoId) => ipcRenderer.invoke("lazygit:launch", { repoId }),
+  closeLazygit: (sessionId) => ipcRenderer.invoke("lazygit:close", { sessionId }),
+  sendLazygitInput: (sessionId, data) =>
+    ipcRenderer.invoke("lazygit:input", { sessionId, data }),
+  sendLazygitBinaryInput: (sessionId, data) =>
+    ipcRenderer.invoke("lazygit:binaryInput", { sessionId, data }),
+  resizeLazygit: (sessionId, cols, rows) =>
+    ipcRenderer.invoke("lazygit:resize", { sessionId, cols, rows }),
+  onLazygitOutput: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("lazygit:output", listener);
+    return () => ipcRenderer.removeListener("lazygit:output", listener);
+  },
+  onLazygitExit: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("lazygit:exit", listener);
+    return () => ipcRenderer.removeListener("lazygit:exit", listener);
   }
 });

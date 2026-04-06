@@ -38,6 +38,13 @@ interface ClaudeWorkspaceApi {
   onCommand: (
     callback: (payload: { command: string; sessionId?: string; repoId?: string }) => void
   ) => Unsubscribe;
+  launchLazygit: (repoId: string) => Promise<string | null>;
+  closeLazygit: (sessionId: string) => Promise<any>;
+  sendLazygitInput: (sessionId: string, data: string) => Promise<any>;
+  sendLazygitBinaryInput: (sessionId: string, data: string) => Promise<any>;
+  resizeLazygit: (sessionId: string, cols: number, rows: number) => Promise<any>;
+  onLazygitOutput: (callback: (payload: { sessionId: string; data: string }) => void) => Unsubscribe;
+  onLazygitExit: (callback: (payload: { sessionId: string }) => void) => Unsubscribe;
 }
 
 declare global {

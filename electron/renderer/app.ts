@@ -100,7 +100,11 @@ const ui = {
     startSizes: number[];
     containerSize: number;
     splitContainer: HTMLElement | null;
-  } | null
+  } | null,
+  lazygitSessionId: null as string | null,
+  lazygitTerminalMount: null as TerminalMount | null,
+  lazygitUnsubOutput: null as (() => void) | null,
+  lazygitUnsubExit: null as (() => void) | null
 };
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
@@ -110,6 +114,7 @@ const launcherDialog = document.getElementById("launcher-dialog") as HTMLDialogE
 const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogElement;
 const quickSwitcherDialog = document.getElementById("quick-switcher-dialog") as HTMLDialogElement;
 const commandPaletteDialog = document.getElementById("command-palette-dialog") as HTMLDialogElement;
+const lazygitDialog = document.getElementById("lazygit-dialog") as HTMLDialogElement;
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
 sidebarElement.tabIndex = -1;
@@ -143,6 +148,11 @@ document.addEventListener("drop", handleDrop, true);
 document.addEventListener("pointermove", handlePointerMove);
 document.addEventListener("pointerup", handlePointerUp);
 
+lazygitDialog.addEventListener("cancel", (e) => {
+  e.preventDefault();
+  closeLazygitOverlay();
+});
+
 api.onStateChanged((nextState) => {
   replaceState(nextState);
   ensureValidSelection();
@@ -167,7 +177,14 @@ api.onSessionOutput((payload) => {
   }
 
   if (ui.selection.type !== "session") {
-    renderDetail();
+    // Update transcript preview in-place to avoid full DOM replacement, which causes
+    // button flickering/loss of interactivity while sessions are running.
+    const metaEl = detailElement.querySelector<HTMLElement>(
+      `[data-session-id="${CSS.escape(payload.sessionId)}"] .row-meta`
+    );
+    if (metaEl) {
+      metaEl.textContent = session.blocker?.summary || previewTranscript(session.transcript);
+    }
   }
 });
 
@@ -234,6 +251,9 @@ api.onCommand(async ({ command, sessionId, repoId }) => {
         await selectSession(sessionId, "terminal");
       }
       break;
+    case "open-lazygit":
+      await openLazygitOverlay(repoId || currentRepoId());
+      break;
     default:
       break;
   }
@@ -248,6 +268,10 @@ function handleColorSchemeChange() {
 
   for (const mount of ui.terminalMounts.values()) {
     mount.terminal.options.theme = buildTerminalTheme();
+  }
+
+  if (ui.lazygitTerminalMount) {
+    ui.lazygitTerminalMount.terminal.options.theme = buildTerminalTheme();
   }
 }
 
@@ -1327,6 +1351,7 @@ function updateSessionWorkspaceToolbar() {
         </div>
         <button class="ws-action-btn primary" data-action="open-launcher" data-repo-id="${repo?.id || ""}">+ Session</button>
         <button class="ws-action-btn" data-action="open-wiki" data-repo-id="${repo?.id || ""}">Wiki</button>
+        <button class="ws-action-btn" data-action="open-lazygit" data-repo-id="${repo?.id || ""}">Git</button>
         <button class="ws-action-btn" data-action="open-settings" data-settings-tab="claude">Agent Files</button>
         ${
           session.runtimeState !== "live"
@@ -2338,6 +2363,9 @@ async function handleClick(event) {
     case "open-wiki":
       await openWiki(target.dataset.repoId || currentRepoId());
       break;
+    case "open-lazygit":
+      await openLazygitOverlay(target.dataset.repoId || currentRepoId());
+      break;
     case "select-session": {
       const session = sessionById(target.dataset.sessionId);
       await selectSession(target.dataset.sessionId, sessionOpenFocusSection(session));
@@ -3303,6 +3331,122 @@ function openCommandPalette() {
   renderCommandPaletteDialog();
   if (!commandPaletteDialog.open) {
     commandPaletteDialog.showModal();
+  }
+}
+
+async function openLazygitOverlay(repoId: string | null) {
+  if (!repoId) return;
+  if (lazygitDialog.open) return;
+
+  const sessionId = await api.launchLazygit(repoId);
+  if (!sessionId) return;
+
+  ui.lazygitSessionId = sessionId;
+
+  // Buffer output that arrives before the terminal is mounted.
+  const outputBuffer: string[] = [];
+  let terminalReady = false;
+
+  ui.lazygitUnsubOutput = api.onLazygitOutput(({ sessionId: sid, data }) => {
+    if (sid !== sessionId) return;
+    if (terminalReady && ui.lazygitTerminalMount) {
+      ui.lazygitTerminalMount.terminal.write(data);
+    } else {
+      outputBuffer.push(data);
+    }
+  });
+
+  ui.lazygitUnsubExit = api.onLazygitExit(({ sessionId: sid }) => {
+    if (sid === sessionId) closeLazygitOverlay();
+  });
+
+  lazygitDialog.showModal();
+
+  const host = document.getElementById("lazygit-terminal-host") as HTMLElement;
+  host.innerHTML = "";
+
+  // Defer terminal creation to after the dialog has fully laid out.
+  // showModal() makes the dialog visible but layout isn't computed until the
+  // browser paints — calling terminal.open() with a 0-size host causes
+  // fitAddon to compute 0 cols/rows, which corrupts the lazygit session.
+  requestAnimationFrame(() => {
+    // Guard: overlay may have been closed before this frame fires.
+    if (ui.lazygitSessionId !== sessionId) return;
+
+    const terminal = new Terminal({
+      allowTransparency: false,
+      convertEol: false,
+      cursorBlink: true,
+      cursorInactiveStyle: "outline",
+      disableStdin: false,
+      drawBoldTextInBrightColors: true,
+      fontFamily: terminalFontFamily(),
+      fontSize: 13,
+      macOptionIsMeta: true,
+      rightClickSelectsWord: true,
+      scrollback: 5000,
+      theme: buildTerminalTheme()
+    });
+
+    const fitAddon = new FitAddon.FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(host);
+
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.key === "Escape" && event.type === "keydown") {
+        closeLazygitOverlay();
+        return false;
+      }
+      return true;
+    });
+
+    terminal.onData((data) => {
+      api.sendLazygitInput(sessionId, data);
+    });
+    terminal.onBinary((data) => {
+      api.sendLazygitBinaryInput(sessionId, data);
+    });
+    terminal.onResize((size) => {
+      api.resizeLazygit(sessionId, size.cols, size.rows);
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      fitAddon.fit();
+    });
+    resizeObserver.observe(host);
+
+    ui.lazygitTerminalMount = { terminal, fitAddon, resizeObserver };
+
+    // Flush buffered output, then mark ready for live writes.
+    for (const chunk of outputBuffer) terminal.write(chunk);
+    outputBuffer.length = 0;
+    terminalReady = true;
+
+    fitAddon.fit();
+    api.resizeLazygit(sessionId, terminal.cols, terminal.rows);
+    terminal.focus();
+  });
+}
+
+function closeLazygitOverlay() {
+  ui.lazygitUnsubOutput?.();
+  ui.lazygitUnsubExit?.();
+  ui.lazygitUnsubOutput = null;
+  ui.lazygitUnsubExit = null;
+
+  if (ui.lazygitTerminalMount) {
+    ui.lazygitTerminalMount.resizeObserver.disconnect();
+    ui.lazygitTerminalMount.terminal.dispose();
+    ui.lazygitTerminalMount = null;
+  }
+
+  if (ui.lazygitSessionId) {
+    api.closeLazygit(ui.lazygitSessionId);
+    ui.lazygitSessionId = null;
+  }
+
+  if (lazygitDialog.open) {
+    lazygitDialog.close();
   }
 }
 
@@ -5202,7 +5346,8 @@ function isAnyDialogOpen() {
     launcherDialog.open ||
     settingsDialog.open ||
     quickSwitcherDialog.open ||
-    commandPaletteDialog.open
+    commandPaletteDialog.open ||
+    lazygitDialog.open
   );
 }
 

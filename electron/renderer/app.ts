@@ -102,6 +102,10 @@ const ui = {
     containerSize: number;
     splitContainer: HTMLElement | null;
   } | null,
+  tokscaleSessionId: null as string | null,
+  tokscaleTerminalMount: null as TerminalMount | null,
+  tokscaleUnsubOutput: null as (() => void) | null,
+  tokscaleUnsubExit: null as (() => void) | null,
   lazygitSessionId: null as string | null,
   lazygitTerminalMount: null as TerminalMount | null,
   lazygitUnsubOutput: null as (() => void) | null,
@@ -115,6 +119,7 @@ const launcherDialog = document.getElementById("launcher-dialog") as HTMLDialogE
 const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogElement;
 const quickSwitcherDialog = document.getElementById("quick-switcher-dialog") as HTMLDialogElement;
 const commandPaletteDialog = document.getElementById("command-palette-dialog") as HTMLDialogElement;
+const tokscaleDialog = document.getElementById("tokscale-dialog") as HTMLDialogElement;
 const lazygitDialog = document.getElementById("lazygit-dialog") as HTMLDialogElement;
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -148,6 +153,11 @@ document.addEventListener("dragover", handleDragOver, true);
 document.addEventListener("drop", handleDrop, true);
 document.addEventListener("pointermove", handlePointerMove);
 document.addEventListener("pointerup", handlePointerUp);
+
+tokscaleDialog.addEventListener("cancel", (e) => {
+  e.preventDefault();
+  closeTokscaleOverlay();
+});
 
 lazygitDialog.addEventListener("cancel", (e) => {
   e.preventDefault();
@@ -255,6 +265,9 @@ api.onCommand(async ({ command, sessionId, repoId }) => {
     case "open-lazygit":
       await openLazygitOverlay(repoId || currentRepoId());
       break;
+    case "open-tokscale":
+      await openTokscaleOverlay(repoId || currentRepoId());
+      break;
     default:
       break;
   }
@@ -273,6 +286,10 @@ function handleColorSchemeChange() {
 
   if (ui.lazygitTerminalMount) {
     ui.lazygitTerminalMount.terminal.options.theme = buildTerminalTheme();
+  }
+
+  if (ui.tokscaleTerminalMount) {
+    ui.tokscaleTerminalMount.terminal.options.theme = buildTerminalTheme();
   }
 }
 
@@ -612,6 +629,7 @@ function renderRepoDetail(repo) {
           <button data-action="reveal-repo" data-repo-id="${repo.id}">Reveal Folder</button>
           <button data-action="rescan-workspace" data-workspace-id="${repo.workspaceID}">Refresh Folder</button>
           <button data-action="browse-files" data-repo-id="${repo.id}">Browse Files</button>
+          <button data-action="open-tokscale" data-repo-id="${repo.id}">Token Usage</button>
           <button data-action="open-wiki" data-repo-id="${repo.id}">Open Wiki</button>
           <button data-action="toggle-wiki" data-repo-id="${repo.id}">${repo.wikiEnabled ? "Disable Wiki" : "Enable Wiki"}</button>
           <button class="primary" data-action="open-launcher" data-repo-id="${repo.id}">New Session</button>
@@ -1353,6 +1371,7 @@ function updateSessionWorkspaceToolbar() {
         </div>
         <button class="ws-action-btn primary" data-action="open-launcher" data-repo-id="${repo?.id || ""}">+ Session</button>
         <button class="ws-action-btn" data-action="open-wiki" data-repo-id="${repo?.id || ""}">Wiki</button>
+        <button class="ws-action-btn" data-action="open-tokscale" data-repo-id="${repo?.id || ""}">Tokens</button>
         <button class="ws-action-btn" data-action="open-lazygit" data-repo-id="${repo?.id || ""}">Git</button>
         <button class="ws-action-btn" data-action="open-settings" data-settings-tab="claude">Agent Files</button>
         ${
@@ -1801,6 +1820,7 @@ function renderCommandPaletteDialog() {
     { id: "open-status", label: "Open Dev Port Status", action: "open-status" },
     { id: "open-settings", label: "Open Settings", action: "open-settings" },
     { id: "open-quick-switcher", label: "Open Quick Switcher", action: "open-quick-switcher" },
+    { id: "open-tokscale", label: "Open Token Usage", action: "open-tokscale" },
     { id: "next-unread", label: "Jump to Next Unread Session", action: "next-unread" }
   ];
 
@@ -2367,6 +2387,9 @@ async function handleClick(event) {
       break;
     case "open-lazygit":
       await openLazygitOverlay(target.dataset.repoId || currentRepoId());
+      break;
+    case "open-tokscale":
+      await openTokscaleOverlay(target.dataset.repoId || currentRepoId());
       break;
     case "select-session": {
       const session = sessionById(target.dataset.sessionId);
@@ -3333,6 +3356,115 @@ function openCommandPalette() {
   renderCommandPaletteDialog();
   if (!commandPaletteDialog.open) {
     commandPaletteDialog.showModal();
+  }
+}
+
+async function openTokscaleOverlay(repoId: string | null) {
+  if (!repoId) return;
+  if (tokscaleDialog.open) return;
+
+  const sessionId = await api.launchTokscale(repoId);
+  if (!sessionId) return;
+
+  ui.tokscaleSessionId = sessionId;
+
+  const outputBuffer: string[] = [];
+  let terminalReady = false;
+
+  ui.tokscaleUnsubOutput = api.onTokscaleOutput(({ sessionId: sid, data }) => {
+    if (sid !== sessionId) return;
+    if (terminalReady && ui.tokscaleTerminalMount) {
+      ui.tokscaleTerminalMount.terminal.write(data);
+    } else {
+      outputBuffer.push(data);
+    }
+  });
+
+  ui.tokscaleUnsubExit = api.onTokscaleExit(({ sessionId: sid }) => {
+    if (sid === sessionId) closeTokscaleOverlay();
+  });
+
+  tokscaleDialog.showModal();
+
+  const host = document.getElementById("tokscale-terminal-host") as HTMLElement;
+  host.innerHTML = "";
+
+  requestAnimationFrame(() => {
+    if (ui.tokscaleSessionId !== sessionId) return;
+
+    const terminal = new Terminal({
+      allowTransparency: false,
+      convertEol: false,
+      cursorBlink: true,
+      cursorInactiveStyle: "outline",
+      disableStdin: false,
+      drawBoldTextInBrightColors: true,
+      fontFamily: terminalFontFamily(),
+      fontSize: 13,
+      macOptionIsMeta: true,
+      rightClickSelectsWord: true,
+      scrollback: 5000,
+      theme: buildTerminalTheme()
+    });
+
+    const fitAddon = new FitAddon.FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(host);
+
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.key === "Escape" && event.type === "keydown") {
+        closeTokscaleOverlay();
+        return false;
+      }
+      return true;
+    });
+
+    terminal.onData((data) => {
+      api.sendTokscaleInput(sessionId, data);
+    });
+    terminal.onBinary((data) => {
+      api.sendTokscaleBinaryInput(sessionId, data);
+    });
+    terminal.onResize((size) => {
+      api.resizeTokscale(sessionId, size.cols, size.rows);
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      fitAddon.fit();
+    });
+    resizeObserver.observe(host);
+
+    ui.tokscaleTerminalMount = { terminal, fitAddon, resizeObserver };
+
+    for (const chunk of outputBuffer) terminal.write(chunk);
+    outputBuffer.length = 0;
+    terminalReady = true;
+
+    fitAddon.fit();
+    api.resizeTokscale(sessionId, terminal.cols, terminal.rows);
+    terminal.focus();
+  });
+}
+
+function closeTokscaleOverlay() {
+  ui.tokscaleUnsubOutput?.();
+  ui.tokscaleUnsubExit?.();
+  ui.tokscaleUnsubOutput = null;
+  ui.tokscaleUnsubExit = null;
+
+  if (ui.tokscaleTerminalMount) {
+    ui.tokscaleTerminalMount.resizeObserver.disconnect();
+    ui.tokscaleTerminalMount.terminal.dispose();
+    ui.tokscaleTerminalMount = null;
+  }
+
+  if (ui.tokscaleSessionId) {
+    api.closeTokscale(ui.tokscaleSessionId);
+    ui.tokscaleSessionId = null;
+  }
+
+  if (tokscaleDialog.open) {
+    tokscaleDialog.close();
   }
 }
 
@@ -5359,6 +5491,7 @@ function isAnyDialogOpen() {
     settingsDialog.open ||
     quickSwitcherDialog.open ||
     commandPaletteDialog.open ||
+    tokscaleDialog.open ||
     lazygitDialog.open
   );
 }

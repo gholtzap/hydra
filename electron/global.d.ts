@@ -45,6 +45,13 @@ interface ClaudeWorkspaceApi {
   resizeLazygit: (sessionId: string, cols: number, rows: number) => Promise<any>;
   onLazygitOutput: (callback: (payload: { sessionId: string; data: string }) => void) => Unsubscribe;
   onLazygitExit: (callback: (payload: { sessionId: string }) => void) => Unsubscribe;
+  launchTokscale: (repoId: string) => Promise<string | null>;
+  closeTokscale: (sessionId: string) => Promise<any>;
+  sendTokscaleInput: (sessionId: string, data: string) => Promise<any>;
+  sendTokscaleBinaryInput: (sessionId: string, data: string) => Promise<any>;
+  resizeTokscale: (sessionId: string, cols: number, rows: number) => Promise<any>;
+  onTokscaleOutput: (callback: (payload: { sessionId: string; data: string }) => void) => Unsubscribe;
+  onTokscaleExit: (callback: (payload: { sessionId: string }) => void) => Unsubscribe;
 }
 
 declare global {

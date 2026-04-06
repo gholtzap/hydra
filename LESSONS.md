@@ -17,3 +17,11 @@
 **Fix**: (1) Subscribe to `onLazygitOutput` immediately (before `showModal()`) and buffer output in an array. (2) Defer `terminal.open()`, `fitAddon.fit()`, and terminal mounting to a `requestAnimationFrame` callback so the dialog has laid out first. (3) Flush the output buffer into the terminal in the same frame it's created.
 
 **Where**: `electron/renderer/app.ts` (`openLazygitOverlay`).
+
+## tokscale overlay: renderer dialog listener typo
+
+**Root cause**: While wiring the new tokscale overlay, the cancel listener was attached to `toksaleDialog` instead of `tokscaleDialog`. That left a broken identifier in renderer startup and would have crashed the app before the overlay could open.
+
+**Fix**: Renamed the listener target to `tokscaleDialog` and reran the TypeScript build to confirm the renderer boot path was clean.
+
+**Where**: `electron/renderer/app.ts`.

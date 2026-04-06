@@ -2011,6 +2011,7 @@ textarea {
   backdrop-filter: blur(10px);
 }
 
+.app-dialog-terminal-overlay,
 .app-dialog-lazygit {
   width: 90vw;
   height: 85vh;
@@ -2021,6 +2022,7 @@ textarea {
   overflow: hidden;
 }
 
+#tokscale-terminal-host,
 #lazygit-terminal-host {
   width: 100%;
   height: 100%;

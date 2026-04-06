@@ -94,5 +94,23 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on("lazygit:exit", listener);
     return () => ipcRenderer.removeListener("lazygit:exit", listener);
+  },
+  launchTokscale: (repoId) => ipcRenderer.invoke("tokscale:launch", { repoId }),
+  closeTokscale: (sessionId) => ipcRenderer.invoke("tokscale:close", { sessionId }),
+  sendTokscaleInput: (sessionId, data) =>
+    ipcRenderer.invoke("tokscale:input", { sessionId, data }),
+  sendTokscaleBinaryInput: (sessionId, data) =>
+    ipcRenderer.invoke("tokscale:binaryInput", { sessionId, data }),
+  resizeTokscale: (sessionId, cols, rows) =>
+    ipcRenderer.invoke("tokscale:resize", { sessionId, cols, rows }),
+  onTokscaleOutput: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("tokscale:output", listener);
+    return () => ipcRenderer.removeListener("tokscale:output", listener);
+  },
+  onTokscaleExit: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("tokscale:exit", listener);
+    return () => ipcRenderer.removeListener("tokscale:exit", listener);
   }
 });

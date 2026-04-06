@@ -99,8 +99,9 @@ class AppController {
   signalBuffers: Map<string, string>;
   blockerClearStreaks: Map<string, number>;
   ptyHost: any;
-  ephemeralSessions: Map<string, { repoId: string }>;
+  ephemeralSessions: Map<string, { repoId: string; kind: "lazygit" | "tokscale" }>;
   lazygitPath: string | null;
+  npxPath: string | null;
 
   constructor() {
     this.state = loadState();
@@ -116,6 +117,7 @@ class AppController {
     this.blockerClearStreaks = new Map();
     this.ephemeralSessions = new Map();
     this.lazygitPath = resolveCommandPath("lazygit");
+    this.npxPath = resolveCommandPath(process.platform === "win32" ? "npx.cmd" : "npx");
     this.normalizeFolderRepos();
     this.repairStoredTranscripts();
     this.ptyHost = new PtyHostClient();
@@ -207,6 +209,18 @@ class AppController {
       if (this.ephemeralSessions.has(p.sessionId)) this.ptyHost.sendInput(p.sessionId, p.data);
     });
     ipcMain.handle("lazygit:resize", (_event, p) => {
+      if (this.ephemeralSessions.has(p.sessionId))
+        this.ptyHost.resizeSession(p.sessionId, p.cols, p.rows);
+    });
+    ipcMain.handle("tokscale:launch", (_event, p) => this.createTokscaleSession(p.repoId));
+    ipcMain.handle("tokscale:close", (_event, p) => this.closeTokscaleSession(p.sessionId));
+    ipcMain.handle("tokscale:input", (_event, p) => {
+      if (this.ephemeralSessions.has(p.sessionId)) this.ptyHost.sendInput(p.sessionId, p.data);
+    });
+    ipcMain.handle("tokscale:binaryInput", (_event, p) => {
+      if (this.ephemeralSessions.has(p.sessionId)) this.ptyHost.sendInput(p.sessionId, p.data);
+    });
+    ipcMain.handle("tokscale:resize", (_event, p) => {
       if (this.ephemeralSessions.has(p.sessionId))
         this.ptyHost.resizeSession(p.sessionId, p.cols, p.rows);
     });
@@ -305,6 +319,11 @@ class AppController {
             label: "Open Lazygit",
             accelerator: "CmdOrCtrl+Shift+G",
             click: () => this.sendCommand("open-lazygit")
+          },
+          {
+            label: "Open Token Usage",
+            accelerator: "CmdOrCtrl+Shift+T",
+            click: () => this.sendCommand("open-tokscale")
           }
         ]
       },
@@ -401,6 +420,16 @@ class AppController {
   sendLazygitExit(sessionId) {
     if (!this.window || this.window.isDestroyed()) return;
     this.window.webContents.send("lazygit:exit", { sessionId });
+  }
+
+  sendTokscaleOutput(sessionId, data) {
+    if (!this.window || this.window.isDestroyed()) return;
+    this.window.webContents.send("tokscale:output", { sessionId, data });
+  }
+
+  sendTokscaleExit(sessionId) {
+    if (!this.window || this.window.isDestroyed()) return;
+    this.window.webContents.send("tokscale:exit", { sessionId });
   }
 
   scheduleSave() {
@@ -723,7 +752,7 @@ class AppController {
     const repo = this.repoById(repoId);
     if (!repo || !this.lazygitPath) return null;
     const sessionId = randomUUID();
-    this.ephemeralSessions.set(sessionId, { repoId });
+    this.ephemeralSessions.set(sessionId, { repoId, kind: "lazygit" });
     this.ptyHost.createSession({
       sessionId,
       cwd: repo.path,
@@ -738,18 +767,46 @@ class AppController {
     this.ptyHost.killSession(sessionId);
   }
 
+  createTokscaleSession(repoId) {
+    const repo = this.repoById(repoId);
+    if (!repo || !this.npxPath) return null;
+    const sessionId = randomUUID();
+    this.ephemeralSessions.set(sessionId, { repoId, kind: "tokscale" });
+    this.ptyHost.createSession({
+      sessionId,
+      cwd: repo.path,
+      command: [this.npxPath, "--yes", "tokscale@latest"]
+    });
+    return sessionId;
+  }
+
+  closeTokscaleSession(sessionId) {
+    if (!this.ephemeralSessions.has(sessionId)) return;
+    this.ephemeralSessions.delete(sessionId);
+    this.ptyHost.killSession(sessionId);
+  }
+
   handleSessionInput(sessionId, data) {
     this.ptyHost.sendInput(sessionId, data);
     this.resolveInteractiveBlockerFromInput(sessionId, data);
   }
 
   handlePtyMessage(message) {
-    if (this.ephemeralSessions.has(message.sessionId)) {
+    const ephemeralSession = this.ephemeralSessions.get(message.sessionId);
+    if (ephemeralSession) {
       if (message.type === "data") {
-        this.sendLazygitOutput(message.sessionId, message.data);
+        if (ephemeralSession.kind === "lazygit") {
+          this.sendLazygitOutput(message.sessionId, message.data);
+        } else {
+          this.sendTokscaleOutput(message.sessionId, message.data);
+        }
       } else if (message.type === "exit") {
         this.ephemeralSessions.delete(message.sessionId);
-        this.sendLazygitExit(message.sessionId);
+        if (ephemeralSession.kind === "lazygit") {
+          this.sendLazygitExit(message.sessionId);
+        } else {
+          this.sendTokscaleExit(message.sessionId);
+        }
       }
       return;
     }

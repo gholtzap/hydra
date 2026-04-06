@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     ipcRenderer.invoke("wiki:readFile", { repoId, relativePath }),
   toggleWiki: (repoId, enabled) => ipcRenderer.invoke("wiki:toggle", { repoId, enabled }),
   revealWiki: (repoId) => ipcRenderer.invoke("wiki:reveal", repoId),
+  readDirectory: (repoId) => ipcRenderer.invoke("fs:readDir", repoId),
+  readFile: (filePath) => ipcRenderer.invoke("fs:readFile", filePath),
   onStateChanged: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on("state:changed", listener);

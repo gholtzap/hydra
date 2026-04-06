@@ -30,6 +30,8 @@ interface ClaudeWorkspaceApi {
   readWikiFile: (repoId: string, relativePath: string) => Promise<any>;
   toggleWiki: (repoId: string, enabled: boolean) => Promise<any>;
   revealWiki: (repoId: string) => Promise<any>;
+  readDirectory: (repoId: string) => Promise<any>;
+  readFile: (filePath: string) => Promise<any>;
   onStateChanged: (callback: (payload: any) => void) => Unsubscribe;
   onSessionOutput: (callback: (payload: any) => void) => Unsubscribe;
   onSessionUpdated: (callback: (payload: any) => void) => Unsubscribe;

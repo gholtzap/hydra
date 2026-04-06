@@ -15,6 +15,7 @@ type WorkspaceSplitNode = {
   type: "split";
   axis: WorkspaceSplitAxis;
   children: WorkspaceLayoutNode[];
+  sizes?: number[];
 };
 
 type WorkspaceLayoutNode = WorkspaceLeafNode | WorkspaceSplitNode;
@@ -30,6 +31,14 @@ type WikiTreeNode = {
   name: string;
   relativePath: string;
   children?: WikiTreeNode[];
+};
+
+type FileTreeNode = {
+  type: "directory" | "file";
+  name: string;
+  path: string;
+  relativePath: string;
+  children?: FileTreeNode[];
 };
 
 const state = {
@@ -73,7 +82,25 @@ const ui = {
   draggingSessionId: null as string | null,
   draggingSessionSource: null as string | null,
   dragTargetSessionId: null as string | null,
-  dragTargetZone: null as WorkspaceDropZone | null
+  dragTargetZone: null as WorkspaceDropZone | null,
+  fileBrowserRepoId: null as string | null,
+  fileBrowserTree: null as FileTreeNode[] | null,
+  fileBrowserSelectedPath: null as string | null,
+  fileBrowserFileContent: null as string | null,
+  fileBrowserFileTooLarge: false,
+  fileBrowserLoadingFile: false,
+  fileBrowserLoadId: 0,
+  fileBrowserLoading: false,
+  fileBrowserExpandedDirs: new Set<string>(),
+  resizeDragState: null as {
+    splitPath: string;
+    handleIndex: number;
+    axis: WorkspaceSplitAxis;
+    startPos: number;
+    startSizes: number[];
+    containerSize: number;
+    splitContainer: HTMLElement | null;
+  } | null
 };
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
@@ -113,6 +140,8 @@ document.addEventListener("dragstart", handleDragStart, true);
 document.addEventListener("dragend", handleDragEnd, true);
 document.addEventListener("dragover", handleDragOver, true);
 document.addEventListener("drop", handleDrop, true);
+document.addEventListener("pointermove", handlePointerMove);
+document.addEventListener("pointerup", handlePointerUp);
 
 api.onStateChanged((nextState) => {
   replaceState(nextState);
@@ -310,12 +339,39 @@ function ensureValidSelection() {
     ui.selection = { type: "inbox", id: null };
   }
 
+  if (ui.selection.type === "files" && !repoById(ui.selection.id)) {
+    ui.selection = { type: "inbox", id: null };
+  }
+
   syncSidebarNavSelection();
   syncMainListSelection();
   normalizeFocusSection();
 }
 
+function sidebarSignature() {
+  const expandedRepo = expandedSidebarRepo();
+  const inboxCount = inboxSessions().length;
+  const railSig = state.repos.map((repo) => {
+    const sessions = sessionsForRepo(repo.id);
+    return `${repo.id}:${sessions.filter((s) => s.runtimeState === "live").length}:${sessions.filter((s) => s.blocker || s.unreadCount > 0).length}`;
+  }).join(",");
+  const drawerSig = expandedRepo
+    ? sessionsForRepo(expandedRepo.id).map((s) =>
+        `${s.id}:${s.title}:${s.status}:${s.unreadCount}:${previewTranscript(s.transcript)}`
+      ).join(",")
+    : "";
+  const selSig = `${ui.selection.type}:${(ui.selection as any).id ?? ""}`;
+  return `${inboxCount}|${railSig}|${drawerSig}|${selSig}|${ui.sidebarNavItem}|${ui.sidebarExpandedRepoId}`;
+}
+
 function renderSidebar() {
+  const sig = sidebarSignature();
+  if (sidebarElement.dataset.sig === sig) {
+    syncSectionFocusUi();
+    return;
+  }
+  sidebarElement.dataset.sig = sig;
+
   const expandedRepo = expandedSidebarRepo();
 
   sidebarElement.innerHTML = `
@@ -408,6 +464,7 @@ function renderSidebarProjectDrawer(repo) {
         <button class="ghost sidebar-project-drawer-close" data-action="collapse-sidebar-project" data-repo-id="${repo.id}" aria-label="Collapse ${escapeAttribute(repo.name)}">Close</button>
       </div>
       <div class="detail-actions">
+        <button data-action="browse-files" data-repo-id="${repo.id}">Files</button>
         <button data-action="open-wiki" data-repo-id="${repo.id}">Wiki</button>
         <button data-action="toggle-wiki" data-repo-id="${repo.id}">${repo.wikiEnabled ? "Disable" : "Enable"}</button>
         <button class="primary" data-action="open-launcher" data-repo-id="${repo.id}">New Session</button>
@@ -460,6 +517,12 @@ function renderDetail() {
 
   if (ui.selection.type === "session") {
     renderSessionDetail(sessionById(ui.selection.id));
+    return;
+  }
+
+  if (ui.selection.type === "files") {
+    destroyTerminal();
+    renderFilesDetail(repoById(ui.selection.id));
     return;
   }
 
@@ -522,6 +585,7 @@ function renderRepoDetail(repo) {
         <div class="detail-actions">
           <button data-action="reveal-repo" data-repo-id="${repo.id}">Reveal Folder</button>
           <button data-action="rescan-workspace" data-workspace-id="${repo.workspaceID}">Refresh Folder</button>
+          <button data-action="browse-files" data-repo-id="${repo.id}">Browse Files</button>
           <button data-action="open-wiki" data-repo-id="${repo.id}">Open Wiki</button>
           <button data-action="toggle-wiki" data-repo-id="${repo.id}">${repo.wikiEnabled ? "Disable Wiki" : "Enable Wiki"}</button>
           <button class="primary" data-action="open-launcher" data-repo-id="${repo.id}">New Session</button>
@@ -670,6 +734,265 @@ function renderWikiPreview() {
       ${renderMarkdownDocument(ui.wikiPreviewMarkdown)}
     </div>
   `;
+}
+
+function renderFilesDetail(repo) {
+  if (!repo) {
+    detailElement.innerHTML = `<div class="empty-state">This folder is no longer available.</div>`;
+    syncSectionFocusUi();
+    return;
+  }
+
+  const fileTree = ui.fileBrowserRepoId === repo.id ? ui.fileBrowserTree : null;
+  const flatFiles = fileTree ? flattenFileTreeNodes(fileTree) : [];
+
+  detailElement.innerHTML = `
+    <section class="detail-panel">
+      <div class="detail-hero">
+        <div>
+          <div class="eyebrow">Files</div>
+          <h1 class="detail-title">${escapeHtml(repo.name)}</h1>
+          <div class="muted">${escapeHtml(abbreviateHome(repo.path))}</div>
+        </div>
+        <div class="detail-actions">
+          <button data-action="files-reload" data-repo-id="${repo.id}" ${ui.fileBrowserLoading ? "disabled" : ""}>${ui.fileBrowserLoading ? "Loading..." : "Reload"}</button>
+          <button data-action="reveal-repo" data-repo-id="${repo.id}">Reveal in Finder</button>
+          <button class="primary" data-action="open-launcher" data-repo-id="${repo.id}">New Session</button>
+        </div>
+      </div>
+      ${
+        ui.fileBrowserLoading && !fileTree
+          ? `<div class="empty-state">Reading directory...</div>`
+          : !fileTree
+            ? `<div class="empty-state">No directory data. Click Reload to scan files.</div>`
+            : `
+              <div class="files-layout">
+                <aside class="files-tree-panel">
+                  <div class="files-panel-header">
+                    <div class="row-title">Directory</div>
+                    <div class="row-subtitle">${flatFiles.length} ${pluralize(flatFiles.length, "file", "files")}</div>
+                  </div>
+                  <div class="files-tree-scroll">
+                    ${renderFileTree(repo.id, fileTree)}
+                  </div>
+                </aside>
+                <article class="files-content-panel">
+                  ${renderFileContentPane()}
+                </article>
+              </div>
+            `
+      }
+    </section>
+  `;
+
+  syncSectionFocusUi();
+}
+
+function renderFileTree(repoId: string, nodes: FileTreeNode[]): string {
+  if (!nodes.length) {
+    return `<div class="files-tree-empty">No files found.</div>`;
+  }
+  return nodes.map((node) => renderFileTreeNode(repoId, node, 0)).join("");
+}
+
+function renderFileTreeNode(repoId: string, node: FileTreeNode, depth: number): string {
+  if (node.type === "directory") {
+    const isExpanded = ui.fileBrowserExpandedDirs.has(node.relativePath);
+    return `
+      <div class="fb-dir-group">
+        <button
+          type="button"
+          class="fb-dir-row ${isExpanded ? "fb-dir-open" : ""}"
+          data-action="files-toggle-dir"
+          data-repo-id="${escapeAttribute(repoId)}"
+          data-dir-path="${escapeAttribute(node.relativePath)}"
+          style="--fb-depth:${depth}">
+          <span class="fb-chevron" aria-hidden="true"></span>
+          <span class="fb-dir-name">${escapeHtml(node.name)}</span>
+        </button>
+        ${isExpanded && node.children?.length ? `
+          <div class="fb-dir-children">
+            ${node.children.map((child) => renderFileTreeNode(repoId, child, depth + 1)).join("")}
+          </div>
+        ` : ""}
+      </div>
+    `;
+  }
+
+  return `
+    <button
+      type="button"
+      class="fb-file-row ${ui.fileBrowserSelectedPath === node.path ? "active" : ""} ${fileExtClass(node.name)}"
+      data-action="files-select-file"
+      data-repo-id="${escapeAttribute(repoId)}"
+      data-file-path="${escapeAttribute(node.path)}"
+      style="--fb-depth:${depth}">
+      <span class="fb-file-dot" aria-hidden="true"></span>
+      <span class="fb-file-name">${escapeHtml(node.name)}</span>
+    </button>
+  `;
+}
+
+function renderFileContentPane(): string {
+  if (!ui.fileBrowserSelectedPath) {
+    return `
+      <div class="files-content-empty">
+        <div class="row-title">Select a file</div>
+        <div class="row-subtitle">Click any file in the tree to preview its contents here.</div>
+      </div>
+    `;
+  }
+
+  const name = ui.fileBrowserSelectedPath.split("/").pop() || ui.fileBrowserSelectedPath;
+
+  if (ui.fileBrowserFileTooLarge) {
+    return `
+      <div class="files-panel-header">
+        <div>
+          <div class="row-title">${escapeHtml(name)}</div>
+          <div class="row-subtitle mono">${escapeHtml(ui.fileBrowserSelectedPath)}</div>
+        </div>
+        <button data-action="files-reveal-file" data-file-path="${escapeAttribute(ui.fileBrowserSelectedPath)}">Reveal</button>
+      </div>
+      <div class="files-content-empty">
+        <div class="row-title">File is too large to preview</div>
+        <div class="row-subtitle">Open it in your editor instead.</div>
+      </div>
+    `;
+  }
+
+  if (ui.fileBrowserFileContent === null) {
+    const body = ui.fileBrowserLoadingFile
+      ? `<div class="row-title">Loading…</div>`
+      : `<div class="row-title">Cannot preview this file</div>
+         <div class="row-subtitle">It may be binary or permission-restricted.</div>`;
+    return `
+      <div class="files-panel-header">
+        <div>
+          <div class="row-title">${escapeHtml(name)}</div>
+        </div>
+      </div>
+      <div class="files-content-empty">${body}</div>
+    `;
+  }
+
+  const lineCount = (ui.fileBrowserFileContent.match(/\n/g) || []).length + 1;
+
+  return `
+    <div class="files-panel-header">
+      <div>
+        <div class="row-title">${escapeHtml(name)}</div>
+        <div class="row-subtitle mono">${escapeHtml(ui.fileBrowserSelectedPath)}</div>
+      </div>
+      <div class="files-header-meta">
+        <span class="files-line-count">${lineCount} ${pluralize(lineCount, "line", "lines")}</span>
+        <button data-action="files-reveal-file" data-file-path="${escapeAttribute(ui.fileBrowserSelectedPath)}">Reveal</button>
+      </div>
+    </div>
+    <div class="files-content-scroll">
+      <pre class="files-content-pre"><code>${escapeHtml(ui.fileBrowserFileContent)}</code></pre>
+    </div>
+  `;
+}
+
+function fileExtClass(name: string): string {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  const map: Record<string, string> = {
+    ts: "fb-ext-ts", tsx: "fb-ext-ts", mts: "fb-ext-ts", cts: "fb-ext-ts",
+    js: "fb-ext-js", jsx: "fb-ext-js", mjs: "fb-ext-js", cjs: "fb-ext-js",
+    md: "fb-ext-md", mdx: "fb-ext-md",
+    json: "fb-ext-json", jsonc: "fb-ext-json",
+    yaml: "fb-ext-yaml", yml: "fb-ext-yaml",
+    py: "fb-ext-py", pyw: "fb-ext-py",
+    css: "fb-ext-css", scss: "fb-ext-css", sass: "fb-ext-css", less: "fb-ext-css",
+    html: "fb-ext-html", htm: "fb-ext-html",
+    sh: "fb-ext-sh", bash: "fb-ext-sh", zsh: "fb-ext-sh",
+    rs: "fb-ext-rs",
+    go: "fb-ext-go",
+    rb: "fb-ext-rb",
+    java: "fb-ext-java", kt: "fb-ext-java",
+    swift: "fb-ext-swift",
+    c: "fb-ext-c", cpp: "fb-ext-c", h: "fb-ext-c", cc: "fb-ext-c"
+  };
+  return map[ext] || "";
+}
+
+async function openFilesBrowser(repoId: string) {
+  if (!repoId) return;
+
+  if (ui.fileBrowserRepoId !== repoId) {
+    ui.fileBrowserExpandedDirs.clear();
+    ui.fileBrowserSelectedPath = null;
+    ui.fileBrowserFileContent = null;
+    ui.fileBrowserFileTooLarge = false;
+    ui.fileBrowserLoadingFile = false;
+    ui.fileBrowserLoadId++;
+  }
+
+  ui.selection = { type: "files", id: repoId };
+  ui.sidebarExpandedRepoId = repoId;
+  ui.sidebarNavItem = repoId;
+  syncMainListSelection();
+  normalizeFocusSection();
+  await api.setFocusedSession(null);
+  renderSidebar();
+  renderDetail();
+  await loadFileBrowserTree(repoId);
+}
+
+async function loadFileBrowserTree(repoId: string) {
+  if (!repoId) return;
+
+  ui.fileBrowserLoading = true;
+  ui.fileBrowserRepoId = repoId;
+  if (ui.selection.type === "files" && ui.selection.id === repoId) {
+    renderDetail();
+  }
+
+  try {
+    const result = await api.readDirectory(repoId);
+    ui.fileBrowserTree = result?.tree || null;
+  } catch {
+    ui.fileBrowserTree = null;
+  } finally {
+    ui.fileBrowserLoading = false;
+    if (ui.selection.type === "files" && ui.selection.id === repoId) {
+      renderDetail();
+    }
+  }
+}
+
+async function selectFileBrowserFile(filePath: string) {
+  if (!filePath) return;
+
+  const loadId = ++ui.fileBrowserLoadId;
+  ui.fileBrowserSelectedPath = filePath;
+  ui.fileBrowserFileContent = null;
+  ui.fileBrowserFileTooLarge = false;
+  ui.fileBrowserLoadingFile = true;
+  if (ui.selection.type === "files") renderDetail();
+
+  try {
+    const result = await api.readFile(filePath);
+    if (ui.fileBrowserLoadId !== loadId) return;
+    if (result.tooLarge) {
+      ui.fileBrowserFileTooLarge = true;
+    } else if (!result.error) {
+      ui.fileBrowserFileContent = result.content;
+    }
+  } catch {
+  } finally {
+    if (ui.fileBrowserLoadId === loadId) ui.fileBrowserLoadingFile = false;
+  }
+
+  if (ui.fileBrowserLoadId === loadId && ui.selection.type === "files") renderDetail();
+}
+
+function flattenFileTreeNodes(nodes: FileTreeNode[]): FileTreeNode[] {
+  return nodes.flatMap((node) => {
+    if (node.type === "file") return [node];
+    return flattenFileTreeNodes(node.children || []);
+  });
 }
 
 function renderPortStatusDetail() {
@@ -879,7 +1202,7 @@ function renderSessionDetail(session) {
   }
 
   const layout = syncStoredSessionWorkspaceLayout(session.id);
-  const signature = workspaceLayoutSignature(layout);
+  const signature = workspaceLayoutStructureSignature(layout);
 
   if (
     detailElement.querySelector(".session-workspace-detail") === null ||
@@ -913,7 +1236,7 @@ function updateSessionChrome(session) {
   }
 }
 
-function renderSessionWorkspaceLayoutNode(node: WorkspaceLayoutNode) {
+function renderSessionWorkspaceLayoutNode(node: WorkspaceLayoutNode, path = "") {
   if (!node) {
     return "";
   }
@@ -922,9 +1245,22 @@ function renderSessionWorkspaceLayoutNode(node: WorkspaceLayoutNode) {
     return renderSessionPane(node.sessionId);
   }
 
+  const sizes = node.sizes && node.sizes.length === node.children.length
+    ? node.sizes
+    : node.children.map(() => 1);
+
+  const parts: string[] = [];
+  node.children.forEach((child, i) => {
+    if (i > 0) {
+      parts.push(`<div class="pane-resize-handle pane-resize-handle-${node.axis}" data-split-path="${escapeAttribute(path)}" data-handle-index="${i - 1}"></div>`);
+    }
+    const childPath = path ? `${path}.${i}` : `${i}`;
+    parts.push(`<div class="split-child" style="flex: ${sizes[i]} 1 0%; min-width: 0; min-height: 0;">${renderSessionWorkspaceLayoutNode(child, childPath)}</div>`);
+  });
+
   return `
-    <div class="session-workspace-split session-workspace-split-${node.axis}">
-      ${node.children.map((child) => renderSessionWorkspaceLayoutNode(child)).join("")}
+    <div class="session-workspace-split session-workspace-split-${node.axis}" data-split-path="${escapeAttribute(path)}">
+      ${parts.join("")}
     </div>
   `;
 }
@@ -969,27 +1305,35 @@ function updateSessionWorkspaceToolbar() {
   const repo = repoById(session.repoID);
   const visibleSessionCount = workspaceVisibleSessionIds().length;
 
+  const sig = `${session.id}|${session.title}|${session.runtimeState}|${visibleSessionCount}|${repo?.id}`;
+  if (toolbar.dataset.sig === sig) {
+    return;
+  }
+  toolbar.dataset.sig = sig;
+
   toolbar.innerHTML = `
-    <div class="detail-hero workspace-hero">
-      <div>
-        <div class="eyebrow">Workspace</div>
-        <h1 class="detail-title">${escapeHtml(session.title)}</h1>
-        <div class="muted">${escapeHtml(repo?.name || "Unknown Folder")} · ${visibleSessionCount} visible ${pluralize(visibleSessionCount, "session", "sessions")} · Drag a session onto a pane edge to split it.</div>
+    <div class="ws-toolbar">
+      <div class="ws-toolbar-info">
+        <span class="ws-toolbar-title">${escapeHtml(session.title)}</span>
+        <span class="ws-toolbar-sep">/</span>
+        <span class="ws-toolbar-repo">${escapeHtml(repo?.name || "Unknown")}</span>
+        <span class="ws-toolbar-meta">${visibleSessionCount} ${pluralize(visibleSessionCount, "pane", "panes")}</span>
       </div>
-      <div class="detail-actions workspace-detail-actions">
-        <button data-action="open-launcher" data-repo-id="${repo?.id || ""}">New Session</button>
-        <button data-action="open-wiki" data-repo-id="${repo?.id || ""}">Open Wiki</button>
-        <button data-action="workspace-layout-columns">Columns</button>
-        <button data-action="workspace-layout-stack">Stack</button>
-        <button data-action="workspace-layout-grid" ${visibleSessionCount > 1 ? "" : "disabled"}>Grid</button>
-        <button data-action="reveal-repo" data-repo-id="${repo?.id || ""}">Reveal Folder</button>
-        <button data-action="open-settings" data-settings-tab="claude">Agent Files</button>
+      <div class="ws-toolbar-actions">
+        <div class="ws-layout-group" role="group" aria-label="Layout">
+          <button class="ws-layout-btn" data-action="workspace-layout-columns" title="Side by side">Cols</button>
+          <button class="ws-layout-btn" data-action="workspace-layout-stack" title="Stacked vertically">Stack</button>
+          <button class="ws-layout-btn" data-action="workspace-layout-grid" title="2x2 Grid" ${visibleSessionCount > 1 ? "" : "disabled"}>Grid</button>
+        </div>
+        <button class="ws-action-btn primary" data-action="open-launcher" data-repo-id="${repo?.id || ""}">+ Session</button>
+        <button class="ws-action-btn" data-action="open-wiki" data-repo-id="${repo?.id || ""}">Wiki</button>
+        <button class="ws-action-btn" data-action="open-settings" data-settings-tab="claude">Agent Files</button>
         ${
-          session.runtimeState === "live"
-            ? `<button data-action="close-session" data-session-id="${session.id}">Close Session</button>`
-            : `<button class="primary" data-action="restart-session" data-session-id="${session.id}">${escapeHtml(resumeSessionActionLabel(session))}</button>
-               <button data-action="close-session" data-session-id="${session.id}">Close Session</button>`
+          session.runtimeState !== "live"
+            ? `<button class="ws-action-btn primary" data-action="restart-session" data-session-id="${session.id}">${escapeHtml(resumeSessionActionLabel(session))}</button>`
+            : ""
         }
+        <button class="ws-action-btn ws-action-danger" data-action="close-session" data-session-id="${session.id}">End</button>
       </div>
     </div>
   `;
@@ -1010,7 +1354,6 @@ function updateSessionPane(session) {
     return;
   }
 
-  const repo = repoById(session.repoID);
   const header = pane.querySelector(".session-pane-header") as HTMLElement | null;
   const blockerElement = pane.querySelector(".session-pane-blocker") as HTMLElement | null;
   const pausedNotice = pane.querySelector(".session-pane-paused-notice") as HTMLElement | null;
@@ -1023,31 +1366,39 @@ function updateSessionPane(session) {
   pane.classList.toggle("session-pane-active", selectionMatches("session", session.id));
   terminalWrap.classList.toggle("session-pane-terminal-wrap-paused", session.runtimeState !== "live");
 
-  header.innerHTML = `
-    <div class="session-pane-header-row">
-      <div class="session-pane-title-row">
-        <button class="ghost session-pane-drag-handle" draggable="true" data-drag-session-id="${session.id}" data-drag-source="pane" title="Drag ${escapeAttribute(session.title)}" aria-label="Drag ${escapeAttribute(session.title)}">Drag</button>
-          <div class="session-pane-title-copy">
-            <div class="session-title-row">
-              <div class="session-title">${escapeHtml(session.title)}</div>
-              <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
-            </div>
-          <div class="muted">${escapeHtml(repo?.name || "Unknown Folder")} · ${escapeHtml(abbreviateHome(repo?.path || ""))}</div>
-          </div>
-        </div>
-      <div class="session-pane-actions">
+  const headerSig = `${session.title}|${session.status}|${session.runtimeState}`;
+  if (header.dataset.sig !== headerSig) {
+    header.dataset.sig = headerSig;
+    header.innerHTML = `
+    <div class="pane-bar" draggable="true" data-drag-session-id="${session.id}" data-drag-source="pane" title="Drag to reorder">
+      <div class="pane-bar-left">
+        <span class="pane-grip" aria-hidden="true">\u2801\u2801\u2801</span>
+        <span class="pane-title">${escapeHtml(session.title)}</span>
+        <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
+      </div>
+      <div class="pane-bar-right">
         ${
-          session.runtimeState === "live"
-            ? ""
-            : `<button class="primary" data-action="restart-session" data-session-id="${session.id}">${escapeHtml(resumeSessionActionLabel(session))}</button>`
+          session.runtimeState !== "live"
+            ? `<button class="pane-action-btn primary" data-action="restart-session" data-session-id="${session.id}">${escapeHtml(resumeSessionActionLabel(session))}</button>`
+            : ""
         }
-        <button data-action="remove-session-pane" data-session-id="${session.id}">Hide</button>
+        <button class="pane-action-btn pane-hide-btn" data-action="remove-session-pane" data-session-id="${session.id}" title="Hide pane">&times;</button>
       </div>
     </div>
   `;
+  }
 
-  blockerElement.innerHTML = renderSessionBlocker(session);
-  pausedNotice.innerHTML = renderPausedSessionNotice(session);
+  const blockerHtml = renderSessionBlocker(session);
+  if (blockerElement.dataset.sig !== blockerHtml) {
+    blockerElement.dataset.sig = blockerHtml;
+    blockerElement.innerHTML = blockerHtml;
+  }
+
+  const pausedHtml = renderPausedSessionNotice(session);
+  if (pausedNotice.dataset.sig !== pausedHtml) {
+    pausedNotice.dataset.sig = pausedHtml;
+    pausedNotice.innerHTML = pausedHtml;
+  }
 }
 
 function renderSessionBlocker(session) {
@@ -2019,6 +2370,32 @@ async function handleClick(event) {
         await loadWikiContext(ui.selection.id);
       }
       break;
+    case "browse-files":
+      await openFilesBrowser(target.dataset.repoId || currentRepoId());
+      break;
+    case "files-reload":
+      await loadFileBrowserTree(target.dataset.repoId || currentRepoId());
+      break;
+    case "files-toggle-dir": {
+      const dirPath = target.dataset.dirPath;
+      if (dirPath) {
+        if (ui.fileBrowserExpandedDirs.has(dirPath)) {
+          ui.fileBrowserExpandedDirs.delete(dirPath);
+        } else {
+          ui.fileBrowserExpandedDirs.add(dirPath);
+        }
+        if (ui.selection.type === "files") renderDetail();
+      }
+      break;
+    }
+    case "files-select-file":
+      await selectFileBrowserFile(target.dataset.filePath);
+      break;
+    case "files-reveal-file":
+      if (target.dataset.filePath) {
+        await api.revealPath(target.dataset.filePath);
+      }
+      break;
     case "reveal-repo":
       if (target.dataset.repoId) {
         await api.openRepoInFinder(target.dataset.repoId);
@@ -2194,6 +2571,36 @@ function handlePointerDown(event) {
     return;
   }
 
+  const resizeHandle = target.closest(".pane-resize-handle") as HTMLElement | null;
+  if (resizeHandle) {
+    const splitPath = resizeHandle.dataset.splitPath ?? "";
+    const handleIndex = Number(resizeHandle.dataset.handleIndex ?? 0);
+    const layout = state.preferences.sessionWorkspaceLayout as WorkspaceLayoutNode | null;
+    const splitNode = splitNodeByPath(layout, splitPath);
+    if (splitNode) {
+      const axis = splitNode.axis;
+      const container = resizeHandle.closest(".session-workspace-split") as HTMLElement | null;
+      const containerSize = container
+        ? (axis === "row" ? container.clientWidth : container.clientHeight)
+        : 1;
+      const sizes = splitNode.sizes && splitNode.sizes.length === splitNode.children.length
+        ? [...splitNode.sizes]
+        : splitNode.children.map(() => 1);
+      resizeHandle.classList.add("pane-resize-handle-active");
+      ui.resizeDragState = {
+        splitPath,
+        handleIndex,
+        axis,
+        startPos: axis === "row" ? event.clientX : event.clientY,
+        startSizes: sizes,
+        containerSize,
+        splitContainer: container
+      };
+      event.preventDefault();
+    }
+    return;
+  }
+
   const paneSessionId = sessionIdForPaneTarget(target);
   if (paneSessionId && ui.selection.type === "session" && ui.selection.id !== paneSessionId) {
     void activateVisibleSession(
@@ -2222,6 +2629,71 @@ function handlePointerDown(event) {
   if (detailElement.contains(target)) {
     setFocusSection("main");
   }
+}
+
+function handlePointerMove(event: PointerEvent) {
+  if (!ui.resizeDragState) return;
+
+  const { splitPath, splitContainer, handleIndex, axis, startPos, startSizes, containerSize } = ui.resizeDragState;
+  const currentPos = axis === "row" ? event.clientX : event.clientY;
+  const delta = currentPos - startPos;
+  const deltaRatio = delta / (containerSize || 1);
+  const minSize = 0.15 * startSizes.length;
+
+  const newSizes = [...startSizes];
+  newSizes[handleIndex] = Math.max(minSize, startSizes[handleIndex] + deltaRatio);
+  newSizes[handleIndex + 1] = Math.max(minSize, startSizes[handleIndex + 1] - deltaRatio);
+
+  if (splitContainer) applySizesToDOM(splitContainer, newSizes);
+
+  const layout = state.preferences.sessionWorkspaceLayout as WorkspaceLayoutNode | null;
+  const node = splitNodeByPath(layout, splitPath);
+  if (node) {
+    node.sizes = newSizes;
+  }
+}
+
+function handlePointerUp(_event: PointerEvent) {
+  if (!ui.resizeDragState) return;
+
+  const { splitPath } = ui.resizeDragState;
+  ui.resizeDragState = null;
+
+  const handle = detailElement.querySelector(
+    `.pane-resize-handle-active[data-split-path="${CSS.escape(splitPath)}"]`
+  );
+  handle?.classList.remove("pane-resize-handle-active");
+
+  setStoredSessionWorkspaceLayout(state.preferences.sessionWorkspaceLayout as WorkspaceLayoutNode | null);
+
+  for (const mount of ui.terminalMounts.values()) {
+    mount.fitAddon.fit();
+  }
+}
+
+function applySizesToDOM(container: HTMLElement, sizes: number[]) {
+  const children = Array.from(container.children).filter((el) =>
+    el.classList.contains("split-child")
+  );
+  children.forEach((child, i) => {
+    (child as HTMLElement).style.flex = `${sizes[i]} 1 0%`;
+  });
+}
+
+function splitNodeByPath(layout: WorkspaceLayoutNode | null, path: string): WorkspaceSplitNode | null {
+  if (!layout || layout.type !== "split") return null;
+  if (!path) return layout as WorkspaceSplitNode;
+  const parts = path.split(".");
+  const head = Number(parts[0]);
+  const tail = parts.slice(1).join(".");
+  const child = (layout as WorkspaceSplitNode).children[head];
+  return splitNodeByPath(child ?? null, tail);
+}
+
+function workspaceLayoutStructureSignature(layout: WorkspaceLayoutNode | null): string {
+  if (!layout) return "";
+  if (layout.type === "leaf") return `leaf:${layout.sessionId}`;
+  return `split:${layout.axis}:[${layout.children.map(workspaceLayoutStructureSignature).join(",")}]`;
 }
 
 function handleDragStart(event: DragEvent) {
@@ -3603,8 +4075,14 @@ function normalizeWorkspaceNode(
     return validSessionIds.has(layout.sessionId) ? layout : null;
   }
 
+  const originalSizes = layout.sizes;
+  const hasOriginalSizes = !!originalSizes && originalSizes.length === (layout.children || []).length;
   const normalizedChildren: WorkspaceLayoutNode[] = [];
-  for (const child of layout.children || []) {
+  const normalizedSizes: number[] = [];
+  let sizesValid = hasOriginalSizes;
+
+  for (let i = 0; i < (layout.children || []).length; i++) {
+    const child = layout.children[i];
     const normalizedChild = normalizeWorkspaceNode(child, validSessionIds);
     if (!normalizedChild) {
       continue;
@@ -3612,8 +4090,12 @@ function normalizeWorkspaceNode(
 
     if (normalizedChild.type === "split" && normalizedChild.axis === layout.axis) {
       normalizedChildren.push(...normalizedChild.children);
+      sizesValid = false;
     } else {
       normalizedChildren.push(normalizedChild);
+      if (sizesValid) {
+        normalizedSizes.push(originalSizes![i]);
+      }
     }
   }
 
@@ -3625,11 +4107,17 @@ function normalizeWorkspaceNode(
     return normalizedChildren[0];
   }
 
-  return {
+  const result: WorkspaceSplitNode = {
     type: "split",
     axis: layout.axis === "column" ? "column" : "row",
     children: normalizedChildren
   };
+
+  if (sizesValid && normalizedSizes.length === normalizedChildren.length) {
+    result.sizes = normalizedSizes;
+  }
+
+  return result;
 }
 
 function buildAxisWorkspaceLayout(sessionIds: string[], axis: WorkspaceSplitAxis) {
@@ -3747,13 +4235,7 @@ function addSessionToWorkspaceLayout(
     return replaceSessionInWorkspaceLayout(layout, replaceTargetId, sessionId);
   }
 
-  return insertLeafNextToTarget(
-    layout,
-    replaceTargetId,
-    createWorkspaceLeaf(sessionId),
-    "row",
-    false
-  );
+  return buildGridWorkspaceLayout([...visibleIds, sessionId]);
 }
 
 function replaceSessionInWorkspaceLayout(

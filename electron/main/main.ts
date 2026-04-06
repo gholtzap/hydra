@@ -37,6 +37,54 @@ const {
 
 app.setName("ClaudeWorkspace");
 
+const FILE_TREE_IGNORED = new Set([
+  ".git", "node_modules", "dist", "build", ".next", "__pycache__",
+  ".cache", "coverage", ".mypy_cache", ".pytest_cache", ".turbo",
+  ".vercel", "out", ".output", ".nuxt", ".svelte-kit", "storybook-static",
+  ".parcel-cache", "target", ".gradle", ".idea", ".vscode"
+]);
+
+function buildFileTree(rootPath: string, currentPath: string, depth: number): any[] {
+  if (depth >= 5) return [];
+
+  let entries: any[];
+  try {
+    entries = fs.readdirSync(currentPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  entries.sort((a: any, b: any) => {
+    const aDir = a.isDirectory();
+    const bDir = b.isDirectory();
+    if (aDir && !bDir) return -1;
+    if (!aDir && bDir) return 1;
+    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+  });
+
+  const nodes: any[] = [];
+  for (const entry of entries.slice(0, 400)) {
+    const { name } = entry;
+    const fullPath = path.join(currentPath, name);
+    const relativePath = path.relative(rootPath, fullPath);
+
+    if (entry.isDirectory()) {
+      if (FILE_TREE_IGNORED.has(name)) continue;
+      nodes.push({
+        type: "directory",
+        name,
+        path: fullPath,
+        relativePath,
+        children: buildFileTree(rootPath, fullPath, depth + 1)
+      });
+    } else if (entry.isFile()) {
+      nodes.push({ type: "file", name, path: fullPath, relativePath });
+    }
+  }
+
+  return nodes;
+}
+
 class AppController {
   state: any;
   window: ElectronBrowserWindow | null;
@@ -140,6 +188,22 @@ class AppController {
       this.toggleProjectWiki(payload.repoId, payload.enabled)
     );
     ipcMain.handle("wiki:reveal", (_event, repoId) => this.revealProjectWiki(repoId));
+    ipcMain.handle("fs:readDir", (_event, repoId) => {
+      const repo = this.repoById(repoId);
+      if (!repo) return null;
+      return { path: repo.path, tree: buildFileTree(repo.path, repo.path, 0) };
+    });
+    ipcMain.handle("fs:readFile", (_event, filePath) => {
+      try {
+        const buf = fs.readFileSync(filePath);
+        if (buf.byteLength > 512 * 1024) {
+          return { content: null, tooLarge: true, size: buf.byteLength };
+        }
+        return { content: buf.toString("utf-8"), tooLarge: false };
+      } catch (error: any) {
+        return { content: null, error: error?.message || "Failed to read file" };
+      }
+    });
   }
 
   setupMenu() {

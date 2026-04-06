@@ -9,7 +9,10 @@ const DEFAULT_PREFERENCES = {
   showInAppBadges: true,
   showNativeNotifications: true,
   sessionWorkspaceLayout: null,
-  keybindings: {}
+  keybindings: {},
+  themeAppearance: "system",
+  themeActiveId: "workspace-default",
+  themeCustomThemes: []
 };
 
 function loadState() {

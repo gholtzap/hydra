@@ -319,7 +319,501 @@ type SimplifiedJsonEntry = {
   summary?: string;
 };
 
-syncColorSchemeClass();
+type ThemeAppearance = "system" | "light" | "dark";
+type ThemeMode = "light" | "dark";
+
+type ThemeSeedPalette = {
+  background: string;
+  surface: string;
+  text: string;
+  mutedText: string;
+  primary: string;
+  border: string;
+  focus: string;
+  terminalBackground: string;
+};
+
+type ThemeColorFieldId = keyof ThemeSeedPalette;
+
+type ThemeDefinition = {
+  id: string;
+  name: string;
+  description: string;
+  light: ThemeSeedPalette;
+  dark: ThemeSeedPalette;
+};
+
+type ThemePreferences = {
+  appearance: ThemeAppearance;
+  activeThemeId: string;
+  customThemes: ThemeDefinition[];
+};
+
+type RgbColor = {
+  r: number;
+  g: number;
+  b: number;
+};
+
+const THEME_BOOTSTRAP_STORAGE_KEY = "claude-workspace-theme-bootstrap-v1";
+const DEFAULT_THEME_PALETTE_LIGHT: ThemeSeedPalette = {
+  background: "#f5f1ea",
+  surface: "#fcfaf7",
+  text: "#37332d",
+  mutedText: "#7e776f",
+  primary: "#5c574f",
+  border: "#e3ded5",
+  focus: "#8a847a",
+  terminalBackground: "#faf7f2"
+};
+const DEFAULT_THEME_PALETTE_DARK: ThemeSeedPalette = {
+  background: "#211f1c",
+  surface: "#282521",
+  text: "#ece6dd",
+  mutedText: "#aba196",
+  primary: "#e7dfd2",
+  border: "#44403a",
+  focus: "#c7bdaf",
+  terminalBackground: "#171512"
+};
+const DEFAULT_THEME_PREFERENCES: ThemePreferences = {
+  appearance: "system",
+  activeThemeId: "workspace-default",
+  customThemes: []
+};
+const BUILT_IN_THEMES: ThemeDefinition[] = [
+  {
+    id: "workspace-default",
+    name: "Workspace Default",
+    description: "The current neutral palette the app ships with.",
+    light: DEFAULT_THEME_PALETTE_LIGHT,
+    dark: DEFAULT_THEME_PALETTE_DARK
+  },
+  {
+    id: "coastal-signal",
+    name: "Coastal Signal",
+    description: "Cool blue surfaces with a brighter accent.",
+    light: {
+      background: "#eef6fa",
+      surface: "#fbfdff",
+      text: "#173447",
+      mutedText: "#567385",
+      primary: "#1679b7",
+      border: "#c8dbe7",
+      focus: "#45a6d9",
+      terminalBackground: "#f3fbff"
+    },
+    dark: {
+      background: "#111d24",
+      surface: "#15262e",
+      text: "#e1f0f8",
+      mutedText: "#84a7ba",
+      primary: "#6bc8ff",
+      border: "#29414d",
+      focus: "#50b7f0",
+      terminalBackground: "#0a141a"
+    }
+  },
+  {
+    id: "ember-notes",
+    name: "Ember Notes",
+    description: "Warm clay and amber tones without turning the whole UI orange.",
+    light: {
+      background: "#fbf1ea",
+      surface: "#fff8f3",
+      text: "#452b22",
+      mutedText: "#8c6657",
+      primary: "#c96b2c",
+      border: "#ecd1c3",
+      focus: "#de874d",
+      terminalBackground: "#fff7f1"
+    },
+    dark: {
+      background: "#231713",
+      surface: "#2b1e19",
+      text: "#f5e5dc",
+      mutedText: "#ba9282",
+      primary: "#f2a15f",
+      border: "#4a342c",
+      focus: "#f7b37d",
+      terminalBackground: "#160f0d"
+    }
+  },
+  {
+    id: "forest-console",
+    name: "Forest Console",
+    description: "A greener palette with restrained contrast and darker chrome.",
+    light: {
+      background: "#f1f6ef",
+      surface: "#fcfffb",
+      text: "#223728",
+      mutedText: "#657d6a",
+      primary: "#3d7a4d",
+      border: "#d4e1d5",
+      focus: "#58a36e",
+      terminalBackground: "#f7fcf6"
+    },
+    dark: {
+      background: "#172019",
+      surface: "#1d2820",
+      text: "#e5f1e5",
+      mutedText: "#92aa95",
+      primary: "#7fce8f",
+      border: "#344538",
+      focus: "#72d694",
+      terminalBackground: "#101612"
+    }
+  }
+];
+const THEME_COLOR_FIELDS: { id: ThemeColorFieldId; label: string; hint: string }[] = [
+  { id: "background", label: "Background", hint: "App canvas and outer chrome." },
+  { id: "surface", label: "Surface", hint: "Cards, dialogs, panels, and sidebars." },
+  { id: "text", label: "Text", hint: "Primary body text and headings." },
+  { id: "mutedText", label: "Muted Text", hint: "Secondary labels and metadata." },
+  { id: "primary", label: "Accent", hint: "Primary buttons, counts, and highlights." },
+  { id: "border", label: "Border", hint: "Hairlines and control outlines." },
+  { id: "focus", label: "Focus Ring", hint: "Keyboard focus and active selection halo." },
+  { id: "terminalBackground", label: "Terminal", hint: "Terminal canvas background." }
+];
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeHexColor(value: any, fallback: string) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const trimmed = value.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(trimmed)) {
+    return trimmed;
+  }
+  if (/^#[0-9a-f]{3}$/.test(trimmed)) {
+    return `#${trimmed[1]}${trimmed[1]}${trimmed[2]}${trimmed[2]}${trimmed[3]}${trimmed[3]}`;
+  }
+  return fallback;
+}
+
+function parseHexColor(value: string): RgbColor {
+  const normalized = normalizeHexColor(value, "#000000");
+  return {
+    r: Number.parseInt(normalized.slice(1, 3), 16),
+    g: Number.parseInt(normalized.slice(3, 5), 16),
+    b: Number.parseInt(normalized.slice(5, 7), 16)
+  };
+}
+
+function rgbToHex(color: RgbColor) {
+  return `#${[color.r, color.g, color.b]
+    .map((channel) => clampNumber(Math.round(channel), 0, 255).toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+function mixColors(left: string, right: string, rightWeight: number) {
+  const from = parseHexColor(left);
+  const to = parseHexColor(right);
+  const weight = clampNumber(rightWeight, 0, 1);
+  return rgbToHex({
+    r: from.r + (to.r - from.r) * weight,
+    g: from.g + (to.g - from.g) * weight,
+    b: from.b + (to.b - from.b) * weight
+  });
+}
+
+function withAlpha(color: string, alpha: number) {
+  const rgb = parseHexColor(color);
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${clampNumber(alpha, 0, 1).toFixed(3)})`;
+}
+
+function relativeLuminance(color: string) {
+  const { r, g, b } = parseHexColor(color);
+  const normalize = (channel: number) => {
+    const value = channel / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  const rr = normalize(r);
+  const gg = normalize(g);
+  const bb = normalize(b);
+  return 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
+}
+
+function pickReadableText(background: string, darkText = "#111827", lightText = "#f8fafc") {
+  return relativeLuminance(background) > 0.45 ? darkText : lightText;
+}
+
+function normalizeThemePalette(raw: any, fallback: ThemeSeedPalette): ThemeSeedPalette {
+  const next: Partial<ThemeSeedPalette> = {};
+  for (const field of THEME_COLOR_FIELDS) {
+    next[field.id] = normalizeHexColor(raw?.[field.id], fallback[field.id]);
+  }
+  return next as ThemeSeedPalette;
+}
+
+function normalizeThemeDefinition(raw: any, index: number): ThemeDefinition {
+  return {
+    id:
+      typeof raw?.id === "string" && raw.id.trim()
+        ? raw.id.trim()
+        : `custom-theme-${index + 1}`,
+    name:
+      typeof raw?.name === "string" && raw.name.trim()
+        ? raw.name.trim()
+        : `Custom Theme ${index + 1}`,
+    description: typeof raw?.description === "string" ? raw.description.trim() : "",
+    light: normalizeThemePalette(raw?.light, DEFAULT_THEME_PALETTE_LIGHT),
+    dark: normalizeThemePalette(raw?.dark, DEFAULT_THEME_PALETTE_DARK)
+  };
+}
+
+function isThemeAppearance(value: any): value is ThemeAppearance {
+  return value === "system" || value === "light" || value === "dark";
+}
+
+function themePreferencesFromState(): ThemePreferences {
+  const customThemes = Array.isArray(state.preferences.themeCustomThemes)
+    ? state.preferences.themeCustomThemes.map((theme, index) => normalizeThemeDefinition(theme, index))
+    : [];
+  const allThemes = [...BUILT_IN_THEMES, ...customThemes];
+  const activeThemeId =
+    typeof state.preferences.themeActiveId === "string" &&
+    allThemes.some((theme) => theme.id === state.preferences.themeActiveId)
+      ? state.preferences.themeActiveId
+      : DEFAULT_THEME_PREFERENCES.activeThemeId;
+
+  return {
+    appearance: isThemeAppearance(state.preferences.themeAppearance)
+      ? state.preferences.themeAppearance
+      : DEFAULT_THEME_PREFERENCES.appearance,
+    activeThemeId,
+    customThemes
+  };
+}
+
+function allThemes(themePreferences = themePreferencesFromState()) {
+  return [...BUILT_IN_THEMES, ...themePreferences.customThemes];
+}
+
+function resolveTheme(themePreferences = themePreferencesFromState()) {
+  return (
+    allThemes(themePreferences).find((theme) => theme.id === themePreferences.activeThemeId) ||
+    BUILT_IN_THEMES[0]
+  );
+}
+
+function isCustomTheme(themeId: string, themePreferences = themePreferencesFromState()) {
+  return themePreferences.customThemes.some((theme) => theme.id === themeId);
+}
+
+function resolvedThemeMode(themePreferences = themePreferencesFromState()): ThemeMode {
+  if (themePreferences.appearance === "light" || themePreferences.appearance === "dark") {
+    return themePreferences.appearance;
+  }
+  return colorSchemeQuery.matches ? "dark" : "light";
+}
+
+function themePalette(theme: ThemeDefinition, mode: ThemeMode) {
+  return mode === "dark" ? theme.dark : theme.light;
+}
+
+function buildThemeCssVariables(theme: ThemeDefinition, mode: ThemeMode) {
+  const palette = themePalette(theme, mode);
+  const isDark = mode === "dark";
+  const primaryForeground = pickReadableText(palette.primary);
+  const terminalForeground = pickReadableText(
+    palette.terminalBackground,
+    mixColors(palette.text, "#000000", 0.16),
+    "#f4f7fb"
+  );
+  const secondary = mixColors(palette.surface, palette.background, isDark ? 0.18 : 0.45);
+  const muted = mixColors(palette.surface, palette.background, isDark ? 0.12 : 0.55);
+  const accent = mixColors(palette.surface, palette.primary, isDark ? 0.18 : 0.12);
+  const accentForeground = pickReadableText(accent, palette.text, "#f8fafc");
+  const sidebarSurface = mixColors(palette.surface, palette.background, isDark ? 0.06 : 0.18);
+  const accent2 = mixColors(palette.primary, palette.text, isDark ? 0.18 : 0.24);
+  const terminalBlue = mixColors(palette.primary, isDark ? "#60a5fa" : "#2563eb", 0.55);
+  const terminalMagenta = mixColors(palette.primary, isDark ? "#c084fc" : "#9333ea", 0.40);
+
+  return {
+    "--background": palette.background,
+    "--foreground": palette.text,
+    "--card": palette.surface,
+    "--card-foreground": palette.text,
+    "--popover": mixColors(palette.surface, palette.background, isDark ? 0.1 : 0.28),
+    "--popover-foreground": palette.text,
+    "--primary": palette.primary,
+    "--primary-foreground": primaryForeground,
+    "--secondary": secondary,
+    "--secondary-foreground": palette.text,
+    "--muted": muted,
+    "--muted-foreground": palette.mutedText,
+    "--accent": accent,
+    "--accent-foreground": accentForeground,
+    "--destructive": isDark ? "#ef6363" : "#d14a4a",
+    "--destructive-foreground": "#ffffff",
+    "--border": palette.border,
+    "--input": palette.border,
+    "--ring": palette.focus,
+    "--chart-1": mixColors(palette.primary, "#f59e0b", 0.28),
+    "--chart-2": mixColors(palette.primary, palette.text, 0.32),
+    "--chart-3": mixColors(palette.primary, palette.background, 0.55),
+    "--chart-4": mixColors(palette.surface, palette.background, isDark ? 0.18 : 0.56),
+    "--chart-5": mixColors(palette.surface, "#ffffff", isDark ? 0.04 : 0.8),
+    "--sidebar": sidebarSurface,
+    "--sidebar-foreground": palette.text,
+    "--sidebar-primary": palette.primary,
+    "--sidebar-primary-foreground": primaryForeground,
+    "--sidebar-accent": accent,
+    "--sidebar-accent-foreground": palette.text,
+    "--sidebar-border": palette.border,
+    "--sidebar-ring": palette.focus,
+    "--border-strong": mixColors(palette.border, palette.text, isDark ? 0.22 : 0.12),
+    "--accent-2": accent2,
+    "--field-bg": mixColors(palette.surface, palette.background, isDark ? 0.06 : 0.6),
+    "--surface-soft": mixColors(palette.surface, palette.background, isDark ? 0.08 : 0.22),
+    "--surface-muted": mixColors(palette.surface, palette.background, isDark ? 0.16 : 0.38),
+    "--surface-active": mixColors(palette.surface, palette.primary, isDark ? 0.14 : 0.1),
+    "--surface-active-border": withAlpha(
+      mixColors(palette.border, palette.primary, 0.52),
+      isDark ? 0.28 : 0.4
+    ),
+    "--sidebar-surface": withAlpha(sidebarSurface, isDark ? 0.98 : 0.96),
+    "--app-glow-top": withAlpha(palette.primary, isDark ? 0.18 : 0.12),
+    "--app-glow-bottom": withAlpha(
+      mixColors(palette.primary, palette.background, 0.7),
+      isDark ? 0.14 : 0.08
+    ),
+    "--focus-ring": withAlpha(palette.focus, isDark ? 0.24 : 0.18),
+    "--warn-bg": withAlpha("#f59e0b", isDark ? 0.28 : 0.16),
+    "--warn-border": withAlpha("#f59e0b", isDark ? 0.42 : 0.32),
+    "--badge-bg": mixColors(palette.surface, palette.background, isDark ? 0.12 : 0.48),
+    "--status-live-bg": withAlpha("#22c55e", isDark ? 0.26 : 0.16),
+    "--status-live-fg": isDark ? "#b7f5cd" : "#166534",
+    "--status-danger-bg": withAlpha("#ef4444", isDark ? 0.24 : 0.14),
+    "--status-danger-fg": isDark ? "#fecaca" : "#b91c1c",
+    "--status-muted-bg": mixColors(palette.surface, palette.background, isDark ? 0.18 : 0.4),
+    "--status-muted-fg": palette.mutedText,
+    "--count-bg": palette.primary,
+    "--count-fg": primaryForeground,
+    "--dialog-backdrop": withAlpha(isDark ? "#050505" : palette.text, isDark ? 0.54 : 0.18),
+    "--terminal-background": palette.terminalBackground,
+    "--terminal-foreground": terminalForeground,
+    "--terminal-cursor": palette.focus,
+    "--terminal-cursor-accent": palette.terminalBackground,
+    "--terminal-selection": withAlpha(palette.primary, isDark ? 0.32 : 0.22),
+    "--terminal-shell-top": withAlpha(palette.primary, isDark ? 0.16 : 0.1),
+    "--terminal-shell-bottom": withAlpha(
+      mixColors(palette.primary, palette.background, 0.65),
+      isDark ? 0.12 : 0.06
+    ),
+    "--terminal-scrollbar": withAlpha(palette.mutedText, 0.25),
+    "--terminal-ansi-black": mixColors(palette.terminalBackground, "#000000", isDark ? 0.45 : 0.68),
+    "--terminal-ansi-red": isDark ? "#f87171" : "#dc2626",
+    "--terminal-ansi-green": isDark ? "#4ade80" : "#16a34a",
+    "--terminal-ansi-yellow": isDark ? "#facc15" : "#ca8a04",
+    "--terminal-ansi-blue": terminalBlue,
+    "--terminal-ansi-magenta": terminalMagenta,
+    "--terminal-ansi-cyan": isDark ? "#22d3ee" : "#0891b2",
+    "--terminal-ansi-white": mixColors(terminalForeground, "#ffffff", isDark ? 0.12 : 0.02),
+    "--terminal-ansi-bright-black": mixColors(palette.mutedText, palette.terminalBackground, 0.2),
+    "--terminal-ansi-bright-red": isDark ? "#fca5a5" : "#ef4444",
+    "--terminal-ansi-bright-green": isDark ? "#86efac" : "#22c55e",
+    "--terminal-ansi-bright-yellow": isDark ? "#fde047" : "#eab308",
+    "--terminal-ansi-bright-blue": mixColors(terminalBlue, "#ffffff", isDark ? 0.18 : 0.08),
+    "--terminal-ansi-bright-magenta": mixColors(terminalMagenta, "#ffffff", isDark ? 0.18 : 0.08),
+    "--terminal-ansi-bright-cyan": isDark ? "#67e8f9" : "#06b6d4",
+    "--terminal-ansi-bright-white": isDark ? "#ffffff" : mixColors(terminalForeground, "#ffffff", 0.22)
+  };
+}
+
+function cacheThemeBootstrap(themePreferences = themePreferencesFromState()) {
+  try {
+    const theme = resolveTheme(themePreferences);
+    localStorage.setItem(
+      THEME_BOOTSTRAP_STORAGE_KEY,
+      JSON.stringify({
+        appearance: themePreferences.appearance,
+        lightVars: buildThemeCssVariables(theme, "light"),
+        darkVars: buildThemeCssVariables(theme, "dark")
+      })
+    );
+  } catch {}
+}
+
+function applyThemePreferences(themePreferences = themePreferencesFromState()) {
+  const mode = resolvedThemeMode(themePreferences);
+  const theme = resolveTheme(themePreferences);
+  const variables = buildThemeCssVariables(theme, mode);
+  const root = document.documentElement;
+
+  root.classList.toggle("dark", mode === "dark");
+  root.dataset.themeId = theme.id;
+  root.dataset.themeMode = mode;
+
+  for (const [name, value] of Object.entries(variables)) {
+    root.style.setProperty(name, value);
+  }
+
+  cacheThemeBootstrap(themePreferences);
+}
+
+function refreshTerminalThemes() {
+  for (const mount of ui.terminalMounts.values()) {
+    mount.terminal.options.theme = buildTerminalTheme();
+  }
+
+  if (ui.lazygitTerminalMount) {
+    ui.lazygitTerminalMount.terminal.options.theme = buildTerminalTheme();
+  }
+
+  if (ui.tokscaleTerminalMount) {
+    ui.tokscaleTerminalMount.terminal.options.theme = buildTerminalTheme();
+  }
+}
+
+function updateThemePreferencesInState(themePreferences: ThemePreferences) {
+  state.preferences = {
+    ...state.preferences,
+    themeAppearance: themePreferences.appearance,
+    themeActiveId: themePreferences.activeThemeId,
+    themeCustomThemes: themePreferences.customThemes
+  };
+}
+
+async function persistThemePreferences(themePreferences: ThemePreferences) {
+  updateThemePreferencesInState(themePreferences);
+  applyThemePreferences(themePreferences);
+  refreshTerminalThemes();
+  await api.updatePreferences({
+    themeAppearance: themePreferences.appearance,
+    themeActiveId: themePreferences.activeThemeId,
+    themeCustomThemes: themePreferences.customThemes
+  });
+}
+
+function nextCustomThemeName(themePreferences = themePreferencesFromState()) {
+  const existingNames = new Set(
+    themePreferences.customThemes.map((theme) => theme.name.trim().toLowerCase()).filter(Boolean)
+  );
+  let index = 1;
+  while (existingNames.has(index === 1 ? "custom theme" : `custom theme ${index}`)) {
+    index += 1;
+  }
+  return index === 1 ? "Custom Theme" : `Custom Theme ${index}`;
+}
+
+function createCustomTheme(themePreferences = themePreferencesFromState()) {
+  const base = resolveTheme(themePreferences);
+  return {
+    id: `custom-theme-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    name: nextCustomThemeName(themePreferences),
+    description: `Custom palette based on ${base.name}.`,
+    light: { ...base.light },
+    dark: { ...base.dark }
+  } satisfies ThemeDefinition;
+}
+
+applyThemePreferences();
 
 if (typeof colorSchemeQuery.addEventListener === "function") {
   colorSchemeQuery.addEventListener("change", handleColorSchemeChange);
@@ -474,23 +968,8 @@ initialize().catch((error) => {
 });
 
 function handleColorSchemeChange() {
-  syncColorSchemeClass();
-
-  for (const mount of ui.terminalMounts.values()) {
-    mount.terminal.options.theme = buildTerminalTheme();
-  }
-
-  if (ui.lazygitTerminalMount) {
-    ui.lazygitTerminalMount.terminal.options.theme = buildTerminalTheme();
-  }
-
-  if (ui.tokscaleTerminalMount) {
-    ui.tokscaleTerminalMount.terminal.options.theme = buildTerminalTheme();
-  }
-}
-
-function syncColorSchemeClass() {
-  document.documentElement.classList.toggle("dark", colorSchemeQuery.matches);
+  applyThemePreferences();
+  refreshTerminalThemes();
 }
 
 function readCssVar(name, fallback = "") {
@@ -509,22 +988,22 @@ function buildTerminalTheme() {
     cursor: readCssVar("--terminal-cursor", "#7dd3fc"),
     cursorAccent: readCssVar("--terminal-cursor-accent", "#161616"),
     selectionBackground: readCssVar("--terminal-selection", "rgba(125, 211, 252, 0.28)"),
-    black: "#161616",
-    red: "#ff7b72",
-    green: "#7ee787",
-    yellow: "#e3b341",
-    blue: "#79c0ff",
-    magenta: "#d2a8ff",
-    cyan: "#a5f3fc",
-    white: "#c9d1d9",
-    brightBlack: "#6e7681",
-    brightRed: "#ffa198",
-    brightGreen: "#56d364",
-    brightYellow: "#e3b341",
-    brightBlue: "#79c0ff",
-    brightMagenta: "#d2a8ff",
-    brightCyan: "#56d4dd",
-    brightWhite: "#f0f6fc"
+    black: readCssVar("--terminal-ansi-black", "#161616"),
+    red: readCssVar("--terminal-ansi-red", "#ff7b72"),
+    green: readCssVar("--terminal-ansi-green", "#7ee787"),
+    yellow: readCssVar("--terminal-ansi-yellow", "#e3b341"),
+    blue: readCssVar("--terminal-ansi-blue", "#79c0ff"),
+    magenta: readCssVar("--terminal-ansi-magenta", "#d2a8ff"),
+    cyan: readCssVar("--terminal-ansi-cyan", "#a5f3fc"),
+    white: readCssVar("--terminal-ansi-white", "#c9d1d9"),
+    brightBlack: readCssVar("--terminal-ansi-bright-black", "#6e7681"),
+    brightRed: readCssVar("--terminal-ansi-bright-red", "#ffa198"),
+    brightGreen: readCssVar("--terminal-ansi-bright-green", "#56d364"),
+    brightYellow: readCssVar("--terminal-ansi-bright-yellow", "#e3b341"),
+    brightBlue: readCssVar("--terminal-ansi-bright-blue", "#79c0ff"),
+    brightMagenta: readCssVar("--terminal-ansi-bright-magenta", "#d2a8ff"),
+    brightCyan: readCssVar("--terminal-ansi-bright-cyan", "#56d4dd"),
+    brightWhite: readCssVar("--terminal-ansi-bright-white", "#f0f6fc")
   };
 }
 
@@ -543,6 +1022,8 @@ function replaceState(nextState) {
   state.sessions = nextState.sessions || [];
   state.preferences = nextState.preferences || {};
   state.lazygitInstalled = !!nextState.lazygitInstalled;
+  applyThemePreferences();
+  refreshTerminalThemes();
   if (ui.renamingSessionId && !state.sessions.some((session) => session.id === ui.renamingSessionId)) {
     cancelSessionRename();
   }
@@ -2197,6 +2678,7 @@ async function renderSettingsDialog() {
 
       <div class="settings-tabs">
         <button type="button" class="settings-tab ${ui.settingsTab === "general" ? "active" : ""}" data-action="settings-tab" data-tab="general">General</button>
+        <button type="button" class="settings-tab ${ui.settingsTab === "themes" ? "active" : ""}" data-action="settings-tab" data-tab="themes">Themes</button>
         <button type="button" class="settings-tab ${ui.settingsTab === "keybindings" ? "active" : ""}" data-action="settings-tab" data-tab="keybindings">Keybindings</button>
         <button type="button" class="settings-tab ${ui.settingsTab === "claude" ? "active" : ""}" data-action="settings-tab" data-tab="claude">Agent Files</button>
       </div>
@@ -2204,11 +2686,182 @@ async function renderSettingsDialog() {
       ${
         ui.settingsTab === "general"
           ? renderGeneralSettingsPane()
-          : ui.settingsTab === "keybindings"
+          : ui.settingsTab === "themes"
+            ? renderThemesSettingsPane()
+            : ui.settingsTab === "keybindings"
             ? renderKeybindingsSettingsPane()
             : renderClaudeSettingsPane()
       }
     </form>
+  `;
+}
+
+function renderThemesSettingsPane() {
+  const themePreferences = themePreferencesFromState();
+  const themes = allThemes(themePreferences);
+  const activeTheme = resolveTheme(themePreferences);
+  const currentMode = resolvedThemeMode(themePreferences);
+  const editingCustomTheme = isCustomTheme(activeTheme.id, themePreferences);
+
+  return `
+    <div class="settings-surface themes-settings-surface">
+      <div class="settings-group-card themes-toolbar-card">
+        <div class="themes-toolbar-row">
+          <label class="themes-appearance-field">
+            <div class="row-title">Appearance</div>
+            <select id="pref-theme-appearance">
+              <option value="system" ${themePreferences.appearance === "system" ? "selected" : ""}>System</option>
+              <option value="light" ${themePreferences.appearance === "light" ? "selected" : ""}>Light</option>
+              <option value="dark" ${themePreferences.appearance === "dark" ? "selected" : ""}>Dark</option>
+            </select>
+          </label>
+          <div class="themes-toolbar-copy">
+            <div class="muted">Themes include light and dark palettes. System follows macOS appearance, which is currently ${escapeHtml(currentMode)}.</div>
+            <div class="themes-toolbar-actions">
+              <button type="button" data-action="theme-create-custom">Create Custom Theme</button>
+              ${
+                editingCustomTheme
+                  ? `<button type="button" class="ws-action-danger" data-action="theme-delete-custom" data-theme-id="${escapeAttribute(activeTheme.id)}">Delete Custom Theme</button>`
+                  : ""
+              }
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="themes-grid">
+        ${themes.map((theme) => renderThemeCard(theme, themePreferences.activeThemeId, currentMode)).join("")}
+      </div>
+
+      ${
+        editingCustomTheme
+          ? renderCustomThemeEditor(activeTheme)
+          : `
+            <div class="settings-warning-card themes-readonly-card">
+              <div class="row-title">Preset themes are read-only</div>
+              <div class="muted">Select a preset, then create a custom theme to make your own version of it.</div>
+            </div>
+          `
+      }
+    </div>
+  `;
+}
+
+function renderThemeCard(theme: ThemeDefinition, activeThemeId: string, currentMode: ThemeMode) {
+  const isActive = theme.id === activeThemeId;
+  const custom = isCustomTheme(theme.id);
+  const activeLabel = currentMode === "dark" ? "Dark" : "Light";
+
+  return `
+    <button
+      type="button"
+      class="theme-card ${isActive ? "active" : ""}"
+      data-action="select-theme"
+      data-theme-id="${escapeAttribute(theme.id)}"
+    >
+      <div class="theme-card-header">
+        <div>
+          <div class="row-title">${escapeHtml(theme.name)}</div>
+          <div class="muted">${escapeHtml(theme.description || (custom ? "Custom theme" : "Preset theme"))}</div>
+        </div>
+        <span class="theme-card-badge">${custom ? "Custom" : "Preset"}</span>
+      </div>
+      <div class="theme-card-previews">
+        ${renderThemeCardPreview(theme.light, "Light")}
+        ${renderThemeCardPreview(theme.dark, "Dark")}
+      </div>
+      <div class="theme-card-footer">
+        <span>${isActive ? `Active · ${escapeHtml(activeLabel)}` : "Activate theme"}</span>
+      </div>
+    </button>
+  `;
+}
+
+function renderThemeCardPreview(palette: ThemeSeedPalette, label: string) {
+  return `
+    <div class="theme-preview-window">
+      <div class="theme-preview-window-shell" style="--theme-preview-bg:${escapeAttribute(palette.background)};--theme-preview-surface:${escapeAttribute(palette.surface)};--theme-preview-border:${escapeAttribute(palette.border)};--theme-preview-text:${escapeAttribute(palette.text)};--theme-preview-muted:${escapeAttribute(palette.mutedText)};--theme-preview-primary:${escapeAttribute(palette.primary)};">
+        <div class="theme-preview-sidebar"></div>
+        <div class="theme-preview-content">
+          <div class="theme-preview-header"></div>
+          <div class="theme-preview-line theme-preview-line-strong"></div>
+          <div class="theme-preview-line"></div>
+          <div class="theme-preview-accent"></div>
+        </div>
+      </div>
+      <div class="theme-preview-label">${escapeHtml(label)}</div>
+    </div>
+  `;
+}
+
+function renderCustomThemeEditor(theme: ThemeDefinition) {
+  return `
+    <div class="themes-editor-grid">
+      <div class="settings-group-card themes-editor-card">
+        <div class="themes-editor-header">
+          <div>
+            <div class="row-title">Theme Name</div>
+            <div class="muted">Custom themes are saved per app install and can be switched at any time.</div>
+          </div>
+        </div>
+        <label>
+          <input
+            id="theme-name-input"
+            data-theme-name-input="true"
+            data-theme-id="${escapeAttribute(theme.id)}"
+            value="${escapeAttribute(theme.name)}"
+            placeholder="Custom Theme"
+          />
+        </label>
+      </div>
+      ${renderThemePaletteEditor(theme, "light")}
+      ${renderThemePaletteEditor(theme, "dark")}
+    </div>
+  `;
+}
+
+function renderThemePaletteEditor(theme: ThemeDefinition, mode: ThemeMode) {
+  const palette = themePalette(theme, mode);
+  const title = mode === "dark" ? "Dark Palette" : "Light Palette";
+
+  return `
+    <div class="settings-group-card themes-editor-card">
+      <div class="themes-editor-header">
+        <div class="row-title">${title}</div>
+        <div class="muted">These colors drive the full interface, including dialogs and terminals.</div>
+      </div>
+      <div class="theme-field-grid">
+        ${THEME_COLOR_FIELDS.map((field) => renderThemeColorField(theme.id, mode, field, palette[field.id])).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderThemeColorField(
+  themeId: string,
+  mode: ThemeMode,
+  field: { id: ThemeColorFieldId; label: string; hint: string },
+  value: string
+) {
+  return `
+    <label class="theme-color-field">
+      <div class="theme-color-field-header">
+        <span class="row-title">${escapeHtml(field.label)}</span>
+        <span class="theme-color-value">${escapeHtml(value)}</span>
+      </div>
+      <div class="theme-color-input-row">
+        <input
+          type="color"
+          class="theme-color-input"
+          data-theme-color-input="true"
+          data-theme-id="${escapeAttribute(themeId)}"
+          data-theme-mode="${escapeAttribute(mode)}"
+          data-theme-field="${escapeAttribute(field.id)}"
+          value="${escapeAttribute(value)}"
+        />
+      </div>
+      <div class="muted">${escapeHtml(field.hint)}</div>
+    </label>
   `;
 }
 
@@ -3127,6 +3780,46 @@ async function handleClick(event) {
       ui.keybindingRecordingAction = null;
       await renderSettingsDialog();
       break;
+    case "select-theme": {
+      const themePreferences = themePreferencesFromState();
+      const themeId = target.dataset.themeId;
+      if (themeId && themeId !== themePreferences.activeThemeId) {
+        await persistThemePreferences({
+          ...themePreferences,
+          activeThemeId: themeId
+        });
+      }
+      await renderSettingsDialog();
+      break;
+    }
+    case "theme-create-custom": {
+      const themePreferences = themePreferencesFromState();
+      const customTheme = createCustomTheme(themePreferences);
+      await persistThemePreferences({
+        ...themePreferences,
+        activeThemeId: customTheme.id,
+        customThemes: [...themePreferences.customThemes, customTheme]
+      });
+      await renderSettingsDialog();
+      break;
+    }
+    case "theme-delete-custom": {
+      const themePreferences = themePreferencesFromState();
+      const themeId = target.dataset.themeId;
+      if (!themeId) {
+        break;
+      }
+      await persistThemePreferences({
+        ...themePreferences,
+        activeThemeId:
+          themePreferences.activeThemeId === themeId
+            ? DEFAULT_THEME_PREFERENCES.activeThemeId
+            : themePreferences.activeThemeId,
+        customThemes: themePreferences.customThemes.filter((theme) => theme.id !== themeId)
+      });
+      await renderSettingsDialog();
+      break;
+    }
     case "record-keybinding":
       ui.keybindingRecordingAction = (target.dataset.keybindingAction || null) as KeybindingAction | null;
       await renderSettingsDialog();
@@ -3752,6 +4445,30 @@ async function handleChange(event) {
     return;
   }
 
+  if (target.id === "pref-theme-appearance") {
+    const themePreferences = themePreferencesFromState();
+    if (isThemeAppearance(target.value)) {
+      await persistThemePreferences({
+        ...themePreferences,
+        appearance: target.value
+      });
+      if (settingsDialog.open) {
+        await renderSettingsDialog();
+      }
+    }
+    return;
+  }
+
+  if (target.dataset.themeColorInput === "true") {
+    await handleThemeColorChange(target as HTMLInputElement);
+    return;
+  }
+
+  if (target.dataset.themeNameInput === "true") {
+    await handleThemeNameChange(target as HTMLInputElement);
+    return;
+  }
+
   if (target.dataset.settingEditor) {
     handleSettingsFieldChange(target);
     return;
@@ -3775,6 +4492,60 @@ async function handleChange(event) {
       break;
     default:
       break;
+  }
+}
+
+async function handleThemeColorChange(target: HTMLInputElement) {
+  const themeId = target.dataset.themeId || "";
+  const mode = target.dataset.themeMode === "dark" ? "dark" : "light";
+  const field = target.dataset.themeField as ThemeColorFieldId | undefined;
+  if (!field || !THEME_COLOR_FIELDS.some((entry) => entry.id === field)) {
+    return;
+  }
+
+  const themePreferences = themePreferencesFromState();
+  const customThemeIndex = themePreferences.customThemes.findIndex((theme) => theme.id === themeId);
+  if (customThemeIndex < 0) {
+    return;
+  }
+
+  const customThemes = [...themePreferences.customThemes];
+  const nextTheme = {
+    ...customThemes[customThemeIndex],
+    [mode]: {
+      ...customThemes[customThemeIndex][mode],
+      [field]: normalizeHexColor(target.value, customThemes[customThemeIndex][mode][field])
+    }
+  };
+  customThemes[customThemeIndex] = nextTheme;
+
+  await persistThemePreferences({
+    ...themePreferences,
+    customThemes
+  });
+}
+
+async function handleThemeNameChange(target: HTMLInputElement) {
+  const themeId = target.dataset.themeId || "";
+  const themePreferences = themePreferencesFromState();
+  const customThemeIndex = themePreferences.customThemes.findIndex((theme) => theme.id === themeId);
+  if (customThemeIndex < 0) {
+    return;
+  }
+
+  const customThemes = [...themePreferences.customThemes];
+  customThemes[customThemeIndex] = {
+    ...customThemes[customThemeIndex],
+    name: target.value.trim() || customThemes[customThemeIndex].name
+  };
+
+  await persistThemePreferences({
+    ...themePreferences,
+    customThemes
+  });
+
+  if (settingsDialog.open) {
+    await renderSettingsDialog();
   }
 }
 

@@ -2258,6 +2258,228 @@ textarea {
   background: var(--surface-soft);
 }
 
+.themes-settings-surface {
+  gap: 16px;
+}
+
+.themes-toolbar-card,
+.themes-editor-card,
+.themes-readonly-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+}
+
+.themes-toolbar-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.themes-appearance-field,
+.themes-toolbar-copy,
+.themes-editor-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.themes-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.themes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.theme-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
+  min-height: 0;
+  padding: 14px;
+  border-radius: 16px;
+  background: var(--surface-soft);
+  text-align: left;
+  box-shadow: none;
+}
+
+.theme-card:hover {
+  background: var(--surface-muted);
+  border-color: var(--surface-active-border);
+}
+
+.theme-card.active,
+.theme-card.active:hover {
+  background:
+    linear-gradient(180deg, var(--surface-active), var(--surface-soft));
+  border-color: var(--surface-active-border);
+  box-shadow: inset 0 0 0 1px var(--surface-active-border);
+}
+
+.theme-card-header,
+.theme-color-field-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.theme-card-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: var(--badge-bg);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.theme-card-previews {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.theme-preview-window {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.theme-preview-window-shell {
+  display: grid;
+  grid-template-columns: 22% minmax(0, 1fr);
+  gap: 8px;
+  height: 92px;
+  padding: 10px;
+  border: 1px solid var(--theme-preview-border);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, var(--theme-preview-bg), var(--theme-preview-surface));
+}
+
+.theme-preview-sidebar {
+  border-radius: 8px;
+  background: var(--theme-preview-surface);
+  border: 1px solid var(--theme-preview-border);
+}
+
+.theme-preview-content {
+  display: grid;
+  grid-template-rows: auto auto auto 1fr;
+  gap: 6px;
+}
+
+.theme-preview-header,
+.theme-preview-line,
+.theme-preview-accent {
+  border-radius: 999px;
+}
+
+.theme-preview-header {
+  width: 56%;
+  height: 8px;
+  background: var(--theme-preview-text);
+  opacity: 0.75;
+}
+
+.theme-preview-line {
+  width: 100%;
+  height: 6px;
+  background: var(--theme-preview-muted);
+  opacity: 0.55;
+}
+
+.theme-preview-line-strong {
+  width: 74%;
+  opacity: 0.85;
+}
+
+.theme-preview-accent {
+  width: 48%;
+  height: 18px;
+  margin-top: auto;
+  background: var(--theme-preview-primary);
+}
+
+.theme-preview-label,
+.theme-card-footer,
+.theme-color-value {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.theme-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.themes-editor-grid,
+.theme-field-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.themes-editor-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.theme-field-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.theme-color-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-muted);
+}
+
+.theme-color-value {
+  font-family: var(--font-mono);
+}
+
+.theme-color-input-row {
+  display: flex;
+  align-items: center;
+}
+
+.theme-color-input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.theme-color-input::-webkit-color-swatch-wrapper {
+  padding: 6px;
+}
+
+.theme-color-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 8px;
+}
+
+.theme-color-input::-moz-color-swatch {
+  border: none;
+  border-radius: 8px;
+}
+
 .settings-nav-row,
 .settings-file-summary-card,
 .settings-editor-card,
@@ -2845,6 +3067,9 @@ textarea {
 
   .settings-shell,
   .settings-guided-layout,
+  .themes-toolbar-row,
+  .themes-editor-grid,
+  .theme-field-grid,
   .settings-field-card,
   .settings-add-grid,
   .status-stat-grid,

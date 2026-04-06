@@ -8,9 +8,34 @@
     />
     <title>Claude Workspace</title>
     <script>
-      if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
-        document.documentElement.classList.add("dark");
-      }
+      try {
+        const raw = localStorage.getItem("claude-workspace-theme-bootstrap-v1");
+        const cached = raw ? JSON.parse(raw) : null;
+        const appearance = cached && typeof cached.appearance === "string" ? cached.appearance : "system";
+        const prefersDark =
+          appearance === "dark" ||
+          (appearance === "system" &&
+            window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        const vars =
+          cached && typeof cached === "object"
+            ? prefersDark
+              ? cached.darkVars
+              : cached.lightVars
+            : null;
+
+        if (prefersDark) {
+          document.documentElement.classList.add("dark");
+        }
+
+        if (vars && typeof vars === "object") {
+          for (const [name, value] of Object.entries(vars)) {
+            if (typeof name === "string" && typeof value === "string") {
+              document.documentElement.style.setProperty(name, value);
+            }
+          }
+        }
+      } catch {}
     </script>
     <link rel="stylesheet" href="./vendor/xterm.css" />
     <link rel="stylesheet" href="./app.css" />

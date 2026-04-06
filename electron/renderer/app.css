@@ -2103,21 +2103,43 @@ textarea {
   color: var(--text);
 }
 
-.settings-layout {
+.settings-shell {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  gap: 14px;
-  min-height: 480px;
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 540px;
 }
 
-.settings-surface {
+.settings-sidebar {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: linear-gradient(180deg, var(--sidebar-surface), var(--surface-soft));
 }
 
-.settings-file-hero,
+.settings-sidebar-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+.settings-sidebar-empty {
+  padding: 14px;
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  color: var(--text-muted);
+  background: var(--surface-soft);
+}
+
+.settings-nav-row,
+.settings-file-summary-card,
 .settings-editor-card,
 .settings-effective-panel,
 .settings-warning-card,
@@ -2129,21 +2151,41 @@ textarea {
   background: var(--surface-soft);
 }
 
-.settings-file-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
-  gap: 14px;
-  padding: 14px;
-}
-
-.settings-file-copy {
+.settings-detail-panel,
+.settings-surface {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
   min-width: 0;
 }
 
-.settings-file-header,
+.settings-nav-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  padding: 12px;
+  text-align: left;
+  box-shadow: none;
+}
+
+.settings-nav-row.active {
+  background: var(--surface-active);
+  border-color: var(--surface-active-border);
+}
+
+.settings-nav-row:hover {
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+.settings-nav-row.active:hover {
+  background: var(--surface-active);
+  border-color: var(--surface-active-border);
+}
+
+.settings-nav-row-top,
+.settings-file-summary-main,
 .settings-help-row,
 .settings-group-header,
 .settings-file-row-top {
@@ -2154,45 +2196,86 @@ textarea {
   align-items: flex-start;
 }
 
+.settings-nav-copy,
+.settings-file-copy,
+.settings-file-summary-title {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-nav-row-top,
+.settings-file-summary-title {
+  flex-direction: row;
+  align-items: center;
+}
+
+.settings-nav-copy {
+  gap: 4px;
+}
+
+.settings-nav-meta,
 .settings-detail-actions,
 .settings-meta-row {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  align-items: center;
+}
+
+.settings-nav-meta,
+.settings-detail-actions {
   justify-content: flex-end;
 }
 
-.settings-stat-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+.settings-meta-row {
+  justify-content: flex-start;
 }
 
-.settings-stat {
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
+.settings-nav-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
   background: var(--surface-muted);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  flex: none;
 }
 
-.settings-stat-label {
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
+.settings-nav-icon-agents {
+  background: oklch(0.93 0.02 145 / 0.9);
 }
 
-.settings-stat-value {
-  margin-top: 4px;
-  font-size: 18px;
-  font-weight: 600;
+.settings-nav-icon-claude {
+  background: oklch(0.93 0.02 245 / 0.9);
 }
 
+.settings-nav-icon-json {
+  background: oklch(0.93 0.015 80 / 0.95);
+}
+
+.settings-nav-icon-local {
+  background: oklch(0.93 0.025 35 / 0.9);
+}
+
+.settings-file-summary-card,
 .settings-editor-card,
 .settings-effective-panel,
 .settings-warning-card,
 .settings-add-card {
   padding: 14px;
+}
+
+.settings-file-summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .settings-warning-card {
@@ -2206,6 +2289,55 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface-muted);
+}
+
+.settings-guided-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.settings-guided-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-guided-nav-button,
+.settings-summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 12px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.settings-guided-nav-button.active {
+  background: var(--surface-active);
+  border-color: var(--surface-active-border);
+}
+
+.settings-guided-nav-button:hover {
+  background: var(--surface-soft);
+}
+
+.settings-guided-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.settings-guided-panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
 }
 
 .settings-field-stack,
@@ -2235,6 +2367,10 @@ textarea {
   padding: 12px 14px;
 }
 
+.settings-field-card-simple {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 380px);
+}
+
 .settings-field-copy,
 .settings-field-control {
   min-width: 0;
@@ -2252,6 +2388,10 @@ textarea {
 
 .settings-field-textarea {
   min-height: 120px;
+}
+
+.settings-list-editor {
+  min-height: 140px;
 }
 
 .settings-json-raw-editor {
@@ -2289,6 +2429,16 @@ textarea {
   letter-spacing: 0.05em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.settings-meta-pill {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
 }
 
 .settings-save-message {
@@ -2573,8 +2723,8 @@ textarea {
     grid-template-columns: 1fr;
   }
 
-  .settings-layout,
-  .settings-file-hero,
+  .settings-shell,
+  .settings-guided-layout,
   .settings-field-card,
   .settings-add-grid,
   .status-stat-grid,

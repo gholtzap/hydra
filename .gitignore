@@ -26,8 +26,10 @@ pnpm-debug.log*
 __pycache__/
 *.pyc
 AGENTS.md
+LESSONS.md
 CLAUDE.md
 GEMINI.md
 .claude/
 .codex/
 .cursor/
+/LESSONS.md

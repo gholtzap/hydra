@@ -57,6 +57,7 @@ const ui = {
   mainListSessionId: null as string | null,
   terminalMounts: new Map<string, TerminalMount>(),
   launcherQuery: "",
+  launcherTitle: "",
   launcherSelectedRepoId: null,
   launcherLaunchesClaudeOnStart: true,
   quickSwitcherQuery: "",
@@ -64,6 +65,7 @@ const ui = {
   settingsTab: "general",
   settingsContext: null,
   settingsSelectedFilePath: null,
+  settingsJsonCategoryId: "",
   settingsEditorText: "",
   settingsSaveMessage: "",
   settingsJsonDraft: null,
@@ -131,6 +133,22 @@ type JsonRenderOptions = {
   allowRemove?: boolean;
   includeJsonToggle?: boolean;
   forceRawEditor?: boolean;
+};
+
+type SimplifiedJsonCategory = {
+  id: string;
+  label: string;
+  description: string;
+  entries: SimplifiedJsonEntry[];
+};
+
+type SimplifiedJsonEntry = {
+  label: string;
+  path: (string | number)[];
+  description: string;
+  kind: "primitive" | "string-list" | "summary";
+  value?: any;
+  summary?: string;
 };
 
 syncColorSchemeClass();
@@ -219,7 +237,7 @@ api.onSessionUpdated((payload) => {
 api.onCommand(async ({ command, sessionId, repoId }) => {
   switch (command) {
     case "new-session":
-      await startDefaultClaudeSession(repoId || currentRepoId());
+      openLauncher(repoId || currentRepoId());
       break;
     case "open-wiki":
       await openWiki(repoId || currentRepoId());
@@ -1703,6 +1721,7 @@ function renderLauncherDialog() {
         </div>
         <button value="cancel">Close</button>
       </div>
+      <input id="launcher-title" placeholder="Session name (optional)" value="${escapeAttribute(ui.launcherTitle)}" />
       <input id="launcher-query" placeholder="Find a folder" value="${escapeAttribute(ui.launcherQuery)}" />
       <div class="dialog-grid">
         <div class="dialog-list">
@@ -1730,6 +1749,7 @@ function renderLauncherDialog() {
             <div class="row-title">Shell-backed session</div>
             <div class="row-subtitle">The terminal starts in the selected folder so you can enter and exit Claude normally.</div>
           </div>
+          <div class="muted">Leave the name blank to get a generated codename.</div>
           <label class="inline-toggle">
             <input type="checkbox" id="launcher-launches-claude" ${ui.launcherLaunchesClaudeOnStart ? "checked" : ""} />
             <span>Launch Claude immediately</span>
@@ -1934,19 +1954,34 @@ function renderClaudeSettingsPane() {
   const projectRepo = repoById(currentRepoId());
 
   return `
-    <div class="settings-layout">
-      <div class="dialog-list">
-        <div class="section-label">Global</div>
-        ${globalFiles.map((file) => renderSettingsFileRow(file)).join("")}
-        ${
-          projectFiles.length
-            ? `<div class="section-label">Project${projectRepo ? ` · ${escapeHtml(projectRepo.name)}` : ""}</div>`
-            : ""
-        }
-        ${projectFiles.map((file) => renderSettingsFileRow(file)).join("")}
+    <div class="settings-shell">
+      <div class="settings-sidebar">
+        <div class="settings-sidebar-sections">
+          ${
+            globalFiles.length
+              ? `
+                <div class="section-label">Global</div>
+                ${globalFiles.map((file) => renderSettingsFileRow(file)).join("")}
+              `
+              : ""
+          }
+          ${
+            projectFiles.length
+              ? `
+                <div class="section-label">Project${projectRepo ? ` · ${escapeHtml(projectRepo.name)}` : ""}</div>
+                ${projectFiles.map((file) => renderSettingsFileRow(file)).join("")}
+              `
+              : ""
+          }
+          ${
+            !globalFiles.length && !projectFiles.length
+              ? `<div class="settings-sidebar-empty">No agent files are available yet.</div>`
+              : ""
+          }
+        </div>
       </div>
 
-      <div class="dialog-panel">
+      <div class="settings-detail-panel">
         ${
           selectedFile
             ? renderSelectedSettingsPanel(selectedFile, context)
@@ -1966,24 +2001,11 @@ function renderSelectedSettingsPanel(selectedFile, context) {
 function renderTextSettingsPanel(selectedFile) {
   return `
     <div class="settings-surface">
-      <div class="settings-file-hero">
-        <div class="settings-file-copy">
-          <div class="eyebrow">${escapeHtml(settingsScopeLabel(selectedFile))}</div>
-          <div class="settings-file-header">
-            <div>
-              <div class="row-title">${escapeHtml(friendlySettingsFileTitle(selectedFile))}</div>
-              <div class="row-subtitle">${escapeHtml(abbreviateHome(selectedFile.path))}</div>
-            </div>
-            ${renderSettingsActionButtons(selectedFile)}
-          </div>
-          <div class="muted">${escapeHtml(friendlySettingsFileSummary(selectedFile))}</div>
-        </div>
-        <div class="settings-stat-grid">
-          ${renderSettingsStat("Format", "Markdown")}
-          ${renderSettingsStat("Status", selectedFile.exists ? "Ready" : "Missing")}
-          ${renderSettingsStat("Scope", selectedFile.scope === "global" ? "Global" : "Project")}
-        </div>
-      </div>
+      ${renderSettingsFileSummaryCard(selectedFile, [
+        renderSettingsMetaPill("Markdown"),
+        renderSettingsMetaPill(selectedFile.exists ? "Ready" : "Create on Save"),
+        renderSettingsMetaPill(selectedFile.scope === "global" ? "Global" : "Project")
+      ])}
 
       <div class="settings-editor-card">
         <div class="settings-help-row">
@@ -2006,33 +2028,17 @@ function renderJsonSettingsPanel(selectedFile, context) {
   const parseError = ui.settingsJsonError;
   const forceRawEditor = !!parseError;
   const showRawEditor = ui.settingsShowRawJson || forceRawEditor;
-  const topLevelCount = countTopLevelJsonEntries(currentValue);
-  const leafCount = countLeafJsonEntries(currentValue);
   const effectiveCount = context.resolvedValues.filter(
     (value) => value.sourceLabel === selectedFile.title
   ).length;
 
   return `
     <div class="settings-surface">
-      <div class="settings-file-hero">
-        <div class="settings-file-copy">
-          <div class="eyebrow">${escapeHtml(settingsScopeLabel(selectedFile))}</div>
-          <div class="settings-file-header">
-            <div>
-              <div class="row-title">${escapeHtml(friendlySettingsFileTitle(selectedFile))}</div>
-              <div class="row-subtitle">${escapeHtml(abbreviateHome(selectedFile.path))}</div>
-            </div>
-            ${renderSettingsActionButtons(selectedFile, { includeJsonToggle: true, forceRawEditor })}
-          </div>
-          <div class="muted">${escapeHtml(friendlySettingsFileSummary(selectedFile))}</div>
-        </div>
-        <div class="settings-stat-grid">
-          ${renderSettingsStat("Top-level", String(topLevelCount))}
-          ${renderSettingsStat("Values", String(leafCount))}
-          ${renderSettingsStat("Effective", String(effectiveCount))}
-          ${renderSettingsStat("Status", selectedFile.exists ? "Ready" : "New File")}
-        </div>
-      </div>
+      ${renderSettingsFileSummaryCard(selectedFile, [
+        renderSettingsMetaPill(showRawEditor ? "Raw JSON" : "Form View"),
+        renderSettingsMetaPill(`${effectiveCount} Effective`),
+        renderSettingsMetaPill(selectedFile.exists ? "Ready" : "Create on Save")
+      ], { includeJsonToggle: true, forceRawEditor })}
 
       ${
         parseError
@@ -2055,12 +2061,15 @@ function renderJsonSettingsPanel(selectedFile, context) {
 }
 
 function renderStructuredJsonEditor(currentValue) {
+  const categories = buildSimplifiedJsonCategories(currentValue);
+  const activeCategory = activeSimplifiedJsonCategory(categories);
+
   return `
     <div class="settings-editor-card">
       <div class="settings-help-row">
         <div>
-          <div class="row-title">Editable Settings</div>
-          <div class="muted">Change the settings here and save when you’re ready. The matching JSON file stays in sync behind the scenes.</div>
+          <div class="row-title">Guided Settings</div>
+          <div class="muted">Use the straightforward categories here for common edits. Switch to JSON for custom shapes or deeply nested values.</div>
         </div>
         <span class="settings-chip">Form View</span>
       </div>
@@ -2068,12 +2077,14 @@ function renderStructuredJsonEditor(currentValue) {
       ${
         isJsonObject(currentValue)
           ? `
-            ${
-              Object.keys(currentValue).length
-                ? `<div class="settings-field-stack">${renderJsonObjectFields(currentValue, [])}</div>`
-                : `<div class="settings-empty-note">No settings have been defined yet. Add the first one below.</div>`
-            }
-            ${renderRootAddSettingCard()}
+            <div class="settings-guided-layout">
+              ${renderSimplifiedJsonCategoryNav(categories, activeCategory)}
+              ${
+                activeCategory
+                  ? renderSimplifiedJsonCategoryPanel(activeCategory)
+                  : `<div class="settings-guided-panel"><div class="settings-empty-note">No guided settings are available yet. Use JSON to define the initial structure.</div></div>`
+              }
+            </div>
           `
           : `
             <div class="settings-field-stack">
@@ -2083,6 +2094,121 @@ function renderStructuredJsonEditor(currentValue) {
           `
       }
     </div>
+  `;
+}
+
+function renderSimplifiedJsonCategoryNav(categories: SimplifiedJsonCategory[], activeCategory: SimplifiedJsonCategory | null) {
+  return `
+    <div class="settings-guided-nav">
+      ${categories.map((category) => `
+        <button
+          type="button"
+          class="settings-guided-nav-button ${activeCategory?.id === category.id ? "active" : ""}"
+          data-action="settings-select-json-category"
+          data-category-id="${escapeAttribute(category.id)}">
+          <div class="row-title">${escapeHtml(category.label)}</div>
+          <div class="row-meta">${escapeHtml(category.description)}</div>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderSimplifiedJsonCategoryPanel(category: SimplifiedJsonCategory) {
+  return `
+    <div class="settings-guided-panel">
+      <div class="settings-guided-panel-header">
+        <div>
+          <div class="row-title">${escapeHtml(category.label)}</div>
+          <div class="muted">${escapeHtml(category.description)}</div>
+        </div>
+      </div>
+      ${
+        category.entries.length
+          ? `<div class="settings-field-stack">${category.entries.map((entry) => renderSimplifiedJsonEntry(entry)).join("")}</div>`
+          : `<div class="settings-empty-note">Nothing in this section is editable in the guided view yet. Use JSON for custom changes.</div>`
+      }
+      ${category.id === "general" ? renderRootAddSettingCard() : ""}
+    </div>
+  `;
+}
+
+function renderSimplifiedJsonEntry(entry: SimplifiedJsonEntry) {
+  const encodedPath = encodeSettingPath(entry.path);
+  const pathText = formatSettingPath(entry.path);
+
+  if (entry.kind === "summary") {
+    return `
+      <div class="settings-summary-card">
+        <div class="settings-file-row-top">
+          <div class="row-title">${escapeHtml(entry.label)}</div>
+          <span class="settings-chip">JSON Only</span>
+        </div>
+        <div class="row-subtitle mono">${escapeHtml(pathText)}</div>
+        <div class="row-meta">${escapeHtml(entry.summary || entry.description)}</div>
+        <div class="settings-meta-row">
+          <button type="button" data-action="settings-toggle-raw-json">Edit in JSON</button>
+        </div>
+      </div>
+    `;
+  }
+
+  const controlMarkup = entry.kind === "string-list"
+    ? `
+      <textarea
+        class="settings-field-textarea settings-list-editor"
+        data-setting-editor="string-list"
+        data-setting-path="${encodedPath}">${escapeHtml(formatStringListEditorValue(entry.value))}</textarea>
+      <div class="row-meta">Enter one value per line.</div>
+    `
+    : renderSimplifiedPrimitiveControl(entry, encodedPath);
+
+  return `
+    <div class="settings-field-card settings-field-card-simple">
+      <div class="settings-field-copy">
+        <div class="settings-file-row-top">
+          <div class="row-title">${escapeHtml(entry.label)}</div>
+          <span class="settings-chip">${escapeHtml(entry.kind === "string-list" ? "List" : jsonValueTypeLabel(entry.value))}</span>
+        </div>
+        <div class="row-subtitle mono">${escapeHtml(pathText)}</div>
+        <div class="row-meta">${escapeHtml(entry.description)}</div>
+      </div>
+      <div class="settings-field-control">
+        ${controlMarkup}
+      </div>
+    </div>
+  `;
+}
+
+function renderSimplifiedPrimitiveControl(entry: SimplifiedJsonEntry, encodedPath: string) {
+  const value = entry.value;
+
+  if (typeof value === "boolean") {
+    return `
+      <label class="settings-switch">
+        <input type="checkbox" data-setting-editor="boolean" data-setting-path="${encodedPath}" ${value ? "checked" : ""} />
+        <span>Enabled</span>
+      </label>
+    `;
+  }
+
+  if (typeof value === "number") {
+    return `
+      <input
+        type="number"
+        step="any"
+        data-setting-editor="number"
+        data-setting-path="${encodedPath}"
+        value="${escapeAttribute(String(value))}" />
+    `;
+  }
+
+  return `
+    <input
+      type="text"
+      data-setting-editor="string"
+      data-setting-path="${encodedPath}"
+      value="${escapeAttribute(String(value ?? ""))}" />
   `;
 }
 
@@ -2133,6 +2259,129 @@ function renderResolvedSettingsPanel(resolvedValues) {
       </div>
     </div>
   `;
+}
+
+function buildSimplifiedJsonCategories(rootValue): SimplifiedJsonCategory[] {
+  if (!isJsonObject(rootValue)) {
+    return [];
+  }
+
+  const categories: SimplifiedJsonCategory[] = [];
+  const generalEntries = Object.entries(rootValue)
+    .filter(([, value]) => isEditablePrimitiveValue(value))
+    .map(([key, value]) => buildSimplifiedJsonEntry([key], value, {
+      label: humanizeSettingSegment(key),
+      description: "Edit this setting directly without opening raw JSON."
+    }))
+    .filter(Boolean) as SimplifiedJsonEntry[];
+
+  categories.push({
+    id: "general",
+    label: "General",
+    description: generalEntries.length ? `${generalEntries.length} direct settings` : "Top-level settings and quick additions",
+    entries: generalEntries
+  });
+
+  if (isJsonObject(rootValue.permissions)) {
+    categories.push({
+      id: "permissions",
+      label: "Permissions",
+      description: "Allow and deny lists plus permission-related options",
+      entries: buildSimplifiedEntriesForObject(rootValue.permissions, ["permissions"])
+    });
+  } else if (rootValue.permissions !== undefined) {
+    categories.push({
+      id: "permissions",
+      label: "Permissions",
+      description: "Permission-related settings",
+      entries: [
+        buildSummaryJsonEntry(["permissions"], rootValue.permissions, "This value is not editable in the guided view.")
+      ]
+    });
+  }
+
+  Object.entries(rootValue).forEach(([key, value]) => {
+    if (key === "permissions" || isEditablePrimitiveValue(value)) {
+      return;
+    }
+
+    if (isJsonObject(value)) {
+      categories.push({
+        id: `top-${key}`,
+        label: humanizeSettingSegment(key),
+        description: `Settings inside ${humanizeSettingSegment(key)}`,
+        entries: buildSimplifiedEntriesForObject(value, [key])
+      });
+      return;
+    }
+
+    categories.push({
+      id: `top-${key}`,
+      label: humanizeSettingSegment(key),
+      description: `Advanced ${humanizeSettingSegment(key)} configuration`,
+      entries: [buildSummaryJsonEntry([key], value, "This structure is easier to manage in raw JSON.")]
+    });
+  });
+
+  return categories.filter((category) => category.entries.length || category.id === "general");
+}
+
+function activeSimplifiedJsonCategory(categories: SimplifiedJsonCategory[]) {
+  if (!categories.length) {
+    ui.settingsJsonCategoryId = "";
+    return null;
+  }
+
+  const selectedCategory = categories.find((category) => category.id === ui.settingsJsonCategoryId);
+  if (selectedCategory) {
+    return selectedCategory;
+  }
+
+  ui.settingsJsonCategoryId = categories[0].id;
+  return categories[0];
+}
+
+function buildSimplifiedEntriesForObject(objectValue, parentPath: (string | number)[]) {
+  return Object.entries(objectValue)
+    .map(([key, value]) => buildSimplifiedJsonEntry([...parentPath, key], value, {
+      label: humanizeSettingSegment(key),
+      description: `Edit ${humanizeSettingSegment(key)} without opening raw JSON when the value is simple.`
+    }))
+    .filter(Boolean) as SimplifiedJsonEntry[];
+}
+
+function buildSimplifiedJsonEntry(path: (string | number)[], value, options: { label: string; description: string }) {
+  if (isEditablePrimitiveValue(value)) {
+    return {
+      kind: "primitive",
+      path,
+      value,
+      label: options.label,
+      description: options.description
+    } satisfies SimplifiedJsonEntry;
+  }
+
+  if (isEditableStringListValue(value, path)) {
+    return {
+      kind: "string-list",
+      path,
+      value,
+      label: options.label,
+      description: "Manage this list in a simple one-item-per-line editor."
+    } satisfies SimplifiedJsonEntry;
+  }
+
+  return buildSummaryJsonEntry(path, value, "This nested structure stays visible here, but full editing happens in raw JSON.");
+}
+
+function buildSummaryJsonEntry(path: (string | number)[], value, summary: string): SimplifiedJsonEntry {
+  return {
+    kind: "summary",
+    path,
+    label: labelForSettingPath(path),
+    description: summary,
+    summary: summarizeJsonValue(value)
+  };
 }
 
 function renderJsonObjectFields(objectValue, parentPath) {
@@ -2323,21 +2572,12 @@ function renderSettingsActionButtons(selectedFile, options: JsonRenderOptions = 
     <div class="detail-actions settings-detail-actions">
       ${
         showJsonToggle
-          ? `<button type="button" data-action="settings-toggle-raw-json">${ui.settingsShowRawJson ? "Back to Form" : "Advanced JSON"}</button>`
+          ? `<button type="button" data-action="settings-toggle-raw-json">${ui.settingsShowRawJson ? "Simple View" : "Edit JSON"}</button>`
           : ""
       }
       <button type="button" data-action="settings-reload-file">Reload</button>
       <button type="button" class="primary" data-action="settings-save-file">${selectedFile.exists ? "Save" : "Create"}</button>
       <button type="button" data-action="settings-reveal-file">Reveal</button>
-    </div>
-  `;
-}
-
-function renderSettingsStat(label, value) {
-  return `
-    <div class="settings-stat">
-      <div class="settings-stat-label">${escapeHtml(label)}</div>
-      <div class="settings-stat-value">${escapeHtml(value)}</div>
     </div>
   `;
 }
@@ -2352,15 +2592,20 @@ function renderSettingsFileRow(file) {
   return `
     <button
       type="button"
-      class="switcher-row ${ui.settingsSelectedFilePath === file.path ? "active" : ""}"
+      class="settings-nav-row ${ui.settingsSelectedFilePath === file.path ? "active" : ""}"
       data-action="settings-select-file"
       data-file-path="${file.path}">
-      <div class="settings-file-row-top">
-        <div class="row-title">${escapeHtml(friendlySettingsFileTitle(file))}</div>
-        <span class="settings-chip">${isJsonSettingsFile(file) ? "JSON" : "MD"}</span>
+      <div class="settings-nav-row-top">
+        <span class="settings-nav-icon settings-nav-icon-${escapeAttribute(settingsFileVisualKind(file))}" aria-hidden="true">${escapeHtml(settingsFileIconLabel(file))}</span>
+        <div class="settings-nav-copy">
+          <div class="row-title">${escapeHtml(friendlySettingsFileTitle(file))}</div>
+          <div class="row-subtitle">${escapeHtml(friendlySettingsFileListSubtitle(file))}</div>
+        </div>
       </div>
-      <div class="row-subtitle">${escapeHtml(friendlySettingsFileListSubtitle(file))}</div>
-      <div class="row-meta">${file.exists ? "Ready to edit" : "Create on save"}</div>
+      <div class="settings-nav-meta">
+        <span class="settings-chip">${isJsonSettingsFile(file) ? "JSON" : "MD"}</span>
+        <span class="row-meta">${file.exists ? "Ready" : "Create on Save"}</span>
+      </div>
     </button>
   `;
 }
@@ -2403,7 +2648,7 @@ async function handleClick(event) {
       collapseSidebarProjectDrawer(target.dataset.repoId);
       break;
     case "open-launcher":
-      await startDefaultClaudeSession(target.dataset.repoId || currentRepoId());
+      openLauncher(target.dataset.repoId || currentRepoId());
       break;
     case "open-status":
       await selectStatus();
@@ -2575,6 +2820,10 @@ async function handleClick(event) {
         ui.settingsShowRawJson = true;
         ui.settingsSaveMessage = "";
       }
+      await renderSettingsDialog();
+      break;
+    case "settings-select-json-category":
+      ui.settingsJsonCategoryId = target.dataset.categoryId || "";
       await renderSettingsDialog();
       break;
     case "settings-remove-field":
@@ -2916,7 +3165,7 @@ async function handleKeyDown(event) {
     const repoId = currentRepoId();
     if (repoId) {
       event.preventDefault();
-      void startClaudeSessionForRepo(repoId);
+      openLauncher(repoId);
       return;
     }
   }
@@ -2984,17 +3233,20 @@ async function handleInput(event) {
   }
 
   switch (target.id) {
+    case "launcher-title":
+      ui.launcherTitle = target.value;
+      break;
     case "launcher-query":
       ui.launcherQuery = target.value;
-      renderLauncherDialog();
+      rerenderDialogInput(renderLauncherDialog, "launcher-query", target);
       break;
     case "quick-switcher-query":
       ui.quickSwitcherQuery = target.value;
-      renderQuickSwitcherDialog();
+      rerenderDialogInput(renderQuickSwitcherDialog, "quick-switcher-query", target);
       break;
     case "command-palette-query":
       ui.commandPaletteQuery = target.value;
-      renderCommandPaletteDialog();
+      rerenderDialogInput(renderCommandPaletteDialog, "command-palette-query", target);
       break;
     case "settings-text-editor":
       ui.settingsEditorText = target.value;
@@ -3002,6 +3254,26 @@ async function handleInput(event) {
       break;
     default:
       break;
+  }
+}
+
+function rerenderDialogInput(
+  render: () => void,
+  inputId: string,
+  source: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+) {
+  const selectionStart = "selectionStart" in source ? source.selectionStart : null;
+  const selectionEnd = "selectionEnd" in source ? source.selectionEnd : null;
+  render();
+
+  const nextInput = document.getElementById(inputId) as HTMLInputElement | null;
+  if (!nextInput) {
+    return;
+  }
+
+  nextInput.focus();
+  if (selectionStart !== null && selectionEnd !== null) {
+    nextInput.setSelectionRange(selectionStart, selectionEnd);
   }
 }
 
@@ -3307,6 +3579,7 @@ function syncPortStatusPolling() {
 
 function openLauncher(repoId = null) {
   ui.launcherQuery = "";
+  ui.launcherTitle = "";
   ui.launcherSelectedRepoId =
     repoId ||
     currentRepoId() ||
@@ -3317,6 +3590,9 @@ function openLauncher(repoId = null) {
   if (!launcherDialog.open) {
     launcherDialog.showModal();
   }
+  requestAnimationFrame(() => {
+    (document.getElementById("launcher-title") as HTMLInputElement | null)?.focus();
+  });
 }
 
 async function startLauncherSession() {
@@ -3325,13 +3601,19 @@ async function startLauncherSession() {
   }
 
   launcherDialog.close();
-  await startSessionForRepo(ui.launcherSelectedRepoId, ui.launcherLaunchesClaudeOnStart, "terminal");
+  await startSessionForRepo(
+    ui.launcherSelectedRepoId,
+    ui.launcherLaunchesClaudeOnStart,
+    ui.launcherTitle,
+    "terminal"
+  );
 }
 
 async function openSettings(initialTab = "general") {
   ui.settingsTab = initialTab;
   ui.settingsContext = null;
   ui.settingsSelectedFilePath = null;
+  ui.settingsJsonCategoryId = "";
   ui.settingsEditorText = "";
   ui.settingsSaveMessage = "";
   ui.settingsJsonDraft = null;
@@ -3594,37 +3876,17 @@ function closeLazygitOverlay() {
   }
 }
 
-async function startClaudeSessionForRepo(repoId) {
-  await startSessionForRepo(repoId, true, "terminal");
-}
-
-async function startDefaultClaudeSession(explicitRepoId = null) {
-  const repoId =
-    explicitRepoId ||
-    currentRepoId() ||
-    ui.sidebarExpandedRepoId ||
-    state.sessions[0]?.repoID ||
-    state.repos[0]?.id ||
-    null;
-
-  if (!repoId) {
-    window.alert("Open a folder first.");
-    return;
-  }
-
-  await startClaudeSessionForRepo(repoId);
-}
-
 async function startSessionForRepo(
   repoId,
   launchesClaudeOnStart,
+  title,
   focusSection: SectionId = "terminal"
 ) {
   if (!repoId) {
     return null;
   }
 
-  const sessionId = await api.createSession(repoId, launchesClaudeOnStart);
+  const sessionId = await api.createSession(repoId, launchesClaudeOnStart, title || "");
   if (sessionId) {
     await selectSession(sessionId, focusSection);
   }
@@ -3826,6 +4088,7 @@ function allSettingsFiles() {
 
 async function loadSelectedSettingsFile(filePath) {
   ui.settingsSelectedFilePath = filePath;
+  ui.settingsJsonCategoryId = "";
   ui.settingsEditorText = await api.loadSettingsFile(filePath);
   ui.settingsSaveMessage = "";
   ui.settingsShowRawJson = false;
@@ -3838,6 +4101,9 @@ function handleSettingsFieldInput(target) {
   switch (target.dataset.settingEditor) {
     case "string":
       updateJsonSettingValue(path, target.value);
+      break;
+    case "string-list":
+      updateJsonSettingValue(path, parseStringListEditorValue(target.value));
       break;
     case "raw-json":
       ui.settingsEditorText = target.value;
@@ -4080,6 +4346,51 @@ function describeJsonValueType(value) {
   return jsonValueTypeLabel(value).toLowerCase();
 }
 
+function isEditablePrimitiveValue(value) {
+  return ["string", "number", "boolean"].includes(typeof value);
+}
+
+function isEditableStringListValue(value, path: (string | number)[] = []) {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+
+  if (!value.length) {
+    const lastSegment = String(path[path.length - 1] || "").toLowerCase();
+    return ["allow", "deny", "permissions", "include", "exclude"].includes(lastSegment);
+  }
+
+  return value.every((item) => typeof item === "string");
+}
+
+function formatStringListEditorValue(value) {
+  return Array.isArray(value) ? value.join("\n") : "";
+}
+
+function parseStringListEditorValue(value) {
+  return String(value || "")
+    .split(/\r\n|\r|\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+function summarizeJsonValue(value) {
+  if (Array.isArray(value)) {
+    return value.length
+      ? `${value.length} item${value.length === 1 ? "" : "s"}`
+      : "Empty list";
+  }
+
+  if (isJsonObject(value)) {
+    const keys = Object.keys(value);
+    return keys.length
+      ? `${keys.length} field${keys.length === 1 ? "" : "s"}`
+      : "Empty object";
+  }
+
+  return String(value ?? "null");
+}
+
 function jsonValueTypeLabel(value) {
   if (Array.isArray(value)) {
     return "Array";
@@ -4213,6 +4524,60 @@ function friendlySettingsFileSummary(file) {
 
 function settingsScopeLabel(file) {
   return file.scope === "global" ? "Global Agent Defaults" : "Project Agent Override";
+}
+
+function settingsFileVisualKind(file) {
+  const name = pathLabel(file.path);
+  if (name === "AGENTS.md") {
+    return "agents";
+  }
+  if (name === "CLAUDE.md") {
+    return "claude";
+  }
+  if (name === "settings.local.json") {
+    return "local";
+  }
+  return "json";
+}
+
+function settingsFileIconLabel(file) {
+  const name = pathLabel(file.path);
+  if (name === "AGENTS.md") {
+    return "AG";
+  }
+  if (name === "CLAUDE.md") {
+    return "CL";
+  }
+  if (name === "settings.local.json") {
+    return "LO";
+  }
+  return "JS";
+}
+
+function renderSettingsFileSummaryCard(selectedFile, metaItems, actionOptions: JsonRenderOptions = {}) {
+  return `
+    <div class="settings-file-summary-card">
+      <div class="settings-file-summary-main">
+        <div class="settings-file-summary-title">
+          <span class="settings-nav-icon settings-nav-icon-${escapeAttribute(settingsFileVisualKind(selectedFile))}" aria-hidden="true">${escapeHtml(settingsFileIconLabel(selectedFile))}</span>
+          <div class="settings-file-copy">
+            <div class="eyebrow">${escapeHtml(settingsScopeLabel(selectedFile))}</div>
+            <div class="row-title">${escapeHtml(friendlySettingsFileTitle(selectedFile))}</div>
+            <div class="row-subtitle">${escapeHtml(abbreviateHome(selectedFile.path))}</div>
+          </div>
+        </div>
+        ${renderSettingsActionButtons(selectedFile, actionOptions)}
+      </div>
+      <div class="muted">${escapeHtml(friendlySettingsFileSummary(selectedFile))}</div>
+      <div class="settings-meta-row">
+        ${metaItems.join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderSettingsMetaPill(value) {
+  return `<span class="settings-meta-pill">${escapeHtml(value)}</span>`;
 }
 
 function friendlySourceLabel(sourceLabel) {

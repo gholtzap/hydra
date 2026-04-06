@@ -5,7 +5,7 @@ interface ClaudeWorkspaceApi {
   openWorkspaceFolder: () => Promise<void>;
   createProjectFolder: () => Promise<void>;
   rescanWorkspace: (workspaceId: string) => Promise<any>;
-  createSession: (repoId: string, launchesClaudeOnStart: boolean) => Promise<any>;
+  createSession: (repoId: string, launchesClaudeOnStart: boolean, title: string) => Promise<any>;
   reopenSession: (sessionId: string) => Promise<any>;
   closeSession: (sessionId: string) => Promise<any>;
   sendInput: (sessionId: string, data: string) => Promise<any>;

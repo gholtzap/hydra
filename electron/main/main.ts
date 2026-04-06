@@ -45,6 +45,20 @@ const FILE_TREE_IGNORED = new Set([
   ".parcel-cache", "target", ".gradle", ".idea", ".vscode"
 ]);
 
+const SESSION_NAME_ADJECTIVES = [
+  "Amber", "Brisk", "Cinder", "Copper", "Daring", "Echo", "Ember", "Fable",
+  "Granite", "Harbor", "Ivy", "Juniper", "Kestrel", "Lunar", "Maple", "Nimbus",
+  "North", "Oak", "Orbit", "Pine", "Quartz", "River", "Silver", "Solar",
+  "Summit", "Velvet", "Verdant", "Wild", "Willow", "Zephyr"
+];
+
+const SESSION_NAME_NOUNS = [
+  "Atlas", "Beacon", "Brook", "Comet", "Cove", "Falcon", "Field", "Forge",
+  "Garden", "Grove", "Harbor", "Horizon", "Lagoon", "Lantern", "Meadow", "Mesa",
+  "Meteor", "Nest", "Orbit", "Pavilion", "Peak", "Prairie", "River", "Sparrow",
+  "Spruce", "Star", "Studio", "Summit", "Trail", "Vale"
+];
+
 function buildFileTree(rootPath: string, currentPath: string, depth: number): any[] {
   if (depth >= 5) return [];
 
@@ -152,7 +166,7 @@ class AppController {
     ipcMain.handle("project:create", async () => this.createProjectFolder());
     ipcMain.handle("workspace:rescan", (_event, workspaceId) => this.rescanWorkspace(workspaceId));
     ipcMain.handle("session:create", (_event, payload) =>
-      this.createSession(payload.repoId, payload.launchesClaudeOnStart)
+      this.createSession(payload.repoId, payload.launchesClaudeOnStart, payload.title)
     );
     ipcMain.handle("session:reopen", (_event, sessionId) => this.reopenSession(sessionId));
     ipcMain.handle("session:close", (_event, sessionId) => this.closeSession(sessionId));
@@ -531,7 +545,7 @@ class AppController {
     this.broadcastState();
   }
 
-  createSession(repoId, launchesClaudeOnStart) {
+  createSession(repoId, launchesClaudeOnStart, requestedTitle = "") {
     const repo = this.repoById(repoId);
     if (!repo) {
       return null;
@@ -539,10 +553,11 @@ class AppController {
 
     const count = this.state.sessions.filter((session) => session.repoID === repoId).length + 1;
     const sessionId = randomUUID();
+    const title = this.resolveSessionTitle(requestedTitle, launchesClaudeOnStart, count);
     const session = {
       id: sessionId,
       repoID: repoId,
-      title: `${launchesClaudeOnStart ? "Claude" : "Shell"} ${count}`,
+      title,
       initialPrompt: "",
       launchesClaudeOnStart: launchesClaudeOnStart !== false,
       claudeSessionId: launchesClaudeOnStart !== false ? sessionId : null,
@@ -565,6 +580,34 @@ class AppController {
     this.scheduleSave();
     this.broadcastState();
     return session.id;
+  }
+
+  resolveSessionTitle(requestedTitle, launchesClaudeOnStart, count) {
+    const trimmedTitle = typeof requestedTitle === "string" ? requestedTitle.trim() : "";
+    if (trimmedTitle) {
+      return trimmedTitle;
+    }
+
+    return this.generateSessionCodename(launchesClaudeOnStart, count);
+  }
+
+  generateSessionCodename(launchesClaudeOnStart, count) {
+    const usedTitles = new Set(
+      this.state.sessions.map((session) => String(session.title || "").toLowerCase())
+    );
+
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      const adjective =
+        SESSION_NAME_ADJECTIVES[Math.floor(Math.random() * SESSION_NAME_ADJECTIVES.length)];
+      const noun = SESSION_NAME_NOUNS[Math.floor(Math.random() * SESSION_NAME_NOUNS.length)];
+      const candidate = `${adjective} ${noun}`;
+      if (!usedTitles.has(candidate.toLowerCase())) {
+        return candidate;
+      }
+    }
+
+    const fallbackBase = launchesClaudeOnStart ? "Claude" : "Shell";
+    return `${fallbackBase} ${count}`;
   }
 
   reopenSession(sessionId) {
@@ -636,12 +679,7 @@ class AppController {
     const menu = Menu.buildFromTemplate([
       {
         label: "Start Claude Code Session",
-        click: () => {
-          const sessionId = this.createSession(repoId, true);
-          if (sessionId) {
-            this.sendCommand("select-session", { sessionId });
-          }
-        }
+        click: () => this.sendCommand("new-session", { repoId })
       },
       {
         label: "Open Wiki",

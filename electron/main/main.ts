@@ -196,6 +196,7 @@ class AppController {
       return { path: repo.path, tree: buildFileTree(repo.path, repo.path, 0) };
     });
     ipcMain.handle("lazygit:launch", (_event, p) => this.createLazygitSession(p.repoId));
+    ipcMain.handle("lazygit:install", (_event, p) => this.installLazygit(p.repoId));
     ipcMain.handle("lazygit:close", (_event, p) => this.closeLazygitSession(p.sessionId));
     ipcMain.handle("lazygit:input", (_event, p) => {
       if (this.ephemeralSessions.has(p.sessionId)) this.ptyHost.sendInput(p.sessionId, p.data);
@@ -715,7 +716,36 @@ class AppController {
     });
   }
 
+  resolvedLazygitPath() {
+    for (const p of ["/opt/homebrew/bin/lazygit", "/usr/local/bin/lazygit"]) {
+      if (fs.existsSync(p)) return p;
+    }
+    try {
+      const { spawnSync } = require("node:child_process");
+      const { status, stdout } = spawnSync("which", ["lazygit"], { encoding: "utf-8", timeout: 3000 });
+      if (status === 0 && stdout.trim()) return stdout.trim();
+    } catch {}
+    return null;
+  }
+
   createLazygitSession(repoId) {
+    const repo = this.repoById(repoId);
+    if (!repo) return null;
+
+    const lazygitBin = this.resolvedLazygitPath();
+    if (!lazygitBin) return { error: "not-installed" };
+
+    const sessionId = randomUUID();
+    this.ephemeralSessions.set(sessionId, { repoId });
+    this.ptyHost.createSession({
+      sessionId,
+      cwd: repo.path,
+      command: [lazygitBin]
+    });
+    return { sessionId };
+  }
+
+  installLazygit(repoId) {
     const repo = this.repoById(repoId);
     if (!repo) return null;
     const sessionId = randomUUID();
@@ -723,7 +753,7 @@ class AppController {
     this.ptyHost.createSession({
       sessionId,
       cwd: repo.path,
-      command: ["lazygit"]
+      command: ["brew", "install", "lazygit"]
     });
     return sessionId;
   }

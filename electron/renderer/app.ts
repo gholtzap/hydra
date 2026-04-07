@@ -115,12 +115,12 @@ function matchesAccelerator(event: KeyboardEvent, accelerator: string): boolean 
   return eventKey === targetKey;
 }
 
-function formatAccelerator(accelerator: string): string {
+function acceleratorDisplayParts(accelerator: string): { isMac: boolean; parts: string[] } {
   const isMac = /mac/i.test(navigator.platform);
-  const parts = accelerator.split("+");
+  const acceleratorParts = accelerator.split("+");
   const display: string[] = [];
 
-  for (const part of parts) {
+  for (const part of acceleratorParts) {
     const normalized = part.toLowerCase();
     if (normalized === "cmdorctrl" || normalized === "commandorcontrol") {
       display.push(isMac ? "\u2318" : "Ctrl");
@@ -155,7 +155,21 @@ function formatAccelerator(accelerator: string): string {
     }
   }
 
-  return isMac ? display.join("") : display.join("+");
+  return { isMac, parts: display };
+}
+
+function formatAccelerator(accelerator: string): string {
+  const display = acceleratorDisplayParts(accelerator);
+  return display.isMac ? display.parts.join("") : display.parts.join("+");
+}
+
+function renderAcceleratorMarkup(accelerator: string): string {
+  const display = acceleratorDisplayParts(accelerator);
+  const joiner = display.isMac ? "" : `<span class="accelerator-joiner" aria-hidden="true">+</span>`;
+
+  return `<span class="accelerator-sequence" aria-label="${escapeAttribute(formatAccelerator(accelerator))}">${display.parts
+    .map((part) => `<span class="accelerator-token">${escapeHtml(part)}</span>`)
+    .join(joiner)}</span>`;
 }
 
 type WorkspaceSplitAxis = "row" | "column";
@@ -2537,11 +2551,11 @@ function renderCommandPaletteDialog() {
   );
 
   // Build command rows safely — labels and shortcuts come from internal constants,
-  // not user input, so the escapeHtml calls here are a defence-in-depth measure.
+  // not user input, so the escaping helpers here are a defence-in-depth measure.
   const rows = filtered.map((command) => {
     const shortcut = commandPaletteShortcutForAction(command.action);
     const shortcutHtml = shortcut
-      ? `<kbd class="shortcut-hint">${escapeHtml(shortcut)}</kbd>`
+      ? `<kbd class="shortcut-hint">${renderAcceleratorMarkup(shortcut)}</kbd>`
       : "";
     return `<button type="button" class="command-row" data-action="${command.action}">
               <div class="row-title">${escapeHtml(command.label)}</div>
@@ -2669,32 +2683,36 @@ async function renderSettingsDialog() {
   }
 
   settingsDialog.innerHTML = `
-    <form method="dialog" class="dialog-body">
-      <div class="dialog-header">
-        <div>
-          <div class="eyebrow">Settings</div>
-          <h2 class="dialog-title">Preferences and agent files</h2>
-          <div class="muted">Edit app preferences, project instructions, and JSON settings in a format people can actually read.</div>
+    <form method="dialog" class="dialog-body settings-dialog-body ${ui.settingsTab === "themes" ? "settings-dialog-body-sticky-header" : ""}">
+      <div class="settings-dialog-header-shell">
+        <div class="dialog-header settings-dialog-header">
+          <div>
+            <div class="eyebrow">Settings</div>
+            <h2 class="dialog-title">Preferences and agent files</h2>
+            <div class="muted">Edit app preferences, project instructions, and JSON settings in a format people can actually read.</div>
+          </div>
+          <button value="cancel">Close</button>
         </div>
-        <button value="cancel">Close</button>
+
+        <div class="settings-tabs">
+          <button type="button" class="settings-tab ${ui.settingsTab === "general" ? "active" : ""}" data-action="settings-tab" data-tab="general">General</button>
+          <button type="button" class="settings-tab ${ui.settingsTab === "themes" ? "active" : ""}" data-action="settings-tab" data-tab="themes">Themes</button>
+          <button type="button" class="settings-tab ${ui.settingsTab === "keybindings" ? "active" : ""}" data-action="settings-tab" data-tab="keybindings">Keybindings</button>
+          <button type="button" class="settings-tab ${ui.settingsTab === "claude" ? "active" : ""}" data-action="settings-tab" data-tab="claude">Agent Files</button>
+        </div>
       </div>
 
-      <div class="settings-tabs">
-        <button type="button" class="settings-tab ${ui.settingsTab === "general" ? "active" : ""}" data-action="settings-tab" data-tab="general">General</button>
-        <button type="button" class="settings-tab ${ui.settingsTab === "themes" ? "active" : ""}" data-action="settings-tab" data-tab="themes">Themes</button>
-        <button type="button" class="settings-tab ${ui.settingsTab === "keybindings" ? "active" : ""}" data-action="settings-tab" data-tab="keybindings">Keybindings</button>
-        <button type="button" class="settings-tab ${ui.settingsTab === "claude" ? "active" : ""}" data-action="settings-tab" data-tab="claude">Agent Files</button>
+      <div class="settings-dialog-content">
+        ${
+          ui.settingsTab === "general"
+            ? renderGeneralSettingsPane()
+            : ui.settingsTab === "themes"
+              ? renderThemesSettingsPane()
+              : ui.settingsTab === "keybindings"
+              ? renderKeybindingsSettingsPane()
+              : renderClaudeSettingsPane()
+        }
       </div>
-
-      ${
-        ui.settingsTab === "general"
-          ? renderGeneralSettingsPane()
-          : ui.settingsTab === "themes"
-            ? renderThemesSettingsPane()
-            : ui.settingsTab === "keybindings"
-            ? renderKeybindingsSettingsPane()
-            : renderClaudeSettingsPane()
-      }
     </form>
   `;
 }
@@ -2709,17 +2727,20 @@ function renderThemesSettingsPane() {
   return `
     <div class="settings-surface themes-settings-surface">
       <div class="settings-group-card themes-toolbar-card">
-        <div class="themes-toolbar-row">
-          <label class="themes-appearance-field">
-            <div class="row-title">Appearance</div>
-            <select id="pref-theme-appearance">
-              <option value="system" ${themePreferences.appearance === "system" ? "selected" : ""}>System</option>
-              <option value="light" ${themePreferences.appearance === "light" ? "selected" : ""}>Light</option>
-              <option value="dark" ${themePreferences.appearance === "dark" ? "selected" : ""}>Dark</option>
-            </select>
-          </label>
+        <div class="themes-toolbar-header">
           <div class="themes-toolbar-copy">
-            <div class="muted">Themes include light and dark palettes. System follows macOS appearance, which is currently ${escapeHtml(currentMode)}.</div>
+            <div class="row-title">Theme Library</div>
+            <div class="muted">Each theme includes light and dark palettes. System appearance is currently ${escapeHtml(currentMode)}.</div>
+          </div>
+          <div class="themes-toolbar-controls">
+            <label class="themes-appearance-field">
+              <div class="row-title">Appearance</div>
+              <select id="pref-theme-appearance">
+                <option value="system" ${themePreferences.appearance === "system" ? "selected" : ""}>System</option>
+                <option value="light" ${themePreferences.appearance === "light" ? "selected" : ""}>Light</option>
+                <option value="dark" ${themePreferences.appearance === "dark" ? "selected" : ""}>Dark</option>
+              </select>
+            </label>
             <div class="themes-toolbar-actions">
               <button type="button" data-action="theme-create-custom">Create Custom Theme</button>
               ${
@@ -2799,26 +2820,46 @@ function renderThemeCardPreview(palette: ThemeSeedPalette, label: string) {
 
 function renderCustomThemeEditor(theme: ThemeDefinition) {
   return `
-    <div class="themes-editor-grid">
-      <div class="settings-group-card themes-editor-card">
-        <div class="themes-editor-header">
-          <div>
+    <div class="themes-workbench">
+      <div class="themes-workbench-sidebar">
+        <div class="settings-group-card themes-editor-card themes-identity-card">
+          <div class="themes-editor-header">
+            <div>
+              <div class="row-title">Custom Theme</div>
+              <div class="muted">Changes apply immediately and are stored locally for this app install.</div>
+            </div>
+          </div>
+          <label class="themes-name-field">
             <div class="row-title">Theme Name</div>
-            <div class="muted">Custom themes are saved per app install and can be switched at any time.</div>
+            <input
+              id="theme-name-input"
+              data-theme-name-input="true"
+              data-theme-id="${escapeAttribute(theme.id)}"
+              value="${escapeAttribute(theme.name)}"
+              placeholder="Custom Theme"
+            />
+          </label>
+        </div>
+
+        <div class="settings-group-card themes-editor-card themes-preview-card">
+          <div class="themes-editor-header">
+            <div>
+              <div class="row-title">Preview</div>
+              <div class="muted">Keep both palettes visible while you tune them.</div>
+            </div>
+          </div>
+          <div class="themes-preview-grid">
+            ${renderThemeCardPreview(theme.light, "Light")}
+            ${renderThemeCardPreview(theme.dark, "Dark")}
           </div>
         </div>
-        <label>
-          <input
-            id="theme-name-input"
-            data-theme-name-input="true"
-            data-theme-id="${escapeAttribute(theme.id)}"
-            value="${escapeAttribute(theme.name)}"
-            placeholder="Custom Theme"
-          />
-        </label>
       </div>
-      ${renderThemePaletteEditor(theme, "light")}
-      ${renderThemePaletteEditor(theme, "dark")}
+      <div class="themes-workbench-main">
+        <div class="themes-palette-grid">
+          ${renderThemePaletteEditor(theme, "light")}
+          ${renderThemePaletteEditor(theme, "dark")}
+        </div>
+      </div>
     </div>
   `;
 }
@@ -2828,12 +2869,20 @@ function renderThemePaletteEditor(theme: ThemeDefinition, mode: ThemeMode) {
   const title = mode === "dark" ? "Dark Palette" : "Light Palette";
 
   return `
-    <div class="settings-group-card themes-editor-card">
-      <div class="themes-editor-header">
-        <div class="row-title">${title}</div>
-        <div class="muted">These colors drive the full interface, including dialogs and terminals.</div>
+    <div class="settings-group-card themes-editor-card themes-palette-card">
+      <div class="themes-palette-header">
+        <div class="themes-editor-header">
+          <div class="row-title">${title}</div>
+          <div class="muted">Interface, dialogs, and terminal colors derive from this palette.</div>
+        </div>
+        <div class="theme-palette-strip">
+          ${THEME_COLOR_FIELDS.map(
+            (field) =>
+              `<span class="theme-palette-swatch" title="${escapeAttribute(field.label)}" style="--theme-swatch:${escapeAttribute(palette[field.id])};"></span>`
+          ).join("")}
+        </div>
       </div>
-      <div class="theme-field-grid">
+      <div class="theme-field-list">
         ${THEME_COLOR_FIELDS.map((field) => renderThemeColorField(theme.id, mode, field, palette[field.id])).join("")}
       </div>
     </div>
@@ -2847,12 +2896,12 @@ function renderThemeColorField(
   value: string
 ) {
   return `
-    <label class="theme-color-field">
-      <div class="theme-color-field-header">
+    <label class="theme-color-row">
+      <div class="theme-color-row-copy">
         <span class="row-title">${escapeHtml(field.label)}</span>
-        <span class="theme-color-value">${escapeHtml(value)}</span>
+        <span class="muted">${escapeHtml(field.hint)}</span>
       </div>
-      <div class="theme-color-input-row">
+      <div class="theme-color-row-controls">
         <input
           type="color"
           class="theme-color-input"
@@ -2862,8 +2911,8 @@ function renderThemeColorField(
           data-theme-field="${escapeAttribute(field.id)}"
           value="${escapeAttribute(value)}"
         />
+        <span class="theme-color-value">${escapeHtml(value)}</span>
       </div>
-      <div class="muted">${escapeHtml(field.hint)}</div>
     </label>
   `;
 }
@@ -2902,7 +2951,7 @@ function renderGeneralSettingsPane() {
 function renderKeybindingsSettingsPane() {
   const kb = getKeybindings();
   // Build rows safely — all labels come from internal KEYBINDING_LABELS constant
-  // and accelerator values are either from DEFAULT_KEYBINDINGS or user preferences.
+  // and accelerator values are escaped as they are rendered into markup.
   const rows = ALL_KEYBINDING_ACTIONS.map((action) => {
     const label = KEYBINDING_LABELS[action];
     const current = kb[action];
@@ -2914,7 +2963,7 @@ function renderKeybindingsSettingsPane() {
         <div class="keybinding-value">
           <button type="button" class="keybinding-key ${isRecording ? "recording" : ""} ${isCustom ? "custom" : ""}"
             data-action="record-keybinding" data-keybinding-action="${action}">
-            ${isRecording ? "Press keys..." : escapeHtml(formatAccelerator(current))}
+            ${isRecording ? "Press keys..." : renderAcceleratorMarkup(current)}
           </button>
           ${isCustom ? `<button type="button" class="keybinding-reset" data-action="reset-keybinding" data-keybinding-action="${action}" title="Reset to default">Reset</button>` : ""}
         </div>

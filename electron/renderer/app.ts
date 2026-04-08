@@ -498,6 +498,84 @@ const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 sidebarElement.tabIndex = -1;
 detailElement.tabIndex = -1;
 
+type DomChild = Node | string | number | false | null | undefined;
+type DomAttributeValue = string | number | boolean | null | undefined;
+type DomOptions = {
+  className?: string;
+  attrs?: Record<string, DomAttributeValue>;
+  value?: string;
+};
+
+function classNames(...tokens: Array<string | false | null | undefined>) {
+  return tokens.filter(Boolean).join(" ");
+}
+
+function appendDomChild(parent: Node, child: DomChild) {
+  if (child === null || child === undefined || child === false) {
+    return;
+  }
+
+  if (child instanceof Node) {
+    parent.appendChild(child);
+    return;
+  }
+
+  parent.appendChild(document.createTextNode(String(child)));
+}
+
+function replaceDomChildren(target: Element, ...children: DomChild[]) {
+  const fragment = document.createDocumentFragment();
+  children.forEach((child) => appendDomChild(fragment, child));
+  target.replaceChildren(fragment);
+}
+
+function dom<K extends keyof HTMLElementTagNameMap>(
+  tagName: K,
+  options: DomOptions = {},
+  ...children: DomChild[]
+): HTMLElementTagNameMap[K] {
+  const element = document.createElement(tagName);
+
+  if (options.className) {
+    element.className = options.className;
+  }
+
+  if (options.value !== undefined && "value" in element) {
+    (element as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value = options.value;
+  }
+
+  if (options.attrs) {
+    Object.entries(options.attrs).forEach(([name, value]) => {
+      if (value === null || value === undefined || value === false) {
+        return;
+      }
+      element.setAttribute(name, value === true ? "true" : String(value));
+    });
+  }
+
+  children.forEach((child) => appendDomChild(element, child));
+  return element;
+}
+
+function trustedFragment(html: string) {
+  const template = document.createElement("template");
+  template.innerHTML = html.trim();
+  return template.content;
+}
+
+function trustedElement<T extends Element>(html: string): T {
+  const fragment = trustedFragment(html);
+  const element = fragment.firstElementChild;
+  if (!element) {
+    throw new Error("Expected HTML fragment with a root element.");
+  }
+  return element as T;
+}
+
+function emptyStateElement(message: string, extraClass = "") {
+  return dom("div", { className: classNames("empty-state", extraClass || undefined) }, message);
+}
+
 type JsonRenderOptions = {
   customLabel?: string;
   allowRemove?: boolean;
@@ -1357,56 +1435,115 @@ function renderSidebar() {
 
   const expandedRepo = expandedSidebarRepo();
 
-  sidebarElement.innerHTML = `
-    <div class="sidebar-shell ${expandedRepo ? "sidebar-shell-expanded" : ""}">
-      <div class="sidebar-rail">
-        <div class="sidebar-rail-top">
-          ${renderInboxRailButton()}
-          <div class="sidebar-rail-divider"></div>
-          ${renderProjectRailButtons()}
-        </div>
-        <div class="sidebar-rail-bottom">
-          <button class="sidebar-rail-button sidebar-utility-button ${sidebarNavMatches(sidebarActionNavId("open-workspace")) ? "keyboard-active" : ""}" data-action="open-workspace" data-tooltip="Add Folder" title="Add Folder" aria-label="Add Folder">
-            ${renderUtilityIcon("workspace")}
-          </button>
-          <button class="sidebar-rail-button sidebar-utility-button ${sidebarNavMatches(sidebarActionNavId("create-project")) ? "keyboard-active" : ""}" data-action="create-project" data-tooltip="New Folder" title="New Folder" aria-label="New Folder">
-            ${renderUtilityIcon("folder")}
-          </button>
-          <button class="sidebar-rail-button sidebar-utility-button ${selectionMatches("status") ? "active" : ""} ${sidebarNavMatches(sidebarActionNavId("open-status")) ? "keyboard-active" : ""}" data-action="open-status" data-tooltip="Dev Ports" title="Dev Ports" aria-label="Dev Ports">
-            ${renderUtilityIcon("status")}
-          </button>
-          <button class="sidebar-rail-button sidebar-utility-button ${sidebarNavMatches(sidebarActionNavId("open-settings")) ? "keyboard-active" : ""}" data-action="open-settings" data-tooltip="Settings" title="Settings" aria-label="Settings">
-            ${renderUtilityIcon("settings")}
-          </button>
-        </div>
-      </div>
-      ${expandedRepo ? renderSidebarProjectDrawer(expandedRepo) : ""}
-    </div>
-  `;
+  replaceDomChildren(
+    sidebarElement,
+    dom(
+      "div",
+      { className: classNames("sidebar-shell", expandedRepo ? "sidebar-shell-expanded" : undefined) },
+      dom(
+        "div",
+        { className: "sidebar-rail" },
+        dom(
+          "div",
+          { className: "sidebar-rail-top" },
+          renderInboxRailButton(),
+          dom("div", { className: "sidebar-rail-divider" }),
+          ...renderProjectRailButtons()
+        ),
+        dom(
+          "div",
+          { className: "sidebar-rail-bottom" },
+          renderSidebarUtilityButton(
+            "open-workspace",
+            "Add Folder",
+            "workspace",
+            sidebarNavMatches(sidebarActionNavId("open-workspace")) ? "keyboard-active" : ""
+          ),
+          renderSidebarUtilityButton(
+            "create-project",
+            "New Folder",
+            "folder",
+            sidebarNavMatches(sidebarActionNavId("create-project")) ? "keyboard-active" : ""
+          ),
+          renderSidebarUtilityButton(
+            "open-status",
+            "Dev Ports",
+            "status",
+            classNames(
+              selectionMatches("status") ? "active" : undefined,
+              sidebarNavMatches(sidebarActionNavId("open-status")) ? "keyboard-active" : undefined
+            )
+          ),
+          renderSidebarUtilityButton(
+            "open-settings",
+            "Settings",
+            "settings",
+            sidebarNavMatches(sidebarActionNavId("open-settings")) ? "keyboard-active" : ""
+          )
+        )
+      ),
+      expandedRepo ? renderSidebarProjectDrawer(expandedRepo) : null
+    )
+  );
 
   syncSectionFocusUi();
+}
+
+function renderSidebarUtilityButton(
+  action: string,
+  label: string,
+  iconKind: Parameters<typeof renderUtilityIcon>[0],
+  extraClass = ""
+) {
+  return dom(
+    "button",
+    {
+      className: classNames("sidebar-rail-button", "sidebar-utility-button", extraClass || undefined),
+      attrs: {
+        "data-action": action,
+        "data-tooltip": label,
+        title: label,
+        "aria-label": label
+      }
+    },
+    renderUtilityIconElement(iconKind)
+  );
 }
 
 function renderInboxRailButton() {
   const count = inboxSessions().length;
 
-  return `
-    <button class="sidebar-rail-button sidebar-home-button ${selectionMatches("inbox") ? "active" : ""} ${sidebarNavMatches("inbox") ? "keyboard-active" : ""}" data-action="select-inbox" data-tooltip="Inbox" title="Inbox" aria-label="Inbox">
-      ${renderUtilityIcon("inbox")}
-      ${count ? `<span class="sidebar-rail-badge">${count > 9 ? "9+" : count}</span>` : ""}
-    </button>
-  `;
+  return dom(
+    "button",
+    {
+      className: classNames(
+        "sidebar-rail-button",
+        "sidebar-home-button",
+        selectionMatches("inbox") ? "active" : undefined,
+        sidebarNavMatches("inbox") ? "keyboard-active" : undefined
+      ),
+      attrs: {
+        "data-action": "select-inbox",
+        "data-tooltip": "Inbox",
+        title: "Inbox",
+        "aria-label": "Inbox"
+      }
+    },
+    renderUtilityIconElement("inbox"),
+    count
+      ? dom("span", { className: "sidebar-rail-badge" }, count > 9 ? "9+" : String(count))
+      : null
+  );
 }
 
 function renderProjectRailButtons() {
   if (!state.repos.length) {
-    return `<div class="sidebar-rail-empty" data-tooltip="Add a folder to start">?</div>`;
+    return [dom("div", { className: "sidebar-rail-empty", attrs: { "data-tooltip": "Add a folder to start" } }, "?")];
   }
 
   return [...state.repos]
     .sort(compareRepos)
-    .map((repo) => renderProjectRailButton(repo))
-    .join("");
+    .map((repo) => renderProjectRailButton(repo));
 }
 
 function renderProjectRailButton(repo) {
@@ -1417,71 +1554,147 @@ function renderProjectRailButton(repo) {
   const expanded = ui.sidebarExpandedRepoId === repo.id;
   const badgeLabel = attentionCount ? (attentionCount > 9 ? "9+" : String(attentionCount)) : "";
 
-  return `
-    <button class="sidebar-rail-button sidebar-project-button ${active ? "active" : ""} ${expanded ? "expanded" : ""} ${sidebarNavMatches(repo.id) ? "keyboard-active" : ""}" data-action="select-repo" data-repo-id="${repo.id}" data-tooltip="${escapeAttribute(repo.name)}" title="${escapeAttribute(repo.name)}" aria-label="${escapeAttribute(repo.name)}">
-      <span class="sidebar-project-avatar" aria-hidden="true">${renderProjectAvatar(repo)}</span>
-      ${
-        badgeLabel
-          ? `<span class="sidebar-rail-badge">${badgeLabel}</span>`
-          : liveCount
-            ? `<span class="sidebar-rail-dot"></span>`
-            : ""
+  return dom(
+    "button",
+    {
+      className: classNames(
+        "sidebar-rail-button",
+        "sidebar-project-button",
+        active ? "active" : undefined,
+        expanded ? "expanded" : undefined,
+        sidebarNavMatches(repo.id) ? "keyboard-active" : undefined
+      ),
+      attrs: {
+        "data-action": "select-repo",
+        "data-repo-id": repo.id,
+        "data-tooltip": repo.name,
+        title: repo.name,
+        "aria-label": repo.name
       }
-    </button>
-  `;
+    },
+    dom(
+      "span",
+      { className: "sidebar-project-avatar", attrs: { "aria-hidden": "true" } },
+      renderProjectAvatarElement(repo)
+    ),
+    badgeLabel
+      ? dom("span", { className: "sidebar-rail-badge" }, badgeLabel)
+      : liveCount
+        ? dom("span", { className: "sidebar-rail-dot" })
+        : null
+  );
 }
 
 function renderSidebarProjectDrawer(repo) {
   const sessions = sessionsForRepo(repo.id);
 
-  return `
-    <section class="sidebar-project-drawer" tabindex="-1" data-repo-id="${repo.id}">
-      <div class="sidebar-project-drawer-header">
-        <div class="sidebar-project-drawer-title-row">
-          <div class="sidebar-project-drawer-avatar" aria-hidden="true">${renderProjectAvatar(repo)}</div>
-          <div class="sidebar-project-drawer-copy">
-            <div class="sidebar-project-drawer-title">${escapeHtml(repo.name)}</div>
-            <div class="sidebar-project-drawer-path">${escapeHtml(abbreviateHome(repo.path))}</div>
-          </div>
-        </div>
-        <button class="ghost sidebar-project-drawer-close" data-action="collapse-sidebar-project" data-repo-id="${repo.id}" aria-label="Collapse ${escapeAttribute(repo.name)}">Close</button>
-      </div>
-      <div class="detail-actions">
-        <button data-action="browse-files" data-repo-id="${repo.id}">Files</button>
-        <button data-action="open-wiki" data-repo-id="${repo.id}">Wiki</button>
-        <button data-action="toggle-wiki" data-repo-id="${repo.id}">${repo.wikiEnabled ? "Disable" : "Enable"}</button>
-        <button class="primary" data-action="open-launcher" data-repo-id="${repo.id}">New Session</button>
-      </div>
-      <div class="sidebar-project-drawer-section-label">Sessions</div>
-      <div class="sidebar-project-drawer-list">
-        ${
-          sessions.length
-            ? sessions.map((session) => renderSidebarDrawerSession(session, repo)).join("")
-            : `<div class="sidebar-project-drawer-empty">No sessions yet.</div>`
-        }
-      </div>
-    </section>
-  `;
+  return dom(
+    "section",
+    {
+      className: "sidebar-project-drawer",
+      attrs: { tabindex: "-1", "data-repo-id": repo.id }
+    },
+    dom(
+      "div",
+      { className: "sidebar-project-drawer-header" },
+      dom(
+        "div",
+        { className: "sidebar-project-drawer-title-row" },
+        dom(
+          "div",
+          { className: "sidebar-project-drawer-avatar", attrs: { "aria-hidden": "true" } },
+          renderProjectAvatarElement(repo)
+        ),
+        dom(
+          "div",
+          { className: "sidebar-project-drawer-copy" },
+          dom("div", { className: "sidebar-project-drawer-title" }, repo.name),
+          dom("div", { className: "sidebar-project-drawer-path" }, abbreviateHome(repo.path))
+        )
+      ),
+      dom(
+        "button",
+        {
+          className: "ghost sidebar-project-drawer-close",
+          attrs: {
+            "data-action": "collapse-sidebar-project",
+            "data-repo-id": repo.id,
+            "aria-label": `Collapse ${repo.name}`
+          }
+        },
+        "Close"
+      )
+    ),
+    dom(
+      "div",
+      { className: "detail-actions" },
+      dom("button", { attrs: { "data-action": "browse-files", "data-repo-id": repo.id } }, "Files"),
+      dom("button", { attrs: { "data-action": "open-wiki", "data-repo-id": repo.id } }, "Wiki"),
+      dom(
+        "button",
+        { attrs: { "data-action": "toggle-wiki", "data-repo-id": repo.id } },
+        repo.wikiEnabled ? "Disable" : "Enable"
+      ),
+      dom(
+        "button",
+        {
+          className: "primary",
+          attrs: { "data-action": "open-launcher", "data-repo-id": repo.id }
+        },
+        "New Session"
+      )
+    ),
+    dom("div", { className: "sidebar-project-drawer-section-label" }, "Sessions"),
+    dom(
+      "div",
+      { className: "sidebar-project-drawer-list" },
+      ...(sessions.length
+        ? sessions.map((session) => renderSidebarDrawerSession(session, repo))
+        : [dom("div", { className: "sidebar-project-drawer-empty" }, "No sessions yet.")])
+    )
+  );
 }
 
 function renderSidebarDrawerSession(session, repo) {
   const multiSelected = ui.selectedSessionIds.has(session.id);
-  return `
-    <button class="session-row ${session.isPinned ? "session-row-pinned" : ""} ${selectionMatches("session", session.id) ? "active" : ""} ${multiSelected ? "session-row-selected" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
-      <div class="row-title">
-        <span class="row-title-main">
-          ${renderSessionVisual(session, "session-visual-list")}
-          <span class="row-title-text">${escapeHtml(session.title)}</span>
-        </span>
-        <span class="row-title-meta">
-          ${session.isPinned ? renderSessionPinIndicator("Pin") : ""}
-          ${session.unreadCount && state.preferences.showInAppBadges ? '<span class="unread-dot"></span>' : ""}
-        </span>
-      </div>
-      <div class="row-subtitle">${escapeHtml(repo.name)}</div>
-      <div class="row-meta">${escapeHtml(previewTranscript(session.transcript))}</div>
-    </button>
-  `;
+  const button = dom(
+    "button",
+    {
+      className: classNames(
+        "session-row",
+        session.isPinned ? "session-row-pinned" : undefined,
+        selectionMatches("session", session.id) ? "active" : undefined,
+        multiSelected ? "session-row-selected" : undefined
+      ),
+      attrs: {
+        "data-action": "select-session",
+        "data-session-id": session.id
+      }
+    },
+    dom(
+      "div",
+      { className: "row-title" },
+      dom(
+        "span",
+        { className: "row-title-main" },
+        renderSessionVisualElement(session, "session-visual-list"),
+        dom("span", { className: "row-title-text" }, session.title)
+      ),
+      dom(
+        "span",
+        { className: "row-title-meta" },
+        session.isPinned ? renderSessionPinIndicatorElement("Pin") : null,
+        session.unreadCount && state.preferences.showInAppBadges
+          ? dom("span", { className: "unread-dot" })
+          : null
+      )
+    ),
+    dom("div", { className: "row-subtitle" }, repo.name),
+    dom("div", { className: "row-meta" }, previewTranscript(session.transcript))
+  );
+
+  setSessionDragAttributes(button, session.id, "list");
+  return button;
 }
 
 function renderBulkActionBar(currentRepoId: string) {
@@ -2275,7 +2488,7 @@ function formatRelativeDate(value) {
 
 function renderSessionDetail(session) {
   if (!session) {
-    detailElement.innerHTML = `<div class="empty-state">This session is no longer available.</div>`;
+    replaceDomChildren(detailElement, emptyStateElement("This session is no longer available."));
     destroySessionWorkspaceTerminals();
     return;
   }
@@ -2288,14 +2501,21 @@ function renderSessionDetail(session) {
     ui.workspaceStructureSignature !== signature
   ) {
     destroySessionWorkspaceTerminals();
-    detailElement.innerHTML = `
-      <section class="session-workspace-detail">
-        <div id="session-workspace-toolbar"></div>
-        <div id="session-workspace-canvas" class="session-workspace-canvas">
-          ${layout ? renderSessionWorkspaceLayoutNode(layout) : `<div class="empty-state">Drag a session here to start a workspace layout.</div>`}
-        </div>
-      </section>
-    `;
+    replaceDomChildren(
+      detailElement,
+      dom(
+        "section",
+        { className: "session-workspace-detail" },
+        dom("div", { attrs: { id: "session-workspace-toolbar" } }),
+        dom(
+          "div",
+          { className: "session-workspace-canvas", attrs: { id: "session-workspace-canvas" } },
+          layout
+            ? renderSessionWorkspaceLayoutNode(layout)
+            : emptyStateElement("Drag a session here to start a workspace layout.")
+        )
+      )
+    );
     ui.workspaceStructureSignature = signature;
     if (layout) {
       mountSessionWorkspaceTerminals(layout);
@@ -2317,7 +2537,7 @@ function updateSessionChrome(session) {
 
 function renderSessionWorkspaceLayoutNode(node: WorkspaceLayoutNode, path = "") {
   if (!node) {
-    return "";
+    return null;
   }
 
   if (node.type === "leaf") {
@@ -2328,45 +2548,88 @@ function renderSessionWorkspaceLayoutNode(node: WorkspaceLayoutNode, path = "") 
     ? node.sizes
     : node.children.map(() => 1);
 
-  const parts: string[] = [];
+  const split = dom(
+    "div",
+    {
+      className: `session-workspace-split session-workspace-split-${node.axis}`,
+      attrs: { "data-split-path": path }
+    }
+  );
+
   node.children.forEach((child, i) => {
     if (i > 0) {
-      parts.push(`<div class="pane-resize-handle pane-resize-handle-${node.axis}" data-split-path="${escapeAttribute(path)}" data-handle-index="${i - 1}"></div>`);
+      split.appendChild(
+        dom("div", {
+          className: `pane-resize-handle pane-resize-handle-${node.axis}`,
+          attrs: {
+            "data-split-path": path,
+            "data-handle-index": String(i - 1)
+          }
+        })
+      );
     }
     const childPath = path ? `${path}.${i}` : `${i}`;
-    parts.push(`<div class="split-child" style="flex: ${sizes[i]} 1 0%; min-width: 0; min-height: 0;">${renderSessionWorkspaceLayoutNode(child, childPath)}</div>`);
+    const childElement = dom("div", { className: "split-child" }, renderSessionWorkspaceLayoutNode(child, childPath));
+    childElement.style.flex = `${sizes[i]} 1 0%`;
+    childElement.style.minWidth = "0";
+    childElement.style.minHeight = "0";
+    split.appendChild(childElement);
   });
 
-  return `
-    <div class="session-workspace-split session-workspace-split-${node.axis}" data-split-path="${escapeAttribute(path)}">
-      ${parts.join("")}
-    </div>
-  `;
+  return split;
 }
 
 function renderSessionPane(sessionId) {
   const session = sessionById(sessionId);
   if (!session) {
-    return "";
+    return null;
   }
 
-  return `
-    <article class="session-pane ${session.isPinned ? "session-pane-pinned" : ""} ${selectionMatches("session", session.id) ? "session-pane-active" : ""}" data-session-id="${session.id}">
-      <div class="session-pane-drop-indicator">
-        <span class="session-pane-drop-label"></span>
-      </div>
-      <div class="session-pane-main" tabindex="-1" data-action="select-session-pane" data-session-id="${session.id}">
-        <div class="session-pane-header"></div>
-        <div class="session-pane-blocker"></div>
-      </div>
-      <div class="session-pane-terminal-wrap ${session.runtimeState === "live" ? "" : "session-pane-terminal-wrap-paused"}" tabindex="-1">
-        <div class="session-terminal-shell" data-session-id="${session.id}">
-          <div class="session-terminal" data-session-id="${session.id}"></div>
-        </div>
-        <div class="session-pane-paused-notice"></div>
-      </div>
-    </article>
-  `;
+  return dom(
+    "article",
+    {
+      className: classNames(
+        "session-pane",
+        session.isPinned ? "session-pane-pinned" : undefined,
+        selectionMatches("session", session.id) ? "session-pane-active" : undefined
+      ),
+      attrs: { "data-session-id": session.id }
+    },
+    dom(
+      "div",
+      { className: "session-pane-drop-indicator" },
+      dom("span", { className: "session-pane-drop-label" })
+    ),
+    dom(
+      "div",
+      {
+        className: "session-pane-main",
+        attrs: {
+          tabindex: "-1",
+          "data-action": "select-session-pane",
+          "data-session-id": session.id
+        }
+      },
+      dom("div", { className: "session-pane-header" }),
+      dom("div", { className: "session-pane-blocker" })
+    ),
+    dom(
+      "div",
+      {
+        className: classNames(
+          "session-pane-terminal-wrap",
+          session.runtimeState === "live" ? undefined : "session-pane-terminal-wrap-paused"
+        ),
+        attrs: { tabindex: "-1" }
+      },
+      dom(
+        "div",
+        { className: "session-terminal-shell", attrs: { "data-session-id": session.id } },
+        dom("div", { className: "session-terminal", attrs: { "data-session-id": session.id } })
+      ),
+      dom("div", { className: "session-pane-paused-notice" })
+    )
+  );
 }
 
 function updateSessionWorkspaceToolbar() {
@@ -2390,46 +2653,142 @@ function updateSessionWorkspaceToolbar() {
   }
   toolbar.dataset.sig = sig;
 
-  toolbar.innerHTML = `
-    <div class="ws-toolbar">
-      <div class="ws-toolbar-info">
-        ${renderSessionVisualButton(
+  replaceDomChildren(
+    toolbar,
+    dom(
+      "div",
+      { className: "ws-toolbar" },
+      dom(
+        "div",
+        { className: "ws-toolbar-info" },
+        renderSessionVisualButtonElement(
           session,
           "session-visual-toolbar",
           "import-session-icon",
           session.sessionIconUrl ? "Replace session icon" : "Upload session icon"
-        )}
-        <span class="ws-toolbar-title">${escapeHtml(session.title)}</span>
-        ${session.isPinned ? renderSessionPinIndicator("Pinned", "session-pin-indicator-toolbar") : ""}
-        <span class="ws-toolbar-sep">/</span>
-        <span class="ws-toolbar-repo">${escapeHtml(repo?.name || "Unknown")}</span>
-        <span class="ws-toolbar-meta">${visibleSessionCount} ${pluralize(visibleSessionCount, "pane", "panes")}</span>
-      </div>
-      <div class="ws-toolbar-actions">
-        <div class="ws-layout-group" role="group" aria-label="Layout">
-          <button class="ws-layout-btn" data-action="workspace-layout-columns" title="Side by side">Cols</button>
-          <button class="ws-layout-btn" data-action="workspace-layout-stack" title="Stacked vertically">Stack</button>
-          <button class="ws-layout-btn" data-action="workspace-layout-grid" title="2x2 Grid" ${visibleSessionCount > 1 ? "" : "disabled"}>Grid</button>
-        </div>
-        <button class="ws-action-btn ${session.isPinned ? "ws-action-btn-active" : ""}" data-action="toggle-session-pin" data-session-id="${session.id}">${session.isPinned ? "Unpin" : "Pin"}</button>
-        ${renderSessionTagSelect(session, "session-tag-select-toolbar")}
-        ${session.sessionIconUrl ? `<button class="ws-action-btn" data-action="clear-session-icon" data-session-id="${session.id}">Clear Icon</button>` : ""}
-        <button class="ws-action-btn primary" data-action="open-launcher" data-repo-id="${repo?.id || ""}">+ Session</button>
-        <button class="ws-action-btn" data-action="open-wiki" data-repo-id="${repo?.id || ""}">Wiki</button>
-        <button class="ws-action-btn" data-action="open-tokscale" data-repo-id="${repo?.id || ""}">Tokens</button>
-        <button class="ws-action-btn" data-action="open-lazygit" data-repo-id="${repo?.id || ""}">Git</button>
-        <button class="ws-action-btn" data-action="open-settings" data-settings-tab="claude" data-settings-claude-view="skills">Skills</button>
-        <button class="ws-action-btn" data-action="open-settings" data-settings-tab="claude" data-settings-claude-view="plugins">Plugins</button>
-        <button class="ws-action-btn" data-action="open-settings" data-settings-tab="claude">Agent Files</button>
-        ${
-          session.runtimeState !== "live"
-            ? `<button class="ws-action-btn primary" data-action="restart-session" data-session-id="${session.id}">${escapeHtml(resumeSessionActionLabel(session))}</button>`
-            : ""
-        }
-        <button class="ws-action-btn ws-action-danger" data-action="close-session" data-session-id="${session.id}">End</button>
-      </div>
-    </div>
-  `;
+        ),
+        dom("span", { className: "ws-toolbar-title" }, session.title),
+        session.isPinned
+          ? renderSessionPinIndicatorElement("Pinned", "session-pin-indicator-toolbar")
+          : null,
+        dom("span", { className: "ws-toolbar-sep" }, "/"),
+        dom("span", { className: "ws-toolbar-repo" }, repo?.name || "Unknown"),
+        dom(
+          "span",
+          { className: "ws-toolbar-meta" },
+          `${visibleSessionCount} ${pluralize(visibleSessionCount, "pane", "panes")}`
+        )
+      ),
+      dom(
+        "div",
+        { className: "ws-toolbar-actions" },
+        dom(
+          "div",
+          { className: "ws-layout-group", attrs: { role: "group", "aria-label": "Layout" } },
+          dom(
+            "button",
+            { className: "ws-layout-btn", attrs: { "data-action": "workspace-layout-columns", title: "Side by side" } },
+            "Cols"
+          ),
+          dom(
+            "button",
+            { className: "ws-layout-btn", attrs: { "data-action": "workspace-layout-stack", title: "Stacked vertically" } },
+            "Stack"
+          ),
+          dom(
+            "button",
+            {
+              className: "ws-layout-btn",
+              attrs: {
+                "data-action": "workspace-layout-grid",
+                title: "2x2 Grid",
+                disabled: visibleSessionCount > 1 ? undefined : true
+              }
+            },
+            "Grid"
+          )
+        ),
+        dom(
+          "button",
+          {
+            className: classNames("ws-action-btn", session.isPinned ? "ws-action-btn-active" : undefined),
+            attrs: { "data-action": "toggle-session-pin", "data-session-id": session.id }
+          },
+          session.isPinned ? "Unpin" : "Pin"
+        ),
+        renderSessionTagSelectElement(session, "session-tag-select-toolbar"),
+        session.sessionIconUrl
+          ? dom(
+              "button",
+              {
+                className: "ws-action-btn",
+                attrs: { "data-action": "clear-session-icon", "data-session-id": session.id }
+              },
+              "Clear Icon"
+            )
+          : null,
+        dom(
+          "button",
+          {
+            className: "ws-action-btn primary",
+            attrs: { "data-action": "open-launcher", "data-repo-id": repo?.id || "" }
+          },
+          "+ Session"
+        ),
+        dom("button", { className: "ws-action-btn", attrs: { "data-action": "open-wiki", "data-repo-id": repo?.id || "" } }, "Wiki"),
+        dom(
+          "button",
+          { className: "ws-action-btn", attrs: { "data-action": "open-tokscale", "data-repo-id": repo?.id || "" } },
+          "Tokens"
+        ),
+        dom("button", { className: "ws-action-btn", attrs: { "data-action": "open-lazygit", "data-repo-id": repo?.id || "" } }, "Git"),
+        dom(
+          "button",
+          {
+            className: "ws-action-btn",
+            attrs: {
+              "data-action": "open-settings",
+              "data-settings-tab": "claude",
+              "data-settings-claude-view": "skills"
+            }
+          },
+          "Skills"
+        ),
+        dom(
+          "button",
+          {
+            className: "ws-action-btn",
+            attrs: {
+              "data-action": "open-settings",
+              "data-settings-tab": "claude",
+              "data-settings-claude-view": "plugins"
+            }
+          },
+          "Plugins"
+        ),
+        dom(
+          "button",
+          { className: "ws-action-btn", attrs: { "data-action": "open-settings", "data-settings-tab": "claude" } },
+          "Agent Files"
+        ),
+        session.runtimeState !== "live"
+          ? dom(
+              "button",
+              {
+                className: "ws-action-btn primary",
+                attrs: { "data-action": "restart-session", "data-session-id": session.id }
+              },
+              resumeSessionActionLabel(session)
+            )
+          : null,
+        dom(
+          "button",
+          { className: "ws-action-btn ws-action-danger", attrs: { "data-action": "close-session", "data-session-id": session.id } },
+          "End"
+        )
+      )
+    )
+  );
 }
 
 function updateAllSessionPanes() {
@@ -2464,40 +2823,7 @@ function updateSessionPane(session) {
   const headerSig = `${session.title}|${session.status}|${session.runtimeState}|${isRenaming}|${session.isPinned}|${session.tagColor || ""}|${session.sessionIconUrl || ""}|${session.sessionIconUpdatedAt || ""}`;
   if (header.dataset.sig !== headerSig) {
     header.dataset.sig = headerSig;
-    header.innerHTML = `
-    <div class="pane-bar" ${isRenaming ? "" : `draggable="true" data-drag-session-id="${session.id}" data-drag-source="pane" title="Drag to reorder"`}>
-      <div class="pane-bar-left">
-        <span class="pane-grip" aria-hidden="true">\u2801\u2801\u2801</span>
-        ${renderSessionVisual(session, "session-visual-pane")}
-        ${
-          isRenaming
-            ? `<input
-                class="pane-title-input"
-                type="text"
-                value="${escapeAttribute(ui.renamingSessionTitle)}"
-                data-session-rename-input="true"
-                data-session-id="${session.id}"
-                aria-label="Rename session" />`
-            : `<span class="pane-title">${escapeHtml(session.title)}</span>`
-        }
-        ${session.isPinned ? renderSessionPinIndicator("Pin", "session-pin-indicator-compact") : ""}
-        <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
-      </div>
-      <div class="pane-bar-right">
-        ${
-          isRenaming
-            ? `<button class="pane-action-btn" data-action="cancel-session-rename" data-session-id="${session.id}" data-no-drag="true" title="Cancel rename">Cancel</button>`
-            : `<button class="pane-action-btn" data-action="start-session-rename" data-session-id="${session.id}" data-no-drag="true" title="Rename tab">Rename</button>`
-        }
-        ${
-          session.runtimeState !== "live"
-            ? `<button class="pane-action-btn primary" data-action="restart-session" data-session-id="${session.id}">${escapeHtml(resumeSessionActionLabel(session))}</button>`
-            : ""
-        }
-        <button class="pane-action-btn pane-hide-btn" data-action="remove-session-pane" data-session-id="${session.id}" data-no-drag="true" title="Hide pane">&times;</button>
-      </div>
-    </div>
-  `;
+    replaceDomChildren(header, renderSessionPaneHeader(session, isRenaming));
   }
 
   if (isRenaming) {
@@ -2511,45 +2837,154 @@ function updateSessionPane(session) {
     });
   }
 
-  const blockerHtml = renderSessionBlocker(session);
-  if (blockerElement.dataset.sig !== blockerHtml) {
-    blockerElement.dataset.sig = blockerHtml;
-    blockerElement.innerHTML = blockerHtml;
+  const blockerSig = session.blocker
+    ? `${session.blocker.kind}|${session.blocker.summary}|${session.runtimeState}`
+    : "";
+  if (blockerElement.dataset.sig !== blockerSig) {
+    blockerElement.dataset.sig = blockerSig;
+    replaceDomChildren(blockerElement, renderSessionBlocker(session));
   }
 
-  const pausedHtml = renderPausedSessionNotice(session);
-  if (pausedNotice.dataset.sig !== pausedHtml) {
-    pausedNotice.dataset.sig = pausedHtml;
-    pausedNotice.innerHTML = pausedHtml;
+  const pausedSig = session.runtimeState === "live"
+    ? ""
+    : `${session.runtimeState}|${sessionAgentId(session) || ""}`;
+  if (pausedNotice.dataset.sig !== pausedSig) {
+    pausedNotice.dataset.sig = pausedSig;
+    replaceDomChildren(pausedNotice, renderPausedSessionNotice(session));
   }
+}
+
+function renderSessionPaneHeader(session, isRenaming: boolean) {
+  const paneBar = dom(
+    "div",
+    {
+      className: "pane-bar",
+      attrs: isRenaming ? {} : { title: "Drag to reorder" }
+    },
+    dom(
+      "div",
+      { className: "pane-bar-left" },
+      dom("span", { className: "pane-grip", attrs: { "aria-hidden": "true" } }, "\u2801\u2801\u2801"),
+      renderSessionVisualElement(session, "session-visual-pane"),
+      isRenaming
+        ? dom("input", {
+            className: "pane-title-input",
+            value: ui.renamingSessionTitle,
+            attrs: {
+              type: "text",
+              "data-session-rename-input": "true",
+              "data-session-id": session.id,
+              "aria-label": "Rename session"
+            }
+          })
+        : dom("span", { className: "pane-title" }, session.title),
+      session.isPinned
+        ? renderSessionPinIndicatorElement("Pin", "session-pin-indicator-compact")
+        : null,
+      dom(
+        "span",
+        { className: `status-badge status-${session.status}` },
+        statusLabel(session.status)
+      )
+    ),
+    dom(
+      "div",
+      { className: "pane-bar-right" },
+      isRenaming
+        ? dom(
+            "button",
+            {
+              className: "pane-action-btn",
+              attrs: {
+                "data-action": "cancel-session-rename",
+                "data-session-id": session.id,
+                "data-no-drag": "true",
+                title: "Cancel rename"
+              }
+            },
+            "Cancel"
+          )
+        : dom(
+            "button",
+            {
+              className: "pane-action-btn",
+              attrs: {
+                "data-action": "start-session-rename",
+                "data-session-id": session.id,
+                "data-no-drag": "true",
+                title: "Rename tab"
+              }
+            },
+            "Rename"
+          ),
+      session.runtimeState !== "live"
+        ? dom(
+            "button",
+            {
+              className: "pane-action-btn primary",
+              attrs: { "data-action": "restart-session", "data-session-id": session.id }
+            },
+            resumeSessionActionLabel(session)
+          )
+        : null,
+      dom(
+        "button",
+        {
+          className: "pane-action-btn pane-hide-btn",
+          attrs: {
+            "data-action": "remove-session-pane",
+            "data-session-id": session.id,
+            "data-no-drag": "true",
+            title: "Hide pane"
+          }
+        },
+        "\u00D7"
+      )
+    )
+  );
+
+  if (!isRenaming) {
+    setSessionDragAttributes(paneBar, session.id, "pane");
+  }
+
+  return paneBar;
 }
 
 function renderSessionBlocker(session) {
   if (!session.blocker) {
-    return "";
+    return null;
   }
 
-  return `
-    <div class="blocker-banner">
-      <div>
-        <div class="row-title">${escapeHtml(blockerLabel(session.blocker.kind))}</div>
-        <div class="row-subtitle">${escapeHtml(session.blocker.summary)}</div>
-      </div>
-      ${
-        session.blocker.kind === "approval" && session.runtimeState === "live"
-          ? `<div class="session-actions">
-              <button class="primary" data-action="approve-blocker" data-session-id="${session.id}">Approve</button>
-              <button data-action="deny-blocker" data-session-id="${session.id}">Deny</button>
-            </div>`
-          : ""
-      }
-    </div>
-  `;
+  return dom(
+    "div",
+    { className: "blocker-banner" },
+    dom(
+      "div",
+      {},
+      dom("div", { className: "row-title" }, blockerLabel(session.blocker.kind)),
+      dom("div", { className: "row-subtitle" }, session.blocker.summary)
+    ),
+    session.blocker.kind === "approval" && session.runtimeState === "live"
+      ? dom(
+          "div",
+          { className: "session-actions" },
+          dom(
+            "button",
+            {
+              className: "primary",
+              attrs: { "data-action": "approve-blocker", "data-session-id": session.id }
+            },
+            "Approve"
+          ),
+          dom("button", { attrs: { "data-action": "deny-blocker", "data-session-id": session.id } }, "Deny")
+        )
+      : null
+  );
 }
 
 function renderPausedSessionNotice(session) {
   if (session.runtimeState === "live") {
-    return "";
+    return null;
   }
 
   const startupAgentId = sessionAgentId(session);
@@ -2560,15 +2995,24 @@ function renderPausedSessionNotice(session) {
         ? `This ${agentLabel(startupAgentId)} session was restored from history. Restart it to relaunch the agent in this project.`
         : "This shell session was restored from history. Restart it to type in the terminal again.";
 
-  return `
-    <div class="terminal-paused-notice">
-      <div>
-        <div class="row-title">${escapeHtml(resumeSessionActionLabel(session))}</div>
-        <div class="row-subtitle">${escapeHtml(body)}</div>
-      </div>
-      <button class="primary" data-action="restart-session" data-session-id="${session.id}">${escapeHtml(resumeSessionActionLabel(session))}</button>
-    </div>
-  `;
+  return dom(
+    "div",
+    { className: "terminal-paused-notice" },
+    dom(
+      "div",
+      {},
+      dom("div", { className: "row-title" }, resumeSessionActionLabel(session)),
+      dom("div", { className: "row-subtitle" }, body)
+    ),
+    dom(
+      "button",
+      {
+        className: "primary",
+        attrs: { "data-action": "restart-session", "data-session-id": session.id }
+      },
+      resumeSessionActionLabel(session)
+    )
+  );
 }
 
 function resumeSessionActionLabel(session) {
@@ -2847,56 +3291,93 @@ function renderQuickSwitcherDialog() {
     return repo.name.toLowerCase().includes(normalized) || repo.path.toLowerCase().includes(normalized);
   });
 
-  quickSwitcherDialog.innerHTML = `
-    <form method="dialog" class="dialog-body">
-      <div class="dialog-header">
-        <div>
-          <div class="eyebrow">Quick Switcher</div>
-          <h2 class="dialog-title">Jump instantly</h2>
-        </div>
-        <button value="cancel">Close</button>
-      </div>
-      <input id="quick-switcher-query" placeholder="Search sessions or folders" value="${escapeAttribute(ui.quickSwitcherQuery)}" />
-      <div class="dialog-panel">
-        <div class="section-label">Sessions</div>
-        <div class="dialog-list">
-          ${sessions
-            .slice(0, 20)
-            .map(
-              (session) => `
-                <button type="button" class="switcher-row ${session.isPinned ? "session-card-pinned" : ""}" data-action="switch-session" data-session-id="${session.id}">
-                  <div class="row-title">
-                    <span class="row-title-main">
-                      ${renderSessionVisual(session, "session-visual-list")}
-                      <span class="row-title-text">${escapeHtml(session.title)}</span>
-                    </span>
-                    <span class="row-title-meta">
-                      ${session.isPinned ? renderSessionPinIndicator("Pin") : ""}
-                    </span>
-                  </div>
-                  <div class="row-subtitle">${escapeHtml(repoById(session.repoID)?.name || "Unknown Repo")}</div>
-                </button>
-              `
-            )
-            .join("")}
-        </div>
-        <div class="section-label">Folders</div>
-        <div class="dialog-list">
-          ${repos
-            .slice(0, 20)
-            .map(
-              (repo) => `
-                <button type="button" class="switcher-row" data-action="switch-repo" data-repo-id="${repo.id}">
-                  <div class="row-title">${escapeHtml(repo.name)}</div>
-                  <div class="row-subtitle">${escapeHtml(abbreviateHome(repo.path))}</div>
-                </button>
-              `
-            )
-            .join("")}
-        </div>
-      </div>
-    </form>
-  `;
+  replaceDomChildren(
+    quickSwitcherDialog,
+    dom(
+      "form",
+      { className: "dialog-body", attrs: { method: "dialog" } },
+      dom(
+        "div",
+        { className: "dialog-header" },
+        dom(
+          "div",
+          {},
+          dom("div", { className: "eyebrow" }, "Quick Switcher"),
+          dom("h2", { className: "dialog-title" }, "Jump instantly")
+        ),
+        dom("button", { attrs: { value: "cancel" } }, "Close")
+      ),
+      dom("input", {
+        value: ui.quickSwitcherQuery,
+        attrs: {
+          id: "quick-switcher-query",
+          placeholder: "Search sessions or folders"
+        }
+      }),
+      dom(
+        "div",
+        { className: "dialog-panel" },
+        dom("div", { className: "section-label" }, "Sessions"),
+        dom(
+          "div",
+          { className: "dialog-list" },
+          ...sessions.slice(0, 20).map((session) => renderQuickSwitcherSessionRow(session))
+        ),
+        dom("div", { className: "section-label" }, "Folders"),
+        dom(
+          "div",
+          { className: "dialog-list" },
+          ...repos.slice(0, 20).map((repo) => renderQuickSwitcherRepoRow(repo))
+        )
+      )
+    )
+  );
+}
+
+function renderQuickSwitcherSessionRow(session) {
+  return dom(
+    "button",
+    {
+      className: classNames("switcher-row", session.isPinned ? "session-card-pinned" : undefined),
+      attrs: {
+        type: "button",
+        "data-action": "switch-session",
+        "data-session-id": session.id
+      }
+    },
+    dom(
+      "div",
+      { className: "row-title" },
+      dom(
+        "span",
+        { className: "row-title-main" },
+        renderSessionVisualElement(session, "session-visual-list"),
+        dom("span", { className: "row-title-text" }, session.title)
+      ),
+      dom(
+        "span",
+        { className: "row-title-meta" },
+        session.isPinned ? renderSessionPinIndicatorElement("Pin") : null
+      )
+    ),
+    dom("div", { className: "row-subtitle" }, repoById(session.repoID)?.name || "Unknown Repo")
+  );
+}
+
+function renderQuickSwitcherRepoRow(repo) {
+  return dom(
+    "button",
+    {
+      className: "switcher-row",
+      attrs: {
+        type: "button",
+        "data-action": "switch-repo",
+        "data-repo-id": repo.id
+      }
+    },
+    dom("div", { className: "row-title" }, repo.name),
+    dom("div", { className: "row-subtitle" }, abbreviateHome(repo.path))
+  );
 }
 
 function commandPaletteShortcutForAction(action: string): string | null {
@@ -2939,92 +3420,179 @@ function renderCommandPaletteDialog() {
     !normalized || command.label.toLowerCase().includes(normalized)
   );
 
-  // Build command rows safely — labels and shortcuts come from internal constants,
-  // not user input, so the escaping helpers here are a defence-in-depth measure.
-  const rows = filtered.map((command) => {
-    const shortcut = commandPaletteShortcutForAction(command.action);
-    const shortcutHtml = shortcut
-      ? `<kbd class="shortcut-hint">${renderAcceleratorMarkup(shortcut)}</kbd>`
-      : "";
-    return `<button type="button" class="command-row" data-action="${command.action}">
-              <div class="row-title">${escapeHtml(command.label)}</div>
-              ${shortcutHtml}
-            </button>`;
-  });
+  replaceDomChildren(
+    commandPaletteDialog,
+    dom(
+      "form",
+      { className: "dialog-body", attrs: { method: "dialog" } },
+      dom(
+        "div",
+        { className: "dialog-header" },
+        dom(
+          "div",
+          {},
+          dom("div", { className: "eyebrow" }, "Command Palette"),
+          dom("h2", { className: "dialog-title" }, "Run a command")
+        ),
+        dom("button", { attrs: { value: "cancel" } }, "Close")
+      ),
+      dom("input", {
+        value: ui.commandPaletteQuery,
+        attrs: {
+          id: "command-palette-query",
+          placeholder: "Search commands"
+        }
+      }),
+      dom(
+        "div",
+        { className: "dialog-list" },
+        ...filtered.map((command) => renderCommandPaletteRow(command))
+      )
+    )
+  );
+}
 
-  commandPaletteDialog.innerHTML = `
-    <form method="dialog" class="dialog-body">
-      <div class="dialog-header">
-        <div>
-          <div class="eyebrow">Command Palette</div>
-          <h2 class="dialog-title">Run a command</h2>
-        </div>
-        <button value="cancel">Close</button>
-      </div>
-      <input id="command-palette-query" placeholder="Search commands" value="${escapeAttribute(ui.commandPaletteQuery)}" />
-      <div class="dialog-list">
-        ${rows.join("")}
-      </div>
-    </form>
-  `;
+function renderCommandPaletteRow(command: { action: string; label: string }) {
+  const shortcut = commandPaletteShortcutForAction(command.action);
+  return dom(
+    "button",
+    {
+      className: "command-row",
+      attrs: {
+        type: "button",
+        "data-action": command.action
+      }
+    },
+    dom("div", { className: "row-title" }, command.label),
+    shortcut
+      ? dom(
+          "kbd",
+          { className: "shortcut-hint" },
+          renderAcceleratorMarkupElement(shortcut)
+        )
+      : null
+  );
 }
 
 function renderSessionSearchDialog() {
   const repo = repoById(ui.sessionSearchRepoId || "");
   const selectedResult = selectedSessionSearchResult();
-  const body = renderSessionSearchBody();
+  const sectionLabel = dom(
+    "div",
+    { className: "section-label", attrs: { style: "display:flex;align-items:center;justify-content:space-between;" } },
+    dom("span", {}, "Matches"),
+    ui.sessionSearchResults.length > 0
+      ? dom(
+          "span",
+          { className: "session-search-kbd-hint" },
+          dom("span", { className: "session-search-kbd" }, "\u2191"),
+          dom("span", { className: "session-search-kbd" }, "\u2193"),
+          " navigate \u00A0",
+          dom("span", { className: "session-search-kbd" }, "\u21B5"),
+          " open"
+        )
+      : null
+  );
 
-  sessionSearchDialog.innerHTML = `
-    <form method="dialog" class="dialog-body">
-      <div class="dialog-header">
-        <div>
-          <div class="eyebrow">Session Search</div>
-          <h2 class="dialog-title">Search Claude and Codex session files</h2>
-          <div class="muted">${escapeHtml(repo ? abbreviateHome(repo.path) : "Select a project to search its session files.")}</div>
-        </div>
-        <button value="cancel">Close</button>
-      </div>
-      <input id="session-search-query" placeholder="Search this project's Claude and Codex sessions" value="${escapeAttribute(ui.sessionSearchQuery)}" />
-      <div class="dialog-panel">
-        <div class="section-label" style="display:flex;align-items:center;justify-content:space-between;">
-          <span>Matches</span>
-          ${ui.sessionSearchResults.length > 0 ? `<span class="session-search-kbd-hint"><span class="session-search-kbd">↑</span><span class="session-search-kbd">↓</span> navigate &nbsp;<span class="session-search-kbd">↵</span> open</span>` : ""}
-        </div>
-        <div class="dialog-list session-search-list">${body}</div>
-      </div>
-      ${
-        selectedResult
-          ? `
-            <div class="dialog-footer">
-              <button type="button" data-action="reveal-session-search-result" data-result-index="${ui.sessionSearchSelectedIndex}">Reveal File</button>
-              ${selectedResult.source === "claude" && selectedResult.sessionId ? `<button type="button" class="primary" data-action="resume-session-search-result" data-result-index="${ui.sessionSearchSelectedIndex}">Resume from here</button>` : ""}
-            </div>
-          `
-          : ""
-      }
-    </form>
-  `;
+  replaceDomChildren(
+    sessionSearchDialog,
+    dom(
+      "form",
+      { className: "dialog-body", attrs: { method: "dialog" } },
+      dom(
+        "div",
+        { className: "dialog-header" },
+        dom(
+          "div",
+          {},
+          dom("div", { className: "eyebrow" }, "Session Search"),
+          dom("h2", { className: "dialog-title" }, "Search Claude and Codex session files"),
+          dom(
+            "div",
+            { className: "muted" },
+            repo ? abbreviateHome(repo.path) : "Select a project to search its session files."
+          )
+        ),
+        dom("button", { attrs: { value: "cancel" } }, "Close")
+      ),
+      dom("input", {
+        value: ui.sessionSearchQuery,
+        attrs: {
+          id: "session-search-query",
+          placeholder: "Search this project's Claude and Codex sessions"
+        }
+      }),
+      dom(
+        "div",
+        { className: "dialog-panel" },
+        sectionLabel,
+        dom(
+          "div",
+          { className: "dialog-list session-search-list" },
+          ...renderSessionSearchBody()
+        )
+      ),
+      selectedResult
+        ? dom(
+            "div",
+            { className: "dialog-footer" },
+            dom(
+              "button",
+              {
+                attrs: {
+                  type: "button",
+                  "data-action": "reveal-session-search-result",
+                  "data-result-index": String(ui.sessionSearchSelectedIndex)
+                }
+              },
+              "Reveal File"
+            ),
+            selectedResult.source === "claude" && selectedResult.sessionId
+              ? dom(
+                  "button",
+                  {
+                    className: "primary",
+                    attrs: {
+                      type: "button",
+                      "data-action": "resume-session-search-result",
+                      "data-result-index": String(ui.sessionSearchSelectedIndex)
+                    }
+                  },
+                  "Resume from here"
+                )
+              : null
+          )
+        : null
+    )
+  );
 }
 
 function renderSessionSearchBody() {
   if (!ui.sessionSearchRepoId) {
-    return `<div class="empty-state">Open or select a project first.</div>`;
+    return [emptyStateElement("Open or select a project first.")];
   }
 
   if (ui.sessionSearchError) {
-    return `<div class="empty-state">${escapeHtml(ui.sessionSearchError)}</div>`;
+    return [emptyStateElement(ui.sessionSearchError)];
   }
 
   if (!ui.sessionSearchQuery.trim()) {
-    return `<div class="empty-state">Type to search only this project's Claude and Codex session files.</div>`;
+    return [emptyStateElement("Type to search only this project's Claude and Codex session files.")];
   }
 
   if (ui.sessionSearchLoading) {
-    return `<div class="session-search-loading-state"><div class="session-search-spinner"></div>Searching session files…</div>`;
+    return [
+      dom(
+        "div",
+        { className: "session-search-loading-state" },
+        dom("div", { className: "session-search-spinner" }),
+        "Searching session files\u2026"
+      )
+    ];
   }
 
   if (!ui.sessionSearchResults.length) {
-    return `<div class="empty-state">No matching session content found for this project.</div>`;
+    return [emptyStateElement("No matching session content found for this project.")];
   }
 
   return ui.sessionSearchResults
@@ -3033,26 +3601,70 @@ function renderSessionSearchBody() {
       const normalizedPreview = normalizeJsonlPreview(result.preview);
       const canResume = result.source === "claude" && result.sessionId;
       const shortId = result.sessionId ? result.sessionId.slice(0, 8) : null;
-      return `
-        <div
-          class="session-search-row ${index === ui.sessionSearchSelectedIndex ? "active" : ""}"
-          data-action="select-session-search-result"
-          data-result-index="${index}"
-        >
-          <div class="row-title">
-            <span>${escapeHtml(result.title)}</span>
-            <span class="session-search-source session-search-source-${escapeHtml(result.source)}">${escapeHtml(sourceLabel)}</span>
-          </div>
-          <div class="row-subtitle mono">${shortId ? escapeHtml(shortId) + " · " : ""}${escapeHtml(pathLeafLabel(result.filePath))}:${escapeHtml(String(result.lineNumber || 1))}</div>
-          <div class="row-meta">${escapeHtml(normalizedPreview)}</div>
-          <div class="session-search-actions">
-            <button type="button" data-action="reveal-session-search-result" data-result-index="${index}">Reveal</button>
-            ${canResume ? `<button type="button" class="primary" data-action="resume-session-search-result" data-result-index="${index}">Resume from here</button>` : ""}
-          </div>
-        </div>
-      `;
-    })
-    .join("");
+      return dom(
+        "div",
+        {
+          className: classNames(
+            "session-search-row",
+            index === ui.sessionSearchSelectedIndex ? "active" : undefined
+          ),
+          attrs: {
+            "data-action": "select-session-search-result",
+            "data-result-index": String(index)
+          }
+        },
+        dom(
+          "div",
+          { className: "row-title" },
+          dom("span", {}, result.title),
+          dom(
+            "span",
+            {
+              className: classNames(
+                "session-search-source",
+                `session-search-source-${result.source}`
+              )
+            },
+            sourceLabel
+          )
+        ),
+        dom(
+          "div",
+          { className: "row-subtitle mono" },
+          `${shortId ? `${shortId} \u00B7 ` : ""}${pathLeafLabel(result.filePath)}:${String(result.lineNumber || 1)}`
+        ),
+        dom("div", { className: "row-meta" }, normalizedPreview),
+        dom(
+          "div",
+          { className: "session-search-actions" },
+          dom(
+            "button",
+            {
+              attrs: {
+                type: "button",
+                "data-action": "reveal-session-search-result",
+                "data-result-index": String(index)
+              }
+            },
+            "Reveal"
+          ),
+          canResume
+            ? dom(
+                "button",
+                {
+                  className: "primary",
+                  attrs: {
+                    type: "button",
+                    "data-action": "resume-session-search-result",
+                    "data-result-index": String(index)
+                  }
+                },
+                "Resume from here"
+              )
+            : null
+        )
+      );
+    });
 }
 
 async function renderSettingsDialog() {
@@ -7883,6 +8495,12 @@ function renderSessionDragAttributes(sessionId, source = "list") {
   return `draggable="true" data-drag-session-id="${escapeAttribute(sessionId)}" data-drag-source="${escapeAttribute(source)}"`;
 }
 
+function setSessionDragAttributes(element: HTMLElement, sessionId: string, source = "list") {
+  element.draggable = true;
+  element.dataset.dragSessionId = sessionId;
+  element.dataset.dragSource = source;
+}
+
 function cloneWorkspaceLayout(layout: WorkspaceLayoutNode | null = null) {
   return layout ? JSON.parse(JSON.stringify(layout)) : null;
 }
@@ -9253,6 +9871,40 @@ function mainListSelectionMatches(sessionId) {
 
 function renderProjectAvatar(repo) {
   return buildIdenticonSvg(repo.path || repo.name || repo.id);
+}
+
+function renderProjectAvatarElement(repo): SVGElement {
+  return trustedElement<SVGElement>(renderProjectAvatar(repo));
+}
+
+function renderUtilityIconElement(kind): SVGElement {
+  return trustedElement<SVGElement>(renderUtilityIcon(kind));
+}
+
+function renderSessionVisualButtonElement(session, extraClass = "", action = "", label = "Upload session icon") {
+  return trustedElement<HTMLButtonElement>(
+    renderSessionVisualButton(session, extraClass, action, label)
+  );
+}
+
+function renderSessionVisualElement(
+  session,
+  extraClass = "",
+  options: { includePlaceholder?: boolean } = {}
+) {
+  return trustedElement<HTMLElement>(renderSessionVisual(session, extraClass, options));
+}
+
+function renderSessionPinIndicatorElement(label = "Pinned", extraClass = "") {
+  return trustedElement<HTMLElement>(renderSessionPinIndicator(label, extraClass));
+}
+
+function renderSessionTagSelectElement(session, extraClass = "") {
+  return trustedElement<HTMLSelectElement>(renderSessionTagSelect(session, extraClass));
+}
+
+function renderAcceleratorMarkupElement(accelerator: string) {
+  return trustedElement<HTMLElement>(renderAcceleratorMarkup(accelerator));
 }
 
 function renderUtilityIcon(kind) {

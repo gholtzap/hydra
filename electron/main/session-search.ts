@@ -292,6 +292,63 @@ function claudeProjectKey(repoPath) {
   return path.resolve(repoPath).replace(/[^a-zA-Z0-9]/g, "-");
 }
 
+function isPathWithinRoot(filePath, rootPath) {
+  const normalizedFilePath = path.resolve(filePath);
+  const normalizedRootPath = path.resolve(rootPath);
+  const relativePath = path.relative(normalizedRootPath, normalizedFilePath);
+  return (
+    relativePath === "" ||
+    (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
+  );
+}
+
+function codexSessionBelongsToRepo(filePath, repoPath) {
+  let fileHandle;
+  try {
+    fileHandle = fs.openSync(filePath, "r");
+    const buffer = Buffer.alloc(MAX_CODEX_METADATA_BYTES);
+    const bytesRead = fs.readSync(fileHandle, buffer, 0, buffer.length, 0);
+    const snippet = buffer.toString("utf8", 0, bytesRead);
+    const cwdMatch = snippet.match(/"cwd":"([^"]+)"/);
+    return !!cwdMatch && path.resolve(cwdMatch[1]) === path.resolve(repoPath);
+  } catch {
+    return false;
+  } finally {
+    if (fileHandle !== undefined) {
+      fs.closeSync(fileHandle);
+    }
+  }
+}
+
+function isSessionSearchResultPathForRepo(filePath, repoPath) {
+  const normalizedFilePath = typeof filePath === "string" && filePath.trim()
+    ? path.resolve(filePath)
+    : "";
+  const normalizedRepoPath = typeof repoPath === "string" && repoPath.trim()
+    ? path.resolve(repoPath)
+    : "";
+  if (!normalizedFilePath || !normalizedRepoPath || path.extname(normalizedFilePath).toLowerCase() !== ".jsonl") {
+    return false;
+  }
+
+  const claudeProjectDir = path.join(
+    os.homedir(),
+    ".claude",
+    "projects",
+    claudeProjectKey(normalizedRepoPath)
+  );
+  if (isPathWithinRoot(normalizedFilePath, claudeProjectDir)) {
+    return true;
+  }
+
+  const codexSessionsRoot = path.join(os.homedir(), ".codex", "sessions");
+  if (!isPathWithinRoot(normalizedFilePath, codexSessionsRoot)) {
+    return false;
+  }
+
+  return codexSessionBelongsToRepo(normalizedFilePath, normalizedRepoPath);
+}
+
 function resolveCommandPath(command) {
   const searchPaths = [
     "/opt/homebrew/bin",
@@ -316,6 +373,7 @@ function resolveCommandPath(command) {
 
 module.exports = {
   INSTALL_COMMAND,
+  isSessionSearchResultPathForRepo,
   queryProjectSessions,
   searchProjectSessions
 };

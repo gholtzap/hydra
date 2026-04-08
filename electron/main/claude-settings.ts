@@ -22,6 +22,7 @@ const MANAGED_SKILLS_ROOT =
         "skills"
       )
     : null;
+const PLUGIN_ROOT = path.join(os.homedir(), ".claude", "plugins");
 
 function buildClaudeSettingsContext(repo) {
   const homeDirectory = os.homedir();
@@ -53,6 +54,122 @@ function loadSettingsFile(filePath) {
 function saveSettingsFile(filePath, contents) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, contents, "utf8");
+}
+
+function normalizeAccessPath(filePath) {
+  return typeof filePath === "string" && filePath.trim() ? path.resolve(filePath) : "";
+}
+
+function normalizeRepoPaths(repoPaths) {
+  return Array.isArray(repoPaths)
+    ? repoPaths
+        .map((repoPath) => normalizeAccessPath(repoPath))
+        .filter(Boolean)
+    : [];
+}
+
+function isPathWithinRoot(filePath, rootPath) {
+  const relativePath = path.relative(rootPath, filePath);
+  return (
+    relativePath === "" ||
+    (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
+  );
+}
+
+function isKnownSettingsLayoutPath(filePath, rootPath) {
+  const normalizedRootPath = normalizeAccessPath(rootPath);
+  if (!normalizedRootPath) {
+    return false;
+  }
+
+  return FILE_LAYOUTS.some(([relativePath]) => path.join(normalizedRootPath, relativePath) === filePath);
+}
+
+function isSkillMarkdownPath(filePath, roots) {
+  const baseName = path.basename(filePath);
+  if (!SKILL_FILE_NAMES.includes(baseName) && baseName.toLowerCase() !== "skill.md") {
+    return false;
+  }
+
+  return roots.some((rootPath) => isPathWithinRoot(filePath, rootPath));
+}
+
+function readableSkillRoots(repoPaths) {
+  return [
+    path.join(os.homedir(), ".claude", "skills"),
+    ...normalizeRepoPaths(repoPaths).map((repoPath) => path.join(repoPath, ".claude", "skills")),
+    MANAGED_SKILLS_ROOT,
+    PLUGIN_ROOT
+  ]
+    .map((rootPath) => normalizeAccessPath(rootPath))
+    .filter(Boolean);
+}
+
+function writableSkillRoots(repoPaths) {
+  return [
+    path.join(os.homedir(), ".claude", "skills"),
+    ...normalizeRepoPaths(repoPaths).map((repoPath) => path.join(repoPath, ".claude", "skills"))
+  ]
+    .map((rootPath) => normalizeAccessPath(rootPath))
+    .filter(Boolean);
+}
+
+function assertReadableClaudeSettingsFilePath(filePath, repoPaths = []) {
+  const normalizedFilePath = normalizeAccessPath(filePath);
+  const normalizedRepoPaths = normalizeRepoPaths(repoPaths);
+  if (!normalizedFilePath) {
+    throw new Error("Settings path is required.");
+  }
+
+  if (
+    isKnownSettingsLayoutPath(normalizedFilePath, os.homedir()) ||
+    normalizedRepoPaths.some((repoPath) => isKnownSettingsLayoutPath(normalizedFilePath, repoPath)) ||
+    isSkillMarkdownPath(normalizedFilePath, readableSkillRoots(normalizedRepoPaths))
+  ) {
+    return normalizedFilePath;
+  }
+
+  throw new Error("Settings access denied for the requested path.");
+}
+
+function assertWritableClaudeSettingsFilePath(filePath, repoPaths = []) {
+  const normalizedFilePath = normalizeAccessPath(filePath);
+  const normalizedRepoPaths = normalizeRepoPaths(repoPaths);
+  if (!normalizedFilePath) {
+    throw new Error("Settings path is required.");
+  }
+
+  if (
+    isKnownSettingsLayoutPath(normalizedFilePath, os.homedir()) ||
+    normalizedRepoPaths.some((repoPath) => isKnownSettingsLayoutPath(normalizedFilePath, repoPath)) ||
+    isSkillMarkdownPath(normalizedFilePath, writableSkillRoots(normalizedRepoPaths))
+  ) {
+    return normalizedFilePath;
+  }
+
+  throw new Error("Settings write denied for the requested path.");
+}
+
+function assertEditableClaudeSkillFilePath(filePath, repoPaths = []) {
+  const normalizedFilePath = normalizeAccessPath(filePath);
+  const normalizedRepoPaths = normalizeRepoPaths(repoPaths);
+  if (!normalizedFilePath) {
+    throw new Error("Skill path is required.");
+  }
+
+  if (isSkillMarkdownPath(normalizedFilePath, writableSkillRoots(normalizedRepoPaths))) {
+    return normalizedFilePath;
+  }
+
+  throw new Error("Skill updates are limited to user and project skills.");
+}
+
+function readClaudeSettingsFile(filePath, repoPaths = []) {
+  return loadSettingsFile(assertReadableClaudeSettingsFilePath(filePath, repoPaths));
+}
+
+function writeClaudeSettingsFile(filePath, contents, repoPaths = []) {
+  saveSettingsFile(assertWritableClaudeSettingsFilePath(filePath, repoPaths), contents);
 }
 
 function importSkillIcon(skillFilePath, sourceFilePath) {
@@ -532,9 +649,11 @@ function isPlainObject(value) {
 }
 
 module.exports = {
+  assertEditableClaudeSkillFilePath,
+  assertReadableClaudeSettingsFilePath,
   buildClaudeSettingsContext,
   clearSkillIcon,
   importSkillIcon,
-  loadSettingsFile,
-  saveSettingsFile
+  readClaudeSettingsFile,
+  writeClaudeSettingsFile
 };

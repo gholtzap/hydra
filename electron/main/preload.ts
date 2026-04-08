@@ -47,17 +47,16 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     ipcRenderer.invoke("repo:contextMenu", { repoId, position }),
   readClipboardText: () => ipcRenderer.invoke("clipboard:readText"),
   writeClipboardText: (text) => ipcRenderer.invoke("clipboard:writeText", text),
-  revealPath: (filePath) => ipcRenderer.invoke("path:reveal", filePath),
-  openExternalUrl: (url) => ipcRenderer.invoke("path:openExternal", url),
+  revealPath: (payload) => ipcRenderer.invoke("path:reveal", payload),
+  openExternalUrl: (payload) => ipcRenderer.invoke("path:openExternal", payload),
   nextUnreadSession: () => ipcRenderer.invoke("session:nextUnread"),
   updatePreferences: (patch) => ipcRenderer.invoke("preferences:update", patch),
   getTrackedPortStatus,
   getClaudeSettingsContext: (repoId) => ipcRenderer.invoke("settings:context", repoId),
-  loadSettingsFile: (filePath) => ipcRenderer.invoke("settings:loadFile", filePath),
-  saveSettingsFile: (filePath, contents) =>
-    ipcRenderer.invoke("settings:saveFile", { filePath, contents }),
-  importSkillIcon: (skillFilePath) => ipcRenderer.invoke("settings:importSkillIcon", skillFilePath),
-  clearSkillIcon: (skillFilePath) => ipcRenderer.invoke("settings:clearSkillIcon", skillFilePath),
+  loadSettingsFile: (payload) => ipcRenderer.invoke("settings:loadFile", payload),
+  saveSettingsFile: (payload) => ipcRenderer.invoke("settings:saveFile", payload),
+  importSkillIcon: (payload) => ipcRenderer.invoke("settings:importSkillIcon", payload),
+  clearSkillIcon: (payload) => ipcRenderer.invoke("settings:clearSkillIcon", payload),
   getMarketplaceSkillDetails: (payload) => ipcRenderer.invoke("skillsMarketplace:details", payload),
   inspectMarketplaceUrl: (payload) => ipcRenderer.invoke("skillsMarketplace:inspectUrl", payload),
   installMarketplaceSkill: (payload) => ipcRenderer.invoke("skillsMarketplace:install", payload),
@@ -71,7 +70,7 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
   resumeFromClaudeSession: (repoId, claudeSessionId) =>
     ipcRenderer.invoke("session:resumeFromClaude", { repoId, claudeSessionId }),
   readDirectory: (repoId) => ipcRenderer.invoke("fs:readDir", repoId),
-  readFile: (filePath) => ipcRenderer.invoke("fs:readFile", filePath),
+  readFile: (payload) => ipcRenderer.invoke("fs:readFile", payload),
   onStateChanged: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on("state:changed", listener);

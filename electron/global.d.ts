@@ -1,5 +1,34 @@
 type Unsubscribe = () => void;
 
+type ClaudePathRevealRequest =
+  | { scope: "repo-file"; repoId: string; filePath: string }
+  | { scope: "settings-file"; repoId: string | null; filePath: string }
+  | { scope: "session-search-result"; repoId: string; filePath: string };
+
+type ClaudeExternalUrlRequest = {
+  scope: "marketplace-source";
+  url: string;
+};
+
+type ClaudeSettingsFileRequest = {
+  repoId: string | null;
+  filePath: string;
+};
+
+type ClaudeSettingsSaveRequest = ClaudeSettingsFileRequest & {
+  contents: string;
+};
+
+type ClaudeSkillFileRequest = {
+  repoId: string | null;
+  skillFilePath: string;
+};
+
+type ClaudeRepoFileRequest = {
+  repoId: string;
+  filePath: string;
+};
+
 interface ClaudeWorkspaceApi {
   getState: () => Promise<any>;
   openWorkspaceFolder: () => Promise<void>;
@@ -26,16 +55,16 @@ interface ClaudeWorkspaceApi {
   ) => Promise<any>;
   readClipboardText: () => Promise<string>;
   writeClipboardText: (text: string) => Promise<any>;
-  revealPath: (filePath: string) => Promise<any>;
-  openExternalUrl: (url: string) => Promise<any>;
+  revealPath: (payload: ClaudePathRevealRequest) => Promise<any>;
+  openExternalUrl: (payload: ClaudeExternalUrlRequest) => Promise<any>;
   nextUnreadSession: () => Promise<string | null>;
   updatePreferences: (patch: Record<string, unknown>) => Promise<any>;
   getTrackedPortStatus: () => Promise<any>;
   getClaudeSettingsContext: (repoId: string | null) => Promise<any>;
-  loadSettingsFile: (filePath: string) => Promise<string>;
-  saveSettingsFile: (filePath: string, contents: string) => Promise<any>;
-  importSkillIcon: (skillFilePath: string) => Promise<string | null>;
-  clearSkillIcon: (skillFilePath: string) => Promise<any>;
+  loadSettingsFile: (payload: ClaudeSettingsFileRequest) => Promise<string>;
+  saveSettingsFile: (payload: ClaudeSettingsSaveRequest) => Promise<any>;
+  importSkillIcon: (payload: ClaudeSkillFileRequest) => Promise<string | null>;
+  clearSkillIcon: (payload: ClaudeSkillFileRequest) => Promise<any>;
   getMarketplaceSkillDetails: (payload: {
     source: { owner: string; repo: string; ref?: string; path: string; reviewState?: string; tags?: string[] };
   }) => Promise<any>;
@@ -52,7 +81,7 @@ interface ClaudeWorkspaceApi {
   querySessionSearch: (repoId: string | null, query: string) => Promise<any>;
   resumeFromClaudeSession: (repoId: string, claudeSessionId: string) => Promise<string | null>;
   readDirectory: (repoId: string) => Promise<any>;
-  readFile: (filePath: string) => Promise<any>;
+  readFile: (payload: ClaudeRepoFileRequest) => Promise<any>;
   onStateChanged: (callback: (payload: any) => void) => Unsubscribe;
   onSessionOutput: (callback: (payload: any) => void) => Unsubscribe;
   onSessionUpdated: (callback: (payload: any) => void) => Unsubscribe;

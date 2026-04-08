@@ -1871,6 +1871,8 @@ async function loadFileBrowserTree(repoId: string) {
 
 async function selectFileBrowserFile(filePath: string) {
   if (!filePath) return;
+  const repoId = currentRepoId();
+  if (!repoId) return;
 
   const loadId = ++ui.fileBrowserLoadId;
   ui.fileBrowserSelectedPath = filePath;
@@ -1880,7 +1882,7 @@ async function selectFileBrowserFile(filePath: string) {
   if (ui.selection.type === "files") renderDetail();
 
   try {
-    const result = await api.readFile(filePath);
+    const result = await api.readFile({ repoId, filePath });
     if (ui.fileBrowserLoadId !== loadId) return;
     if (result.tooLarge) {
       ui.fileBrowserFileTooLarge = true;
@@ -4730,7 +4732,10 @@ async function handleClick(event) {
       break;
     case "files-reveal-file":
       if (target.dataset.filePath) {
-        await api.revealPath(target.dataset.filePath);
+        const repoId = currentRepoId();
+        if (repoId) {
+          await api.revealPath({ scope: "repo-file", repoId, filePath: target.dataset.filePath });
+        }
       }
       break;
     case "reveal-repo":
@@ -4859,7 +4864,10 @@ async function handleClick(event) {
       break;
     case "marketplace-open-source":
       if (ui.marketplaceSelectedDetail?.sourceUrl) {
-        await api.openExternalUrl(ui.marketplaceSelectedDetail.sourceUrl);
+        await api.openExternalUrl({
+          scope: "marketplace-source",
+          url: ui.marketplaceSelectedDetail.sourceUrl
+        });
       }
       break;
     case "marketplace-install-skill":
@@ -4994,7 +5002,11 @@ async function handleClick(event) {
       break;
     case "settings-reveal-file":
       if (ui.settingsSelectedFilePath) {
-        await api.revealPath(ui.settingsSelectedFilePath);
+        await api.revealPath({
+          scope: "settings-file",
+          repoId: currentRepoId(),
+          filePath: ui.settingsSelectedFilePath
+        });
       }
       break;
     case "next-unread": {
@@ -6758,7 +6770,11 @@ async function saveCurrentSettingsFile() {
     ui.settingsEditorText = formatJsonValue(currentJsonSettingsValue());
   }
 
-  await api.saveSettingsFile(ui.settingsSelectedFilePath, ui.settingsEditorText);
+  await api.saveSettingsFile({
+    repoId: currentRepoId(),
+    filePath: ui.settingsSelectedFilePath,
+    contents: ui.settingsEditorText
+  });
   ui.settingsContext = await api.getClaudeSettingsContext(currentRepoId());
   ui.settingsSaveMessage =
     `Saved ${friendlySettingsFileTitle(allSettingsFiles().find((file) => file.path === ui.settingsSelectedFilePath) || {
@@ -6944,7 +6960,10 @@ async function installSelectedMarketplaceSkill() {
 async function loadSelectedSettingsFile(filePath) {
   ui.settingsSelectedFilePath = filePath;
   ui.settingsJsonCategoryId = "";
-  ui.settingsEditorText = await api.loadSettingsFile(filePath);
+  ui.settingsEditorText = await api.loadSettingsFile({
+    repoId: currentRepoId(),
+    filePath
+  });
   ui.settingsSaveMessage = "";
   ui.settingsShowRawJson = false;
   syncSettingsJsonDraftFromText();
@@ -7168,7 +7187,11 @@ async function createClaudeSkillFile() {
     return;
   }
 
-  await api.saveSettingsFile(skillFilePath, defaultClaudeSkillTemplate(rawName));
+  await api.saveSettingsFile({
+    repoId: currentRepoId(),
+    filePath: skillFilePath,
+    contents: defaultClaudeSkillTemplate(rawName)
+  });
   ui.settingsContext = await api.getClaudeSettingsContext(currentRepoId());
   ui.settingsSelectedFilePath = skillFilePath;
   await loadSelectedSettingsFile(skillFilePath);
@@ -7188,7 +7211,10 @@ async function importSelectedClaudeSkillIcon() {
     return;
   }
 
-  const importedPath = await api.importSkillIcon(skill.path);
+  const importedPath = await api.importSkillIcon({
+    repoId: currentRepoId(),
+    skillFilePath: skill.path
+  });
   if (!importedPath) {
     return;
   }
@@ -7203,7 +7229,10 @@ async function clearSelectedClaudeSkillIcon() {
     return;
   }
 
-  await api.clearSkillIcon(skill.path);
+  await api.clearSkillIcon({
+    repoId: currentRepoId(),
+    skillFilePath: skill.path
+  });
   await refreshSelectedClaudeSkill();
   ui.settingsSaveMessage = `Removed icon for ${skill.name}.`;
 }
@@ -9442,7 +9471,7 @@ async function handleSessionSearchKeyDown(event: KeyboardEvent) {
 
 async function activateSessionSearchResult(index: number) {
   const result = ui.sessionSearchResults[index];
-  if (!result) {
+  if (!result || !ui.sessionSearchRepoId) {
     return;
   }
 
@@ -9451,7 +9480,11 @@ async function activateSessionSearchResult(index: number) {
     return;
   }
 
-  await api.revealPath(result.filePath);
+  await api.revealPath({
+    scope: "session-search-result",
+    repoId: ui.sessionSearchRepoId,
+    filePath: result.filePath
+  });
 }
 
 async function resumeFromSessionSearchResult(index: number) {
@@ -9475,16 +9508,24 @@ async function resumeFromSessionSearchResult(index: number) {
     return;
   }
 
-  await api.revealPath(result.filePath);
+  await api.revealPath({
+    scope: "session-search-result",
+    repoId: ui.sessionSearchRepoId,
+    filePath: result.filePath
+  });
 }
 
 async function revealSessionSearchResult(index: number) {
   const result = ui.sessionSearchResults[index];
-  if (!result) {
+  if (!result || !ui.sessionSearchRepoId) {
     return;
   }
 
-  await api.revealPath(result.filePath);
+  await api.revealPath({
+    scope: "session-search-result",
+    repoId: ui.sessionSearchRepoId,
+    filePath: result.filePath
+  });
 }
 
 function pathLeafLabel(filePath: string) {

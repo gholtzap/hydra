@@ -4,7 +4,7 @@ const { execSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
-const { pathToFileURL } = require("node:url");
+const { pathToFileURL, URL } = require("node:url");
 const {
   app,
   BrowserWindow,
@@ -21,11 +21,13 @@ const { scanWorkspace } = require("./workspace-scanner");
 const { detectSignal, sanitizeVisibleText } = require("./session-signals");
 const { TerminalTranscriptBuffer } = require("./terminal-transcript-buffer");
 const {
+  assertEditableClaudeSkillFilePath,
+  assertReadableClaudeSettingsFilePath,
   buildClaudeSettingsContext,
   clearSkillIcon,
   importSkillIcon,
-  loadSettingsFile,
-  saveSettingsFile
+  readClaudeSettingsFile,
+  writeClaudeSettingsFile
 } = require("./claude-settings");
 const {
   getMarketplaceSkillDetails,
@@ -33,7 +35,7 @@ const {
   installMarketplaceSkill
 } = require("./skills-marketplace");
 const { inspectTrackedPorts } = require("./port-inspector");
-const { queryProjectSessions } = require("./session-search");
+const { isSessionSearchResultPathForRepo, queryProjectSessions } = require("./session-search");
 const {
   AGENT_DEFINITIONS,
   DEFAULT_AGENT_COMMANDS,
@@ -73,6 +75,44 @@ const SESSION_TAG_COLORS = new Set([
 ]);
 const SESSION_ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
 const AGENT_LABELS = Object.fromEntries(AGENT_DEFINITIONS.map((agent) => [agent.id, agent.label]));
+
+function normalizeAbsolutePath(input: unknown, label = "path") {
+  const value = typeof input === "string" ? input.trim() : "";
+  if (!value) {
+    throw new Error(`${label} is required.`);
+  }
+
+  return path.resolve(value);
+}
+
+function isPathWithinRoot(filePath: string, rootPath: string) {
+  const relativePath = path.relative(path.resolve(rootPath), path.resolve(filePath));
+  return (
+    relativePath === "" ||
+    (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
+  );
+}
+
+function assertMarketplaceSourceUrl(input: unknown) {
+  const value = typeof input === "string" ? input.trim() : "";
+  if (!value) {
+    throw new Error("URL is required.");
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("Invalid external URL.");
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (parsed.protocol !== "https:" || (hostname !== "github.com" && hostname !== "www.github.com")) {
+    throw new Error("Only GitHub HTTPS source URLs may be opened from the renderer.");
+  }
+
+  return parsed.toString();
+}
 
 function buildFileTree(rootPath: string, currentPath: string, depth: number): any[] {
   if (depth >= 5) return [];
@@ -216,23 +256,28 @@ class AppController {
       clipboard.writeText(text || "");
       return true;
     });
-    ipcMain.handle("path:reveal", (_event, filePath) => shell.showItemInFolder(filePath));
-    ipcMain.handle("path:openExternal", (_event, url) => shell.openExternal(String(url || "")));
+    ipcMain.handle("path:reveal", (_event, payload) => this.revealTrustedPath(payload || {}));
+    ipcMain.handle("path:openExternal", (_event, payload) =>
+      this.openTrustedExternalUrl(payload || {})
+    );
     ipcMain.handle("session:nextUnread", () => this.nextUnreadSession());
     ipcMain.handle("preferences:update", (_event, patch) => this.updatePreferences(patch));
     ipcMain.handle("status:ports", () => inspectTrackedPorts());
     ipcMain.handle("settings:context", (_event, repoId) =>
       buildClaudeSettingsContext(this.repoById(repoId) || null)
     );
-    ipcMain.handle("settings:loadFile", (_event, filePath) => loadSettingsFile(filePath));
+    ipcMain.handle("settings:loadFile", (_event, payload) =>
+      readClaudeSettingsFile(payload?.filePath, this.settingsRepoPaths(payload?.repoId))
+    );
     ipcMain.handle("settings:saveFile", (_event, payload) => {
-      saveSettingsFile(payload.filePath, payload.contents);
+      writeClaudeSettingsFile(payload?.filePath, payload?.contents, this.settingsRepoPaths(payload?.repoId));
       return true;
     });
-    ipcMain.handle("settings:importSkillIcon", async (_event, skillFilePath) => {
-      if (!skillFilePath) {
-        return null;
-      }
+    ipcMain.handle("settings:importSkillIcon", async (_event, payload) => {
+      const skillFilePath = assertEditableClaudeSkillFilePath(
+        payload?.skillFilePath,
+        this.settingsRepoPaths(payload?.repoId)
+      );
 
       const result = await dialog.showOpenDialog(this.window, {
         title: "Choose Skill Icon",
@@ -252,8 +297,10 @@ class AppController {
 
       return importSkillIcon(skillFilePath, result.filePaths[0]);
     });
-    ipcMain.handle("settings:clearSkillIcon", (_event, skillFilePath) =>
-      clearSkillIcon(skillFilePath)
+    ipcMain.handle("settings:clearSkillIcon", (_event, payload) =>
+      clearSkillIcon(
+        assertEditableClaudeSkillFilePath(payload?.skillFilePath, this.settingsRepoPaths(payload?.repoId))
+      )
     );
     ipcMain.handle("skillsMarketplace:details", (_event, payload) =>
       getMarketplaceSkillDetails(payload || {})
@@ -307,7 +354,8 @@ class AppController {
       if (this.ephemeralSessions.has(p.sessionId))
         this.ptyHost.resizeSession(p.sessionId, p.cols, p.rows);
     });
-    ipcMain.handle("fs:readFile", (_event, filePath) => {
+    ipcMain.handle("fs:readFile", (_event, payload) => {
+      const filePath = this.assertRepoFilePath(payload?.repoId, payload?.filePath);
       try {
         const buf = fs.readFileSync(filePath);
         if (buf.byteLength > 512 * 1024) {
@@ -318,6 +366,60 @@ class AppController {
         return { content: null, error: error?.message || "Failed to read file" };
       }
     });
+  }
+
+  settingsRepoPaths(repoId) {
+    if (!repoId) {
+      return [];
+    }
+
+    const repo = this.repoById(repoId);
+    return repo?.path ? [repo.path] : [];
+  }
+
+  assertRepoFilePath(repoId, filePath) {
+    const repo = this.repoById(repoId);
+    if (!repo?.path) {
+      throw new Error("Project not found.");
+    }
+
+    const normalizedRepoPath = path.resolve(repo.path);
+    const normalizedFilePath = normalizeAbsolutePath(filePath, "file path");
+    if (!isPathWithinRoot(normalizedFilePath, normalizedRepoPath)) {
+      throw new Error("File access denied for the requested path.");
+    }
+
+    return normalizedFilePath;
+  }
+
+  revealTrustedPath(payload) {
+    switch (payload?.scope) {
+      case "repo-file":
+        return shell.showItemInFolder(this.assertRepoFilePath(payload.repoId, payload.filePath));
+      case "settings-file":
+        return shell.showItemInFolder(
+          assertReadableClaudeSettingsFilePath(payload.filePath, this.settingsRepoPaths(payload.repoId))
+        );
+      case "session-search-result": {
+        const repo = this.repoById(payload.repoId);
+        if (!repo?.path || !isSessionSearchResultPathForRepo(payload.filePath, repo.path)) {
+          throw new Error("Session search reveal denied for the requested path.");
+        }
+
+        return shell.showItemInFolder(normalizeAbsolutePath(payload.filePath, "file path"));
+      }
+      default:
+        throw new Error("Unsupported reveal request.");
+    }
+  }
+
+  openTrustedExternalUrl(payload) {
+    switch (payload?.scope) {
+      case "marketplace-source":
+        return shell.openExternal(assertMarketplaceSourceUrl(payload.url));
+      default:
+        throw new Error("Unsupported external URL request.");
+    }
   }
 
   setupMenu() {

@@ -11,7 +11,7 @@ import type {
   JsonValue
 } from "../shared-types";
 
-const fs = require("node:fs");
+const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
@@ -47,14 +47,16 @@ type InstalledPluginEntry = {
   lastUpdated?: string;
 };
 
-function buildClaudeSettingsContext(repo: RepoContext): ClaudeSettingsContext {
+async function buildClaudeSettingsContext(repo: RepoContext): Promise<ClaudeSettingsContext> {
   const homeDirectory = os.homedir();
-  const globalFiles = filesFor(homeDirectory, "global", "Global");
-  const projectFiles = repo ? filesFor(repo.path, "project", repo.name) : [];
-  const resolvedValues = resolveValues(globalFiles, projectFiles);
-  const settingsLayers = loadSettingsLayers(globalFiles, projectFiles);
-  const plugins = buildPluginInventory(homeDirectory, settingsLayers);
-  const { skills, skillRoots } = buildSkillInventory(homeDirectory, repo, plugins);
+  const [globalFiles, projectFiles] = await Promise.all([
+    filesFor(homeDirectory, "global", "Global"),
+    repo ? filesFor(repo.path, "project", repo.name) : Promise.resolve([])
+  ]);
+  const settingsLayers = await loadSettingsLayers(globalFiles, projectFiles);
+  const resolvedValues = resolveValues(settingsLayers);
+  const plugins = await buildPluginInventory(homeDirectory, settingsLayers);
+  const { skills, skillRoots } = await buildSkillInventory(homeDirectory, repo, plugins);
 
   return {
     globalFiles,
@@ -66,17 +68,17 @@ function buildClaudeSettingsContext(repo: RepoContext): ClaudeSettingsContext {
   };
 }
 
-function loadSettingsFile(filePath: string): string {
+async function loadSettingsFile(filePath: string): Promise<string> {
   try {
-    return fs.readFileSync(filePath, "utf8");
+    return await fsp.readFile(filePath, "utf8");
   } catch {
     return "";
   }
 }
 
-function saveSettingsFile(filePath: string, contents: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, contents, "utf8");
+async function saveSettingsFile(filePath: string, contents: string): Promise<void> {
+  await fsp.mkdir(path.dirname(filePath), { recursive: true });
+  await fsp.writeFile(filePath, contents, "utf8");
 }
 
 function normalizeAccessPath(filePath: unknown): string {
@@ -187,15 +189,19 @@ function assertEditableClaudeSkillFilePath(filePath: string, repoPaths: string[]
   throw new Error("Skill updates are limited to user and project skills.");
 }
 
-function readClaudeSettingsFile(filePath: string, repoPaths: string[] = []): string {
+async function readClaudeSettingsFile(filePath: string, repoPaths: string[] = []): Promise<string> {
   return loadSettingsFile(assertReadableClaudeSettingsFilePath(filePath, repoPaths));
 }
 
-function writeClaudeSettingsFile(filePath: string, contents: string, repoPaths: string[] = []): void {
-  saveSettingsFile(assertWritableClaudeSettingsFilePath(filePath, repoPaths), contents);
+async function writeClaudeSettingsFile(
+  filePath: string,
+  contents: string,
+  repoPaths: string[] = []
+): Promise<void> {
+  await saveSettingsFile(assertWritableClaudeSettingsFilePath(filePath, repoPaths), contents);
 }
 
-function importSkillIcon(skillFilePath: string, sourceFilePath: string): string | null {
+async function importSkillIcon(skillFilePath: string, sourceFilePath: string): Promise<string | null> {
   if (!skillFilePath || !sourceFilePath) {
     return null;
   }
@@ -208,71 +214,78 @@ function importSkillIcon(skillFilePath: string, sourceFilePath: string): string 
 
   const targetFileName = `${SKILL_ICON_BASENAME}${extension}`;
   const targetFilePath = path.join(skillDirectoryPath, targetFileName);
-  fs.mkdirSync(skillDirectoryPath, { recursive: true });
-  fs.copyFileSync(sourceFilePath, targetFilePath);
+  await fsp.mkdir(skillDirectoryPath, { recursive: true });
+  await fsp.copyFile(sourceFilePath, targetFilePath);
 
   const relativeIconPath = `./${targetFileName}`;
-  saveSettingsFile(skillFilePath, setFrontmatterValue(loadSettingsFile(skillFilePath), "icon", relativeIconPath));
+  const nextContents = setFrontmatterValue(
+    await loadSettingsFile(skillFilePath),
+    "icon",
+    relativeIconPath
+  );
+  await saveSettingsFile(skillFilePath, nextContents);
 
   return targetFilePath;
 }
 
-function clearSkillIcon(skillFilePath: string): boolean {
+async function clearSkillIcon(skillFilePath: string): Promise<boolean> {
   if (!skillFilePath) {
     return false;
   }
 
-  saveSettingsFile(skillFilePath, setFrontmatterValue(loadSettingsFile(skillFilePath), "icon", null));
+  const nextContents = setFrontmatterValue(await loadSettingsFile(skillFilePath), "icon", null);
+  await saveSettingsFile(skillFilePath, nextContents);
   return true;
 }
 
-function filesFor(rootPath: string, scope: ClaudeSettingsFileScope, prefix: string): ClaudeSettingsFileSummary[] {
-  return FILE_LAYOUTS.map(([relativePath, title]) => {
-    const filePath = path.join(rootPath, relativePath);
-    return {
-      id: filePath,
-      title: `${prefix} ${title}`,
-      path: filePath,
-      scope,
-      exists: fs.existsSync(filePath)
-    };
-  });
+async function filesFor(
+  rootPath: string,
+  scope: ClaudeSettingsFileScope,
+  prefix: string
+): Promise<ClaudeSettingsFileSummary[]> {
+  return Promise.all(
+    FILE_LAYOUTS.map(async ([relativePath, title]) => {
+      const filePath = path.join(rootPath, relativePath);
+      return {
+        id: filePath,
+        title: `${prefix} ${title}`,
+        path: filePath,
+        scope,
+        exists: await pathExists(filePath)
+      };
+    })
+  );
 }
 
-function loadSettingsLayers(
+async function loadSettingsLayers(
   globalFiles: ClaudeSettingsFileSummary[],
   projectFiles: ClaudeSettingsFileSummary[]
-): SettingsLayer[] {
-  return [...globalFiles, ...projectFiles]
-    .filter((file) => file.exists && path.extname(file.path) === ".json")
-    .map((file) => ({
-      file,
-      data: readJsonFile(file.path)
-    }))
-    .filter((entry): entry is SettingsLayer => isPlainObject(entry.data));
+): Promise<SettingsLayer[]> {
+  const entries = await Promise.all(
+    [...globalFiles, ...projectFiles]
+      .filter((file) => file.exists && path.extname(file.path) === ".json")
+      .map(async (file) => ({
+        file,
+        data: await readJsonFile(file.path)
+      }))
+  );
+
+  return entries.filter((entry): entry is SettingsLayer => isPlainObject(entry.data));
 }
 
 function resolveValues(
-  globalFiles: ClaudeSettingsFileSummary[],
-  projectFiles: ClaudeSettingsFileSummary[]
+  settingsLayers: SettingsLayer[]
 ): ClaudeResolvedValue[] {
-  const precedence = loadSettingsLayers(globalFiles, projectFiles).map((entry) => entry.file);
-
   const valuesByKey = new Map<string, ClaudeResolvedValue>();
 
-  for (const file of precedence) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(file.path, "utf8"));
-      for (const [keyPath, valueSummary] of flatten(parsed)) {
-        valuesByKey.set(keyPath, {
-          id: keyPath,
-          keyPath,
-          valueSummary,
-          sourceLabel: file.title
-        });
-      }
-    } catch {
-      continue;
+  for (const { file, data } of settingsLayers) {
+    for (const [keyPath, valueSummary] of flatten(data)) {
+      valuesByKey.set(keyPath, {
+        id: keyPath,
+        keyPath,
+        valueSummary,
+        sourceLabel: file.title
+      });
     }
   }
 
@@ -314,17 +327,17 @@ function stringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function buildPluginInventory(
+async function buildPluginInventory(
   homeDirectory: string,
   settingsLayers: SettingsLayer[]
-): ClaudePluginInventoryItem[] {
+): Promise<ClaudePluginInventoryItem[]> {
   const installedPluginsPath = path.join(
     homeDirectory,
     ".claude",
     "plugins",
     "installed_plugins.json"
   );
-  const installedPluginsData = readJsonFile(installedPluginsPath);
+  const installedPluginsData = await readJsonFile(installedPluginsPath);
   const installedPlugins =
     isPlainObject(installedPluginsData) && isPlainObject(installedPluginsData.plugins)
       ? installedPluginsData.plugins
@@ -336,14 +349,14 @@ function buildPluginInventory(
     ...Array.from(effectivePlugins.values.keys())
   ]);
 
-  return Array.from(pluginIds)
-    .map((pluginId) => {
+  const pluginEntries = await Promise.all(
+    Array.from(pluginIds).map(async (pluginId) => {
       const installedEntries = Array.isArray(installedPlugins[pluginId])
         ? installedPlugins[pluginId].filter(isPlainObject) as InstalledPluginEntry[]
         : [];
       const activeInstall = latestInstalledEntry(installedEntries);
       const skillFiles = activeInstall?.installPath
-        ? listSkillFiles(path.join(activeInstall.installPath, "skills"))
+        ? await listSkillFiles(path.join(activeInstall.installPath, "skills"))
         : [];
 
       return {
@@ -364,15 +377,17 @@ function buildPluginInventory(
         skillNames: skillFiles.map((filePath) => skillNameFromFile(filePath))
       };
     })
-    .sort((left, right) => {
-      if (left.enabled !== right.enabled) {
-        return left.enabled ? -1 : 1;
-      }
-      if (left.installed !== right.installed) {
-        return left.installed ? -1 : 1;
-      }
-      return left.name.localeCompare(right.name);
-    });
+  );
+
+  return pluginEntries.sort((left, right) => {
+    if (left.enabled !== right.enabled) {
+      return left.enabled ? -1 : 1;
+    }
+    if (left.installed !== right.installed) {
+      return left.installed ? -1 : 1;
+    }
+    return left.name.localeCompare(right.name);
+  });
 }
 
 function resolveEnabledPlugins(settingsLayers: SettingsLayer[]): EnabledPluginsResolution {
@@ -411,29 +426,32 @@ function entryTimestamp(entry: InstalledPluginEntry): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function buildSkillInventory(
+async function buildSkillInventory(
   homeDirectory: string,
   repo: RepoContext,
   plugins: ClaudePluginInventoryItem[]
-): { skills: ClaudeSkillInventoryItem[]; skillRoots: ClaudeSkillRoots } {
+): Promise<{ skills: ClaudeSkillInventoryItem[]; skillRoots: ClaudeSkillRoots }> {
   const userSkillsRoot = path.join(homeDirectory, ".claude", "skills");
   const projectSkillsRoot = repo ? path.join(repo.path, ".claude", "skills") : null;
   const managedSkillsRoot = MANAGED_SKILLS_ROOT;
 
   const projectSkills = projectSkillsRoot
-    ? listSkillEntries(projectSkillsRoot, "project", repo?.name || "Project Skills", true)
+    ? await listSkillEntries(projectSkillsRoot, "project", repo?.name || "Project Skills", true)
     : [];
-  const userSkills = listSkillEntries(userSkillsRoot, "user", "User Skills", true);
+  const userSkills = await listSkillEntries(userSkillsRoot, "user", "User Skills", true);
   const managedSkills = managedSkillsRoot
-    ? listSkillEntries(managedSkillsRoot, "managed", "Managed Skills", false)
+    ? await listSkillEntries(managedSkillsRoot, "managed", "Managed Skills", false)
     : [];
-  const pluginSkills = plugins
-    .filter((plugin) => plugin.enabled && plugin.installPath)
-    .flatMap((plugin) =>
-      listSkillEntries(path.join(plugin.installPath as string, "skills"), "plugin", plugin.name, false, {
-        pluginId: plugin.id
-      })
-    );
+  const pluginSkillGroups = await Promise.all(
+    plugins
+      .filter((plugin) => plugin.enabled && plugin.installPath)
+      .map((plugin) =>
+        listSkillEntries(path.join(plugin.installPath as string, "skills"), "plugin", plugin.name, false, {
+          pluginId: plugin.id
+        })
+      )
+  );
+  const pluginSkills = pluginSkillGroups.flat();
 
   const skills = [...projectSkills, ...userSkills, ...managedSkills, ...pluginSkills].sort(
     compareSkills
@@ -449,58 +467,62 @@ function buildSkillInventory(
   };
 }
 
-function listSkillEntries(
+async function listSkillEntries(
   rootPath: string,
   sourceType: ClaudeSkillSourceType,
   sourceLabel: string,
   editable: boolean,
   extra: { pluginId?: string | null } = {}
-): ClaudeSkillInventoryItem[] {
-  return listSkillFiles(rootPath).map((filePath) => {
-    const metadata = readSkillMetadata(filePath);
+): Promise<ClaudeSkillInventoryItem[]> {
+  const skillFiles = await listSkillFiles(rootPath);
+  return Promise.all(
+    skillFiles.map(async (filePath) => {
+      const metadata = await readSkillMetadata(filePath);
 
-    return {
-      id: `${sourceType}:${filePath}`,
-      name: skillNameFromFile(filePath),
-      path: filePath,
-      sourceType,
-      sourceLabel,
-      editable,
-      description: metadata.description,
-      iconPath: metadata.iconPath,
-      iconUrl: metadata.iconUrl,
-      pluginId: extra.pluginId || null
-    };
-  });
+      return {
+        id: `${sourceType}:${filePath}`,
+        name: skillNameFromFile(filePath),
+        path: filePath,
+        sourceType,
+        sourceLabel,
+        editable,
+        description: metadata.description,
+        iconPath: metadata.iconPath,
+        iconUrl: metadata.iconUrl,
+        pluginId: extra.pluginId || null
+      };
+    })
+  );
 }
 
-function listSkillFiles(rootPath: string): string[] {
-  if (!rootPath || !fs.existsSync(rootPath)) {
+async function listSkillFiles(rootPath: string): Promise<string[]> {
+  if (!rootPath || !(await pathExists(rootPath))) {
     return [];
   }
 
   try {
-    return fs
-      .readdirSync(rootPath, { withFileTypes: true })
-      .filter((entry: import("node:fs").Dirent) => entry.isDirectory())
-      .map((entry: import("node:fs").Dirent) => findSkillFile(path.join(rootPath, entry.name)))
-      .filter((resolvedPath: string | null): resolvedPath is string => !!resolvedPath);
+    const entries = await fsp.readdir(rootPath, { withFileTypes: true });
+    const resolvedPaths = await Promise.all(
+      entries
+        .filter((entry: import("node:fs").Dirent) => entry.isDirectory())
+        .map((entry: import("node:fs").Dirent) => findSkillFile(path.join(rootPath, entry.name)))
+    );
+    return resolvedPaths.filter((resolvedPath: string | null): resolvedPath is string => !!resolvedPath);
   } catch {
     return [];
   }
 }
 
-function findSkillFile(skillDirectoryPath: string): string | null {
+async function findSkillFile(skillDirectoryPath: string): Promise<string | null> {
   for (const fileName of SKILL_FILE_NAMES) {
     const filePath = path.join(skillDirectoryPath, fileName);
-    if (fs.existsSync(filePath)) {
+    if (await pathExists(filePath)) {
       return filePath;
     }
   }
 
   try {
-    const fallback = fs
-      .readdirSync(skillDirectoryPath)
+    const fallback = (await fsp.readdir(skillDirectoryPath))
       .find((fileName: string) => fileName.toLowerCase() === "skill.md");
     return fallback ? path.join(skillDirectoryPath, fallback) : null;
   } catch {
@@ -508,12 +530,13 @@ function findSkillFile(skillDirectoryPath: string): string | null {
   }
 }
 
-function readSkillMetadata(filePath: string): { description: string; iconPath: string; iconUrl: string } {
-  const contents = loadSettingsFile(filePath);
+async function readSkillMetadata(
+  filePath: string
+): Promise<{ description: string; iconPath: string; iconUrl: string }> {
+  const contents = await loadSettingsFile(filePath);
   const frontmatter = parseFrontmatter(contents);
   const description = frontmatter.values.description || "";
-  const iconReference = frontmatter.values.icon || "";
-  const iconPath = resolveSkillIconPath(filePath, iconReference);
+  const iconPath = await resolveSkillIconPath(filePath, frontmatter.values.icon || "");
 
   return {
     description,
@@ -577,7 +600,7 @@ function parseFrontmatter(contents: string): {
   };
 }
 
-function resolveSkillIconPath(skillFilePath: string, iconReference: string): string {
+async function resolveSkillIconPath(skillFilePath: string, iconReference: string): Promise<string> {
   if (!iconReference) {
     return "";
   }
@@ -586,7 +609,7 @@ function resolveSkillIconPath(skillFilePath: string, iconReference: string): str
     ? iconReference
     : path.resolve(path.dirname(skillFilePath), iconReference);
 
-  return fs.existsSync(iconPath) ? iconPath : "";
+  return (await pathExists(iconPath)) ? iconPath : "";
 }
 
 function setFrontmatterValue(contents: string, key: string, nextValue: string | null): string {
@@ -677,11 +700,20 @@ function humanizeIdentifier(value: string): string {
     .join(" ");
 }
 
-function readJsonFile(filePath: string): unknown {
+async function readJsonFile(filePath: string): Promise<unknown> {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return JSON.parse(await fsp.readFile(filePath, "utf8"));
   } catch {
     return null;
+  }
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fsp.access(filePath);
+    return true;
+  } catch {
+    return false;
   }
 }
 

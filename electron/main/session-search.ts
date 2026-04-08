@@ -1,14 +1,18 @@
-import type { SessionSearchResponse, SessionSearchResult, SessionSearchSource } from "../shared-types";
+import type { SessionSearchResponse, SessionSearchResult } from "../shared-types";
 
-const fs = require("node:fs");
+const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+const { spawn } = require("node:child_process") as typeof import("node:child_process");
+const { resolveCommandPath } = require("./command-path") as {
+  resolveCommandPath: (command: string) => Promise<string | null>;
+};
 
 const REQUIRED_TOOLS = ["fzf", "rg"];
 const INSTALL_COMMAND = "brew install fzf ripgrep";
 const MAX_RESULTS = 50;
 const MAX_CODEX_METADATA_BYTES = 64 * 1024;
+const COMMAND_OUTPUT_MAX_BUFFER = 8 * 1024 * 1024;
 
 type SearchToolPaths = {
   fzfPath: string | null;
@@ -18,7 +22,7 @@ type SearchToolPaths = {
 
 type SessionSearchFileRecord = Omit<SessionSearchResult, "lineNumber" | "preview">;
 
-function searchProjectSessions(repoPath: string): SessionSearchResponse {
+async function searchProjectSessions(repoPath: string): Promise<SessionSearchResponse> {
   const trimmedRepoPath = typeof repoPath === "string" ? repoPath.trim() : "";
   if (!trimmedRepoPath) {
     return {
@@ -30,7 +34,7 @@ function searchProjectSessions(repoPath: string): SessionSearchResponse {
     };
   }
 
-  const tools = resolveRequiredTools();
+  const tools = await resolveRequiredTools();
   if (tools.missingTools.length > 0) {
     return {
       ok: false,
@@ -41,12 +45,11 @@ function searchProjectSessions(repoPath: string): SessionSearchResponse {
     };
   }
 
-  const searchText = trimmedRepoPath;
-  const claudeFiles = collectClaudeFiles(trimmedRepoPath);
-  const codexFiles = collectCodexFiles(trimmedRepoPath, tools.rgPath);
+  const claudeFiles = await collectClaudeFiles(trimmedRepoPath);
+  const codexFiles = await collectCodexFiles(trimmedRepoPath, tools.rgPath);
   const allFiles = [...claudeFiles, ...codexFiles];
-  const matches = collectMatches(searchText, allFiles, tools.rgPath);
-  const results = rankMatches(matches, searchText, tools.fzfPath);
+  const matches = await collectMatches(trimmedRepoPath, allFiles, tools.rgPath);
+  const results = await rankMatches(matches, trimmedRepoPath, tools.fzfPath);
 
   return {
     ok: true,
@@ -56,7 +59,7 @@ function searchProjectSessions(repoPath: string): SessionSearchResponse {
   };
 }
 
-function queryProjectSessions(repoPath: string, query: string): SessionSearchResponse {
+async function queryProjectSessions(repoPath: string, query: string): Promise<SessionSearchResponse> {
   const trimmedQuery = typeof query === "string" ? query.trim() : "";
   if (!trimmedQuery) {
     return {
@@ -78,7 +81,7 @@ function queryProjectSessions(repoPath: string, query: string): SessionSearchRes
     };
   }
 
-  const tools = resolveRequiredTools();
+  const tools = await resolveRequiredTools();
   if (tools.missingTools.length > 0) {
     return {
       ok: false,
@@ -89,11 +92,11 @@ function queryProjectSessions(repoPath: string, query: string): SessionSearchRes
     };
   }
 
-  const claudeFiles = collectClaudeFiles(trimmedRepoPath);
-  const codexFiles = collectCodexFiles(trimmedRepoPath, tools.rgPath);
+  const claudeFiles = await collectClaudeFiles(trimmedRepoPath);
+  const codexFiles = await collectCodexFiles(trimmedRepoPath, tools.rgPath);
   const allFiles = [...claudeFiles, ...codexFiles];
-  const matches = collectMatches(trimmedQuery, allFiles, tools.rgPath);
-  const results = rankMatches(matches, trimmedQuery, tools.fzfPath);
+  const matches = await collectMatches(trimmedQuery, allFiles, tools.rgPath);
+  const results = await rankMatches(matches, trimmedQuery, tools.fzfPath);
 
   return {
     ok: true,
@@ -103,7 +106,7 @@ function queryProjectSessions(repoPath: string, query: string): SessionSearchRes
   };
 }
 
-function resolveRequiredTools(): SearchToolPaths {
+async function resolveRequiredTools(): Promise<SearchToolPaths> {
   const resolved: Omit<SearchToolPaths, "missingTools"> = {
     fzfPath: null,
     rgPath: null
@@ -111,7 +114,7 @@ function resolveRequiredTools(): SearchToolPaths {
   const missingTools: string[] = [];
 
   for (const toolName of REQUIRED_TOOLS) {
-    const toolPath = resolveCommandPath(toolName);
+    const toolPath = await resolveCommandPath(toolName);
     if (!toolPath) {
       missingTools.push(toolName);
       continue;
@@ -130,86 +133,82 @@ function resolveRequiredTools(): SearchToolPaths {
   };
 }
 
-function collectClaudeFiles(repoPath: string): SessionSearchFileRecord[] {
+async function collectClaudeFiles(repoPath: string): Promise<SessionSearchFileRecord[]> {
   const projectDir = path.join(os.homedir(), ".claude", "projects", claudeProjectKey(repoPath));
 
-  let entries = [];
+  let entries: import("node:fs").Dirent[] = [];
   try {
-    entries = fs.readdirSync(projectDir, { withFileTypes: true });
+    entries = await fsp.readdir(projectDir, { withFileTypes: true });
   } catch {
     return [];
   }
 
   return entries
-    .filter((entry: import("node:fs").Dirent) => entry.isFile() && entry.name.endsWith(".jsonl"))
-    .map((entry: import("node:fs").Dirent) => {
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+    .map((entry) => {
       const filePath = path.join(projectDir, entry.name);
+      const sessionId = path.basename(entry.name, ".jsonl");
       return {
         source: "claude",
         filePath,
-        sessionId: path.basename(entry.name, ".jsonl"),
-        title: `Claude ${path.basename(entry.name, ".jsonl").slice(0, 8)}`
+        sessionId,
+        title: `Claude ${sessionId.slice(0, 8)}`
       };
     });
 }
 
-function collectCodexFiles(repoPath: string, rgPath: string | null): SessionSearchFileRecord[] {
+async function collectCodexFiles(
+  repoPath: string,
+  rgPath: string | null
+): Promise<SessionSearchFileRecord[]> {
   if (!rgPath) {
     return [];
   }
 
   const codexRoot = path.join(os.homedir(), ".codex", "sessions");
-  const discoveredPaths = runListCommand(
+  const discoveredPaths = await runListCommand(
     rgPath,
     ["-l", "--glob", "*.jsonl", "--fixed-strings", `"cwd":"${repoPath}"`, codexRoot]
   );
+  const records = await Promise.all(
+    discoveredPaths.map((filePath) => buildCodexFileRecord(filePath, repoPath))
+  );
 
-  return discoveredPaths
-    .map((filePath: string) => buildCodexFileRecord(filePath, repoPath))
-    .filter((record): record is SessionSearchFileRecord => !!record);
+  return records.filter((record): record is SessionSearchFileRecord => !!record);
 }
 
-function buildCodexFileRecord(filePath: string, repoPath: string): SessionSearchFileRecord | null {
-  let fileHandle;
-  try {
-    fileHandle = fs.openSync(filePath, "r");
-    const buffer = Buffer.alloc(MAX_CODEX_METADATA_BYTES);
-    const bytesRead = fs.readSync(fileHandle, buffer, 0, buffer.length, 0);
-    const snippet = buffer.toString("utf8", 0, bytesRead);
-    const cwdMatch = snippet.match(/"cwd":"([^"]+)"/);
-    if (!cwdMatch || cwdMatch[1] !== repoPath) {
-      return null;
-    }
-
-    const sessionIdMatch = snippet.match(/"id":"([^"]+)"/);
-    const timestampMatch = snippet.match(/"timestamp":"([^"]+)"/);
-    const displayStamp = timestampMatch ? timestampMatch[1].slice(0, 16).replace("T", " ") : "";
-
-    return {
-      source: "codex",
-      filePath,
-      sessionId: sessionIdMatch ? sessionIdMatch[1] : null,
-      title: displayStamp ? `Codex ${displayStamp}` : `Codex ${path.basename(filePath, ".jsonl")}`
-    };
-  } catch {
+async function buildCodexFileRecord(
+  filePath: string,
+  repoPath: string
+): Promise<SessionSearchFileRecord | null> {
+  const snippet = await readCodexMetadataSnippet(filePath);
+  if (!snippet) {
     return null;
-  } finally {
-    if (fileHandle !== undefined) {
-      fs.closeSync(fileHandle);
-    }
   }
+
+  const cwdMatch = snippet.match(/"cwd":"([^"]+)"/);
+  if (!cwdMatch || path.resolve(cwdMatch[1]) !== path.resolve(repoPath)) {
+    return null;
+  }
+
+  const sessionIdMatch = snippet.match(/"id":"([^"]+)"/);
+  const timestampMatch = snippet.match(/"timestamp":"([^"]+)"/);
+  const displayStamp = timestampMatch ? timestampMatch[1].slice(0, 16).replace("T", " ") : "";
+
+  return {
+    source: "codex",
+    filePath,
+    sessionId: sessionIdMatch ? sessionIdMatch[1] : null,
+    title: displayStamp ? `Codex ${displayStamp}` : `Codex ${path.basename(filePath, ".jsonl")}`
+  };
 }
 
-function collectMatches(
+async function collectMatches(
   query: string,
   files: SessionSearchFileRecord[],
   rgPath: string | null
-): SessionSearchResult[] {
-  if (!rgPath) {
-    return [];
-  }
-
-  if (!files.length) {
+): Promise<SessionSearchResult[]> {
+  if (!rgPath || !files.length) {
     return [];
   }
 
@@ -223,15 +222,20 @@ function collectMatches(
     query,
     ...files.map((file) => file.filePath)
   ];
-  const lines = runListCommand(rgPath, args);
-  const fileByPath = new Map<string, SessionSearchFileRecord>(files.map((file) => [file.filePath, file]));
+  const lines = await runListCommand(rgPath, args);
+  const fileByPath = new Map<string, SessionSearchFileRecord>(
+    files.map((file) => [file.filePath, file])
+  );
 
   return lines
     .map((line) => parseRgLine(line, fileByPath))
     .filter((match): match is SessionSearchResult => !!match);
 }
 
-function parseRgLine(line: string, fileByPath: Map<string, SessionSearchFileRecord>): SessionSearchResult | null {
+function parseRgLine(
+  line: string,
+  fileByPath: Map<string, SessionSearchFileRecord>
+): SessionSearchResult | null {
   const firstColon = line.indexOf(":");
   if (firstColon === -1) {
     return null;
@@ -258,7 +262,11 @@ function parseRgLine(line: string, fileByPath: Map<string, SessionSearchFileReco
   };
 }
 
-function rankMatches(matches: SessionSearchResult[], query: string, fzfPath: string | null): SessionSearchResult[] {
+async function rankMatches(
+  matches: SessionSearchResult[],
+  query: string,
+  fzfPath: string | null
+): Promise<SessionSearchResult[]> {
   if (!fzfPath) {
     return matches.slice(0, MAX_RESULTS);
   }
@@ -267,18 +275,23 @@ function rankMatches(matches: SessionSearchResult[], query: string, fzfPath: str
     return [];
   }
 
-  const candidates = matches.map((match, index) =>
-    `${index}\t${match.source}\t${match.title}\t${match.lineNumber}\t${match.preview}`
+  const candidates = matches.map(
+    (match, index) =>
+      `${index}\t${match.source}\t${match.title}\t${match.lineNumber}\t${match.preview}`
   );
-  const rankedLines = runListCommand(fzfPath, [
-    "--filter",
-    query,
-    "--delimiter",
-    "\t",
-    "--with-nth",
-    "2..",
-    "--no-sort"
-  ], candidates.join("\n"));
+  const rankedLines = await runListCommand(
+    fzfPath,
+    [
+      "--filter",
+      query,
+      "--delimiter",
+      "\t",
+      "--with-nth",
+      "2..",
+      "--no-sort"
+    ],
+    candidates.join("\n")
+  );
 
   const ordered: SessionSearchResult[] = [];
   for (const line of rankedLines.slice(0, MAX_RESULTS)) {
@@ -298,24 +311,76 @@ function rankMatches(matches: SessionSearchResult[], query: string, fzfPath: str
   return ordered;
 }
 
-function runListCommand(commandPath: string, args: string[], stdinText = ""): string[] {
-  const result = spawnSync(commandPath, args, {
-    encoding: "utf8",
-    input: stdinText,
-    maxBuffer: 8 * 1024 * 1024
+async function runListCommand(
+  commandPath: string,
+  args: string[],
+  stdinText = ""
+): Promise<string[]> {
+  const output = await new Promise<string>((resolve, reject) => {
+    const child = spawn(commandPath, args, {
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const finishReject = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      reject(error);
+    };
+
+    const appendChunk = (
+      current: string,
+      chunk: string,
+      streamLabel: "stdout" | "stderr"
+    ): string => {
+      const nextSize = Buffer.byteLength(current) + Buffer.byteLength(chunk);
+      if (nextSize > COMMAND_OUTPUT_MAX_BUFFER) {
+        child.kill();
+        finishReject(new Error(`${path.basename(commandPath)} ${streamLabel} exceeded buffer limit.`));
+        return current;
+      }
+
+      return `${current}${chunk}`;
+    };
+
+    child.on("error", (error) => finishReject(error));
+
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout = appendChunk(stdout, chunk, "stdout");
+    });
+
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      stderr = appendChunk(stderr, chunk, "stderr");
+    });
+
+    child.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      if (code !== 0 && code !== 1) {
+        const message = (stderr || stdout || "").trim();
+        reject(new Error(message || `Command failed: ${path.basename(commandPath)}`));
+        return;
+      }
+
+      resolve(stdout);
+    });
+
+    child.stdin?.end(stdinText, "utf8");
   });
 
-  if (result.error) {
-    throw result.error;
-  }
-
-  if (result.status !== 0 && result.status !== 1) {
-    const message = (result.stderr || result.stdout || "").trim();
-    throw new Error(message || `Command failed: ${path.basename(commandPath)}`);
-  }
-
-  const output = (result.stdout || "").trim();
-  return output ? output.split("\n").filter(Boolean) : [];
+  const trimmedOutput = output.trim();
+  return trimmedOutput ? trimmedOutput.split("\n").filter(Boolean) : [];
 }
 
 function claudeProjectKey(repoPath: string): string {
@@ -332,32 +397,29 @@ function isPathWithinRoot(filePath: string, rootPath: string): boolean {
   );
 }
 
-function codexSessionBelongsToRepo(filePath: string, repoPath: string): boolean {
-  let fileHandle;
-  try {
-    fileHandle = fs.openSync(filePath, "r");
-    const buffer = Buffer.alloc(MAX_CODEX_METADATA_BYTES);
-    const bytesRead = fs.readSync(fileHandle, buffer, 0, buffer.length, 0);
-    const snippet = buffer.toString("utf8", 0, bytesRead);
-    const cwdMatch = snippet.match(/"cwd":"([^"]+)"/);
-    return !!cwdMatch && path.resolve(cwdMatch[1]) === path.resolve(repoPath);
-  } catch {
+async function codexSessionBelongsToRepo(filePath: string, repoPath: string): Promise<boolean> {
+  const snippet = await readCodexMetadataSnippet(filePath);
+  if (!snippet) {
     return false;
-  } finally {
-    if (fileHandle !== undefined) {
-      fs.closeSync(fileHandle);
-    }
   }
+
+  const cwdMatch = snippet.match(/"cwd":"([^"]+)"/);
+  return !!cwdMatch && path.resolve(cwdMatch[1]) === path.resolve(repoPath);
 }
 
-function isSessionSearchResultPathForRepo(filePath: string, repoPath: string): boolean {
-  const normalizedFilePath = typeof filePath === "string" && filePath.trim()
-    ? path.resolve(filePath)
-    : "";
-  const normalizedRepoPath = typeof repoPath === "string" && repoPath.trim()
-    ? path.resolve(repoPath)
-    : "";
-  if (!normalizedFilePath || !normalizedRepoPath || path.extname(normalizedFilePath).toLowerCase() !== ".jsonl") {
+async function isSessionSearchResultPathForRepo(
+  filePath: string,
+  repoPath: string
+): Promise<boolean> {
+  const normalizedFilePath =
+    typeof filePath === "string" && filePath.trim() ? path.resolve(filePath) : "";
+  const normalizedRepoPath =
+    typeof repoPath === "string" && repoPath.trim() ? path.resolve(repoPath) : "";
+  if (
+    !normalizedFilePath ||
+    !normalizedRepoPath ||
+    path.extname(normalizedFilePath).toLowerCase() !== ".jsonl"
+  ) {
     return false;
   }
 
@@ -379,26 +441,19 @@ function isSessionSearchResultPathForRepo(filePath: string, repoPath: string): b
   return codexSessionBelongsToRepo(normalizedFilePath, normalizedRepoPath);
 }
 
-function resolveCommandPath(command: string): string | null {
-  const searchPaths = [
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/bin",
-    path.join(process.env.HOME || "", ".local/bin")
-  ];
+async function readCodexMetadataSnippet(filePath: string): Promise<string> {
+  let fileHandle: import("node:fs/promises").FileHandle | null = null;
 
-  for (const dir of searchPaths) {
-    const fullPath = path.join(dir, command);
-    try {
-      fs.accessSync(fullPath, fs.constants.X_OK);
-      return fullPath;
-    } catch {
-      continue;
-    }
+  try {
+    fileHandle = await fsp.open(filePath, "r");
+    const buffer = Buffer.alloc(MAX_CODEX_METADATA_BYTES);
+    const { bytesRead } = await fileHandle.read(buffer, 0, buffer.length, 0);
+    return buffer.toString("utf8", 0, bytesRead);
+  } catch {
+    return "";
+  } finally {
+    await fileHandle?.close().catch(() => undefined);
   }
-
-  return null;
 }
 
 module.exports = {

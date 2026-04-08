@@ -29,8 +29,8 @@ import type {
   WikiFileContents
 } from "../shared-types";
 
-const { execSync } = require("node:child_process");
 const fs = require("node:fs");
+const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 const { pathToFileURL, URL } = require("node:url");
@@ -67,7 +67,7 @@ type PtyHostClientConstructor = {
 };
 
 const { scanWorkspace } = require("./workspace-scanner") as {
-  scanWorkspace: (rootPath: string, workspaceId: string) => RepoRecord[];
+  scanWorkspace: (rootPath: string, workspaceId: string) => Promise<RepoRecord[]>;
 };
 const { detectSignal, sanitizeVisibleText } = require("./session-signals") as {
   detectSignal: (chunk: string) => { status: SessionStatus; blocker: SessionBlocker } | null;
@@ -87,11 +87,11 @@ const {
 } = require("./claude-settings") as {
   assertEditableClaudeSkillFilePath: (filePath: string, repoPaths?: string[]) => string;
   assertReadableClaudeSettingsFilePath: (filePath: string, repoPaths?: string[]) => string;
-  buildClaudeSettingsContext: (repo: ClaudeSettingsRepoContext) => ClaudeSettingsContext;
-  clearSkillIcon: (skillFilePath: string) => boolean;
-  importSkillIcon: (skillFilePath: string, sourceFilePath: string) => string | null;
-  readClaudeSettingsFile: (filePath: string, repoPaths?: string[]) => string;
-  writeClaudeSettingsFile: (filePath: string, contents: string, repoPaths?: string[]) => void;
+  buildClaudeSettingsContext: (repo: ClaudeSettingsRepoContext) => Promise<ClaudeSettingsContext>;
+  clearSkillIcon: (skillFilePath: string) => Promise<boolean>;
+  importSkillIcon: (skillFilePath: string, sourceFilePath: string) => Promise<string | null>;
+  readClaudeSettingsFile: (filePath: string, repoPaths?: string[]) => Promise<string>;
+  writeClaudeSettingsFile: (filePath: string, contents: string, repoPaths?: string[]) => Promise<void>;
 };
 const {
   getMarketplaceSkillDetails,
@@ -112,13 +112,14 @@ const { inspectTrackedPorts } = require("./port-inspector") as {
   inspectTrackedPorts: () => Promise<TrackedPortStatus>;
 };
 const { isSessionSearchResultPathForRepo, queryProjectSessions } = require("./session-search") as {
-  isSessionSearchResultPathForRepo: (filePath: string, repoPath: string) => boolean;
-  queryProjectSessions: (repoPath: string, query: string) => SessionSearchResponse;
+  isSessionSearchResultPathForRepo: (filePath: string, repoPath: string) => Promise<boolean>;
+  queryProjectSessions: (repoPath: string, query: string) => Promise<SessionSearchResponse>;
 };
 const {
   AGENT_DEFINITIONS,
   DEFAULT_AGENT_COMMANDS,
   DEFAULT_AGENT_ID,
+  emptyState,
   loadState,
   normalizeAgentId,
   normalizePreferences,
@@ -127,10 +128,11 @@ const {
   AGENT_DEFINITIONS: AgentDefinition[];
   DEFAULT_AGENT_COMMANDS: Record<AgentId, string>;
   DEFAULT_AGENT_ID: AgentId;
-  loadState: () => StoredAppState;
+  emptyState: () => StoredAppState;
+  loadState: () => Promise<StoredAppState>;
   normalizeAgentId: (value: unknown, fallback?: AgentId | null) => AgentId | null;
   normalizePreferences: (preferences: Record<string, unknown>) => AppPreferences;
-  saveState: (state: StoredAppState) => void;
+  saveState: (state: StoredAppState) => Promise<void>;
 };
 const { resolveKeybindings } = require("./keybindings");
 const { PtyHostClient } = require("./pty-host-client") as {
@@ -144,12 +146,15 @@ const {
   wikiDirectoryPath,
   wikiExists
 } = require("./wiki") as {
-  disableWiki: (rootPath: string) => unknown;
-  enableWiki: (rootPath: string) => unknown;
-  getWikiContext: (rootPath: string, enabled: boolean) => WikiContext;
-  readWikiFile: (rootPath: string, relativePath: string) => WikiFileContents;
+  disableWiki: (rootPath: string) => Promise<unknown>;
+  enableWiki: (rootPath: string) => Promise<unknown>;
+  getWikiContext: (rootPath: string, enabled: boolean) => Promise<WikiContext>;
+  readWikiFile: (rootPath: string, relativePath: string) => Promise<WikiFileContents>;
   wikiDirectoryPath: (rootPath: string) => string;
-  wikiExists: (rootPath: string) => boolean;
+  wikiExists: (rootPath: string) => Promise<boolean>;
+};
+const { resolveCommandPath } = require("./command-path") as {
+  resolveCommandPath: (command: string) => Promise<string | null>;
 };
 
 app.setName("ClaudeWorkspace");
@@ -212,12 +217,14 @@ function assertMarketplaceSourceUrl(input: unknown) {
   return parsed.toString();
 }
 
-function buildFileTree(rootPath: string, currentPath: string, depth: number): FileTreeNode[] {
-  if (depth >= 5) return [];
+async function buildFileTree(rootPath: string, currentPath: string, depth: number): Promise<FileTreeNode[]> {
+  if (depth >= 5) {
+    return [];
+  }
 
   let entries: import("node:fs").Dirent[];
   try {
-    entries = fs.readdirSync(currentPath, { withFileTypes: true });
+    entries = await fsp.readdir(currentPath, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -237,15 +244,21 @@ function buildFileTree(rootPath: string, currentPath: string, depth: number): Fi
     const relativePath = path.relative(rootPath, fullPath);
 
     if (entry.isDirectory()) {
-      if (FILE_TREE_IGNORED.has(name)) continue;
+      if (FILE_TREE_IGNORED.has(name)) {
+        continue;
+      }
+
       nodes.push({
         type: "directory",
         name,
         path: fullPath,
         relativePath,
-        children: buildFileTree(rootPath, fullPath, depth + 1)
+        children: await buildFileTree(rootPath, fullPath, depth + 1)
       });
-    } else if (entry.isFile()) {
+      continue;
+    }
+
+    if (entry.isFile()) {
       nodes.push({ type: "file", name, path: fullPath, relativePath });
     }
   }
@@ -269,9 +282,10 @@ class AppController {
   ephemeralSessions: Map<string, { repoId: string; kind: "lazygit" | "tokscale" }>;
   lazygitPath: string | null;
   npxPath: string | null;
+  saveChain: Promise<void>;
 
   constructor() {
-    this.state = loadState();
+    this.state = emptyState();
     this.window = null;
     this.focusedSessionId = null;
     this.saveTimer = null;
@@ -283,12 +297,25 @@ class AppController {
     this.signalBuffers = new Map();
     this.blockerClearStreaks = new Map();
     this.ephemeralSessions = new Map();
-    this.lazygitPath = resolveCommandPath("lazygit");
-    this.npxPath = resolveCommandPath(process.platform === "win32" ? "npx.cmd" : "npx");
-    this.normalizeFolderRepos();
-    this.repairStoredTranscripts();
+    this.lazygitPath = null;
+    this.npxPath = null;
+    this.saveChain = Promise.resolve();
     this.ptyHost = new PtyHostClient();
     this.ptyHost.onMessage((message) => this.handlePtyMessage(message));
+  }
+
+  async initialize() {
+    const [state, lazygitPath, npxPath] = await Promise.all([
+      loadState(),
+      resolveCommandPath("lazygit"),
+      resolveCommandPath(process.platform === "win32" ? "npx.cmd" : "npx")
+    ]);
+
+    this.state = state;
+    this.lazygitPath = lazygitPath;
+    this.npxPath = npxPath;
+    this.normalizeFolderRepos();
+    this.repairStoredTranscripts();
   }
 
   createWindow() {
@@ -371,8 +398,12 @@ class AppController {
     ipcMain.handle("settings:loadFile", (_event, payload) =>
       readClaudeSettingsFile(payload?.filePath, this.settingsRepoPaths(payload?.repoId))
     );
-    ipcMain.handle("settings:saveFile", (_event, payload) => {
-      writeClaudeSettingsFile(payload?.filePath, payload?.contents, this.settingsRepoPaths(payload?.repoId));
+    ipcMain.handle("settings:saveFile", async (_event, payload) => {
+      await writeClaudeSettingsFile(
+        payload?.filePath,
+        payload?.contents,
+        this.settingsRepoPaths(payload?.repoId)
+      );
       return true;
     });
     ipcMain.handle("settings:importSkillIcon", async (_event, payload) => {
@@ -427,10 +458,13 @@ class AppController {
     ipcMain.handle("session:resumeFromClaude", (_event, payload) =>
       this.resumeFromClaudeSession(payload.repoId, payload.claudeSessionId)
     );
-    ipcMain.handle("fs:readDir", (_event, repoId) => {
+    ipcMain.handle("fs:readDir", async (_event, repoId) => {
       const repo = this.repoById(repoId);
-      if (!repo) return null;
-      return { path: repo.path, tree: buildFileTree(repo.path, repo.path, 0) };
+      if (!repo) {
+        return null;
+      }
+
+      return { path: repo.path, tree: await buildFileTree(repo.path, repo.path, 0) };
     });
     ipcMain.handle("lazygit:launch", (_event, p) => this.createLazygitSession(p.repoId));
     ipcMain.handle("lazygit:close", (_event, p) => this.closeLazygitSession(p.sessionId));
@@ -456,16 +490,19 @@ class AppController {
       if (this.ephemeralSessions.has(p.sessionId))
         this.ptyHost.resizeSession(p.sessionId, p.cols, p.rows);
     });
-    ipcMain.handle("fs:readFile", (_event, payload) => {
-      const filePath = this.assertRepoFilePath(payload?.repoId, payload?.filePath);
+    ipcMain.handle("fs:readFile", async (_event, payload) => {
       try {
-        const buf = fs.readFileSync(filePath);
-        if (buf.byteLength > 512 * 1024) {
-          return { content: null, tooLarge: true, size: buf.byteLength };
+        const filePath = this.assertRepoFilePath(payload?.repoId, payload?.filePath);
+        const stats = await fsp.stat(filePath);
+        if (stats.size > 512 * 1024) {
+          return { content: null, tooLarge: true, size: stats.size };
         }
-        return { content: buf.toString("utf-8"), tooLarge: false };
-      } catch (error: any) {
-        return { content: null, error: error?.message || "Failed to read file" };
+
+        const buffer = await fsp.readFile(filePath);
+        return { content: buffer.toString("utf-8"), tooLarge: false };
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : "Failed to read file";
+        return { content: null, error: message };
       }
     });
   }
@@ -494,7 +531,7 @@ class AppController {
     return normalizedFilePath;
   }
 
-  revealTrustedPath(payload) {
+  async revealTrustedPath(payload) {
     switch (payload?.scope) {
       case "repo-file":
         return shell.showItemInFolder(this.assertRepoFilePath(payload.repoId, payload.filePath));
@@ -504,7 +541,10 @@ class AppController {
         );
       case "session-search-result": {
         const repo = this.repoById(payload.repoId);
-        if (!repo?.path || !isSessionSearchResultPathForRepo(payload.filePath, repo.path)) {
+        if (
+          !repo?.path ||
+          !(await isSessionSearchResultPathForRepo(payload.filePath, repo.path))
+        ) {
           throw new Error("Session search reveal denied for the requested path.");
         }
 
@@ -746,17 +786,27 @@ class AppController {
 
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      saveState(this.state);
+      void this.flushStateSave();
     }, 200);
   }
 
-  persistNow() {
+  async persistNow() {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
 
-    saveState(this.state);
+    await this.flushStateSave();
+  }
+
+  flushStateSave() {
+    this.saveChain = this.saveChain
+      .catch(() => undefined)
+      .then(() => saveState(this.state));
+
+    return this.saveChain.catch((error: unknown) => {
+      console.error("Failed to save app state.", error);
+    });
   }
 
   async openWorkspaceFolder() {
@@ -769,7 +819,7 @@ class AppController {
       return;
     }
 
-    this.addWorkspace(result.filePaths[0]);
+    await this.addWorkspace(result.filePaths[0]);
   }
 
   async createProjectFolder() {
@@ -784,16 +834,16 @@ class AppController {
       return;
     }
 
-    fs.mkdirSync(result.filePath, { recursive: true });
-    this.addWorkspace(result.filePath);
+    await fsp.mkdir(result.filePath, { recursive: true });
+    await this.addWorkspace(result.filePath);
   }
 
-  addWorkspace(rootPath) {
+  async addWorkspace(rootPath) {
     const normalizedPath = path.resolve(rootPath);
     const existing = this.state.workspaces.find((workspace) => workspace.rootPath === normalizedPath);
 
     if (existing) {
-      this.rescanWorkspace(existing.id);
+      await this.rescanWorkspace(existing.id);
       return;
     }
 
@@ -805,17 +855,17 @@ class AppController {
     };
 
     this.state.workspaces.push(workspace);
-    this.rescanWorkspace(workspace.id);
+    await this.rescanWorkspace(workspace.id);
   }
 
-  rescanWorkspace(workspaceId) {
+  async rescanWorkspace(workspaceId) {
     const workspace = this.state.workspaces.find((item) => item.id === workspaceId);
     if (!workspace) {
       return;
     }
 
-    const scannedRepos = scanWorkspace(workspace.rootPath, workspaceId);
-    const existingByPath = new Map<string, any>(
+    const scannedRepos = await scanWorkspace(workspace.rootPath, workspaceId);
+    const existingByPath = new Map<string, RepoRecord>(
       this.state.repos.map((repo) => [repo.path, repo])
     );
     const mergedRepos = scannedRepos.map((repo) => {
@@ -972,9 +1022,9 @@ class AppController {
 
     const targetDirectoryPath = sessionIconDirectoryPath();
     const targetFilePath = path.join(targetDirectoryPath, `${session.id}${extension}`);
-    fs.mkdirSync(targetDirectoryPath, { recursive: true });
-    removeStoredSessionIconFiles(session.id, targetFilePath);
-    fs.copyFileSync(sourceFilePath, targetFilePath);
+    await fsp.mkdir(targetDirectoryPath, { recursive: true });
+    await removeStoredSessionIconFiles(session.id, targetFilePath);
+    await fsp.copyFile(sourceFilePath, targetFilePath);
 
     session.sessionIconPath = targetFilePath;
     session.sessionIconUpdatedAt = now();
@@ -984,13 +1034,13 @@ class AppController {
     return summarizeSession(session);
   }
 
-  clearSessionIcon(sessionId) {
+  async clearSessionIcon(sessionId) {
     const session = this.sessionById(sessionId);
     if (!session || !session.sessionIconPath) {
       return false;
     }
 
-    removeStoredSessionIconFiles(session.id, null);
+    await removeStoredSessionIconFiles(session.id, null);
     session.sessionIconPath = null;
     session.sessionIconUpdatedAt = null;
     this.scheduleSave();
@@ -1107,18 +1157,19 @@ class AppController {
     return next ? next.id : null;
   }
 
-  querySessionFiles(repoId, query) {
+  async querySessionFiles(repoId, query): Promise<SessionSearchResponse> {
     const repo = this.repoById(repoId);
     if (!repo) {
       return {
         ok: false,
         error: "Select a project before searching session files.",
         installCommand: "brew install fzf ripgrep",
-        missingTools: []
+        missingTools: [],
+        results: []
       };
     }
 
-    const response = queryProjectSessions(repo.path, query);
+    const response = await queryProjectSessions(repo.path, query);
     if (!response?.ok) {
       return response;
     }
@@ -1538,7 +1589,7 @@ class AppController {
     return this.state.repos.find((repo) => repo.id === repoId) || null;
   }
 
-  projectWikiContext(repoId) {
+  async projectWikiContext(repoId) {
     const repo = this.repoById(repoId);
     if (!repo) {
       return null;
@@ -1547,7 +1598,7 @@ class AppController {
     return getWikiContext(repo.path, repo.wikiEnabled);
   }
 
-  projectWikiFile(repoId, relativePath) {
+  async projectWikiFile(repoId, relativePath) {
     const repo = this.repoById(repoId);
     if (!repo) {
       throw new Error("Folder not found.");
@@ -1556,16 +1607,16 @@ class AppController {
     return readWikiFile(repo.path, relativePath);
   }
 
-  toggleProjectWiki(repoId, enabled) {
+  async toggleProjectWiki(repoId, enabled) {
     const repo = this.repoById(repoId);
     if (!repo) {
       return null;
     }
 
     if (enabled) {
-      enableWiki(repo.path);
+      await enableWiki(repo.path);
     } else {
-      disableWiki(repo.path);
+      await disableWiki(repo.path);
     }
 
     repo.wikiEnabled = enabled;
@@ -1575,13 +1626,13 @@ class AppController {
     return this.projectWikiContext(repoId);
   }
 
-  revealProjectWiki(repoId) {
+  async revealProjectWiki(repoId) {
     const repo = this.repoById(repoId);
     if (!repo) {
       return;
     }
 
-    const targetPath = wikiExists(repo.path) ? wikiDirectoryPath(repo.path) : repo.path;
+    const targetPath = (await wikiExists(repo.path)) ? wikiDirectoryPath(repo.path) : repo.path;
     shell.showItemInFolder(targetPath);
   }
 
@@ -1595,14 +1646,16 @@ class AppController {
       .sort(compareInboxSessions);
   }
 
-  confirmQuit(event) {
+  async confirmQuit(event) {
     if (this.allowQuit) {
       return;
     }
 
     const liveSessions = this.state.sessions.filter((session) => session.runtimeState === "live");
     if (liveSessions.length === 0) {
-      this.shutdown();
+      event.preventDefault();
+      await this.shutdown();
+      app.quit();
       return;
     }
 
@@ -1620,10 +1673,12 @@ class AppController {
       return;
     }
 
-    this.shutdown();
+    event.preventDefault();
+    await this.shutdown();
+    app.quit();
   }
 
-  shutdown() {
+  async shutdown() {
     this.allowQuit = true;
     for (const session of this.state.sessions) {
       if (session.runtimeState === "live") {
@@ -1638,7 +1693,7 @@ class AppController {
       }
     }
     this.ptyHost.stop();
-    this.persistNow();
+    await this.persistNow();
   }
 
   handleSessionResize(sessionId, cols, rows) {
@@ -1760,26 +1815,30 @@ function sessionIconDirectoryPath() {
   return path.join(app.getPath("userData"), "session-icons");
 }
 
-function removeStoredSessionIconFiles(sessionId, keepPath) {
+async function removeStoredSessionIconFiles(sessionId, keepPath) {
   const directoryPath = sessionIconDirectoryPath();
-  if (!fs.existsSync(directoryPath)) {
+
+  let fileNames: string[] = [];
+  try {
+    fileNames = await fsp.readdir(directoryPath);
+  } catch {
     return;
   }
 
-  for (const fileName of fs.readdirSync(directoryPath)) {
+  await Promise.all(fileNames.map(async (fileName) => {
     if (!fileName.startsWith(`${sessionId}.`)) {
-      continue;
+      return;
     }
 
     const filePath = path.join(directoryPath, fileName);
     if (keepPath && path.resolve(filePath) === path.resolve(keepPath)) {
-      continue;
+      return;
     }
 
     try {
-      fs.unlinkSync(filePath);
+      await fsp.unlink(filePath);
     } catch {}
-  }
+  }));
 }
 
 function sessionIconUrl(session) {
@@ -1808,34 +1867,6 @@ function rebuildTranscript(session) {
 function resolvedShellPath(preferences) {
   const candidate = preferences.shellExecutablePath?.trim();
   return candidate || process.env.SHELL || "/bin/zsh";
-}
-
-function resolveCommandPath(command) {
-  // Electron doesn't inherit the user's shell PATH, so `which` may miss
-  // binaries installed via Homebrew or other package managers.
-  // Try `which` first, then check well-known paths directly.
-  try {
-    return execSync(`which ${command}`, { stdio: ["ignore", "pipe", "ignore"], encoding: "utf-8" }).trim();
-  } catch {
-    // which failed — check well-known paths directly
-  }
-  const searchPaths = [
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/bin",
-    path.join(process.env.HOME || "", ".local/bin")
-  ];
-  for (const dir of searchPaths) {
-    const fullPath = path.join(dir, command);
-    try {
-      fs.accessSync(fullPath, fs.constants.X_OK);
-      return fullPath;
-    } catch {
-      continue;
-    }
-  }
-  return null;
 }
 
 function resolvedSessionLaunchCommand(preferences, session) {
@@ -1934,13 +1965,16 @@ function timestampLabel() {
 
 const controller = new AppController();
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await controller.initialize();
   controller.setupIpc();
   controller.setupMenu();
   controller.createWindow();
 });
 
-app.on("before-quit", (event) => controller.confirmQuit(event));
+app.on("before-quit", (event) => {
+  void controller.confirmQuit(event);
+});
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) {

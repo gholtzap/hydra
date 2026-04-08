@@ -9,6 +9,7 @@ import type {
 } from "../shared-types";
 
 const fs = require("node:fs");
+const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path");
 const { app } = require("electron");
 
@@ -57,11 +58,11 @@ const SESSION_TAG_COLORS = new Set([
   "gray"
 ]);
 
-function loadState(): StoredAppState {
+async function loadState(): Promise<StoredAppState> {
   const statePath = getStatePath();
 
   try {
-    const parsed = JSON.parse(fs.readFileSync(statePath, "utf8")) as unknown;
+    const parsed = JSON.parse(await fsp.readFile(statePath, "utf8")) as unknown;
     const migrated = migrateSnapshot(parsed);
     normalizeRestoredSessions(migrated.sessions);
     return migrated;
@@ -70,10 +71,11 @@ function loadState(): StoredAppState {
   }
 }
 
-function saveState(state: StoredAppState): void {
+async function saveState(state: StoredAppState): Promise<void> {
   const statePath = getStatePath();
-  fs.mkdirSync(path.dirname(statePath), { recursive: true });
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+  const serializedState = JSON.stringify(state, null, 2);
+  await fsp.mkdir(path.dirname(statePath), { recursive: true });
+  await fsp.writeFile(statePath, serializedState, "utf8");
 }
 
 function emptyState(): StoredAppState {
@@ -242,6 +244,7 @@ module.exports = {
   DEFAULT_AGENT_COMMANDS,
   DEFAULT_AGENT_ID,
   DEFAULT_PREFERENCES,
+  emptyState,
   loadState,
   normalizeAgentId,
   normalizePreferences,

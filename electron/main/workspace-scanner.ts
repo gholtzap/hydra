@@ -2,20 +2,22 @@ import type { RepoRecord } from "../shared-types";
 
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
-const { detectWikiEnabled } = require("./wiki");
+const { detectWikiEnabled } = require("./wiki") as {
+  detectWikiEnabled: (rootPath: string) => Promise<boolean>;
+};
 
-function scanWorkspace(rootPath: string, workspaceId: string): RepoRecord[] {
+async function scanWorkspace(rootPath: string, workspaceId: string): Promise<RepoRecord[]> {
   const normalizedRootPath = path.resolve(rootPath);
-  return [createRepoRecord(normalizedRootPath, workspaceId)];
+  return [await createRepoRecord(normalizedRootPath, workspaceId)];
 }
 
-function createRepoRecord(repoPath: string, workspaceId: string): RepoRecord {
+async function createRepoRecord(repoPath: string, workspaceId: string): Promise<RepoRecord> {
   return {
     id: randomUUID(),
     workspaceID: workspaceId,
     name: path.basename(repoPath) || repoPath,
     path: repoPath,
-    wikiEnabled: detectWikiEnabled(repoPath),
+    wikiEnabled: await detectWikiEnabled(repoPath),
     discoveredAt: new Date().toISOString()
   };
 }

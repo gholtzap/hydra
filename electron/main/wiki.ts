@@ -1,6 +1,6 @@
 import type { WikiContext, WikiFileContents, WikiTreeNode } from "../shared-types";
 
-const fs = require("node:fs");
+const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path");
 
 const WIKI_DIRECTORY_NAME = ".wiki";
@@ -13,23 +13,19 @@ function wikiDirectoryPath(rootPath: string): string {
   return path.join(rootPath, WIKI_DIRECTORY_NAME);
 }
 
-function wikiExists(rootPath: string): boolean {
+async function wikiExists(rootPath: string): Promise<boolean> {
   try {
-    return fs.statSync(wikiDirectoryPath(rootPath)).isDirectory();
+    return (await fsp.stat(wikiDirectoryPath(rootPath))).isDirectory();
   } catch {
     return false;
   }
 }
 
-function detectWikiEnabled(rootPath: string): boolean {
+async function detectWikiEnabled(rootPath: string): Promise<boolean> {
   for (const filePath of projectInstructionFilePaths(rootPath)) {
-    try {
-      const contents = fs.readFileSync(filePath, "utf8");
-      if (contents.includes(WIKI_INSTRUCTION_BLOCK_START)) {
-        return true;
-      }
-    } catch {
-      continue;
+    const contents = await readTextFile(filePath);
+    if (contents.includes(WIKI_INSTRUCTION_BLOCK_START)) {
+      return true;
     }
   }
 
@@ -40,16 +36,19 @@ function projectInstructionFilePaths(rootPath: string): string[] {
   return PROJECT_INSTRUCTION_FILE_LAYOUTS.map((relativePath) => path.join(rootPath, relativePath));
 }
 
-function selectInstructionFilePath(rootPath: string): string {
+async function selectInstructionFilePath(rootPath: string): Promise<string> {
   const candidates = projectInstructionFilePaths(rootPath);
-  const existingAgentsPath = candidates.find((filePath) => path.basename(filePath) === "AGENTS.md" && fs.existsSync(filePath));
-  if (existingAgentsPath) {
-    return existingAgentsPath;
+
+  for (const filePath of candidates) {
+    if (path.basename(filePath) === "AGENTS.md" && (await pathExists(filePath))) {
+      return filePath;
+    }
   }
 
-  const existingClaudePath = candidates.find((filePath) => path.basename(filePath) === "CLAUDE.md" && fs.existsSync(filePath));
-  if (existingClaudePath) {
-    return existingClaudePath;
+  for (const filePath of candidates) {
+    if (path.basename(filePath) === "CLAUDE.md" && (await pathExists(filePath))) {
+      return filePath;
+    }
   }
 
   return candidates[0];
@@ -81,19 +80,19 @@ function wikiInstructionBlock(): string {
   ].join("\n");
 }
 
-function enableWiki(rootPath: string): {
+async function enableWiki(rootPath: string): Promise<{
   wikiPath: string;
   instructionFilePath: string;
   enabled: true;
   exists: true;
-} {
+}> {
   const wikiPath = wikiDirectoryPath(rootPath);
-  fs.mkdirSync(path.join(wikiPath, WIKI_STAGING_DIRECTORY), { recursive: true });
+  await fsp.mkdir(path.join(wikiPath, WIKI_STAGING_DIRECTORY), { recursive: true });
 
-  const instructionFilePath = selectInstructionFilePath(rootPath);
-  const nextContents = upsertInstructionBlock(readTextFile(instructionFilePath));
-  fs.mkdirSync(path.dirname(instructionFilePath), { recursive: true });
-  fs.writeFileSync(instructionFilePath, nextContents, "utf8");
+  const instructionFilePath = await selectInstructionFilePath(rootPath);
+  const nextContents = upsertInstructionBlock(await readTextFile(instructionFilePath));
+  await fsp.mkdir(path.dirname(instructionFilePath), { recursive: true });
+  await fsp.writeFile(instructionFilePath, nextContents, "utf8");
 
   return {
     wikiPath,
@@ -103,21 +102,21 @@ function enableWiki(rootPath: string): {
   };
 }
 
-function disableWiki(rootPath: string): {
+async function disableWiki(rootPath: string): Promise<{
   wikiPath: string;
   instructionFilePaths: string[];
   enabled: false;
   exists: boolean;
-} {
+}> {
   const touchedFiles: string[] = [];
 
   for (const instructionFilePath of projectInstructionFilePaths(rootPath)) {
-    const contents = readTextFile(instructionFilePath);
+    const contents = await readTextFile(instructionFilePath);
     if (!contents.includes(WIKI_INSTRUCTION_BLOCK_START)) {
       continue;
     }
 
-    fs.writeFileSync(instructionFilePath, removeInstructionBlock(contents), "utf8");
+    await fsp.writeFile(instructionFilePath, removeInstructionBlock(contents), "utf8");
     touchedFiles.push(instructionFilePath);
   }
 
@@ -125,23 +124,23 @@ function disableWiki(rootPath: string): {
     wikiPath: wikiDirectoryPath(rootPath),
     instructionFilePaths: touchedFiles,
     enabled: false,
-    exists: wikiExists(rootPath)
+    exists: await wikiExists(rootPath)
   };
 }
 
-function getWikiContext(rootPath: string, enabled: boolean): WikiContext {
+async function getWikiContext(rootPath: string, enabled: boolean): Promise<WikiContext> {
   const wikiPath = wikiDirectoryPath(rootPath);
-  const exists = wikiExists(rootPath);
+  const exists = await wikiExists(rootPath);
 
   return {
     enabled: !!enabled,
     exists,
     wikiPath,
-    tree: exists ? buildWikiTree(wikiPath) : []
+    tree: exists ? await buildWikiTree(wikiPath) : []
   };
 }
 
-function readWikiFile(rootPath: string, relativePath: string): WikiFileContents {
+async function readWikiFile(rootPath: string, relativePath: string): Promise<WikiFileContents> {
   const wikiPath = wikiDirectoryPath(rootPath);
   const resolvedPath = path.resolve(wikiPath, relativePath || "");
   const normalizedWikiPath = `${path.resolve(wikiPath)}${path.sep}`;
@@ -156,41 +155,45 @@ function readWikiFile(rootPath: string, relativePath: string): WikiFileContents 
   return {
     relativePath,
     absolutePath: resolvedPath,
-    contents: fs.readFileSync(resolvedPath, "utf8")
+    contents: await fsp.readFile(resolvedPath, "utf8")
   };
 }
 
-function buildWikiTree(wikiPath: string, currentPath = wikiPath): WikiTreeNode[] {
+async function buildWikiTree(
+  wikiPath: string,
+  currentPath = wikiPath
+): Promise<WikiTreeNode[]> {
   let entries: import("node:fs").Dirent[] = [];
 
   try {
-    entries = fs.readdirSync(currentPath, { withFileTypes: true });
+    entries = await fsp.readdir(currentPath, { withFileTypes: true });
   } catch {
     return [];
   }
 
-  return entries
-    .filter((entry) => !entry.name.startsWith(".DS_Store"))
-    .sort(compareWikiEntries)
-    .map((entry) => {
-      const absolutePath = path.join(currentPath, entry.name);
-      const relativePath = path.relative(wikiPath, absolutePath) || entry.name;
+  const nodes: WikiTreeNode[] = [];
+  for (const entry of entries.filter((item) => !item.name.startsWith(".DS_Store")).sort(compareWikiEntries)) {
+    const absolutePath = path.join(currentPath, entry.name);
+    const relativePath = path.relative(wikiPath, absolutePath) || entry.name;
 
-      if (entry.isDirectory()) {
-        return {
-          type: "directory",
-          name: entry.name,
-          relativePath,
-          children: buildWikiTree(wikiPath, absolutePath)
-        };
-      }
-
-      return {
-        type: "file",
+    if (entry.isDirectory()) {
+      nodes.push({
+        type: "directory",
         name: entry.name,
-        relativePath
-      };
+        relativePath,
+        children: await buildWikiTree(wikiPath, absolutePath)
+      });
+      continue;
+    }
+
+    nodes.push({
+      type: "file",
+      name: entry.name,
+      relativePath
     });
+  }
+
+  return nodes;
 }
 
 function compareWikiEntries(left: import("node:fs").Dirent, right: import("node:fs").Dirent): number {
@@ -230,11 +233,20 @@ function normalizeFileContents(contents: string): string {
   return String(contents || "").replace(/\r\n/g, "\n").trimEnd();
 }
 
-function readTextFile(filePath: string): string {
+async function readTextFile(filePath: string): Promise<string> {
   try {
-    return fs.readFileSync(filePath, "utf8");
+    return await fsp.readFile(filePath, "utf8");
   } catch {
     return "";
+  }
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fsp.access(filePath);
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -1,3 +1,5 @@
+import type { WikiContext, WikiFileContents, WikiTreeNode } from "../shared-types";
+
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -7,11 +9,11 @@ const WIKI_INSTRUCTION_BLOCK_START = "<!-- claude-workspace:wiki:start -->";
 const WIKI_INSTRUCTION_BLOCK_END = "<!-- claude-workspace:wiki:end -->";
 const PROJECT_INSTRUCTION_FILE_LAYOUTS = ["AGENTS.md", "CLAUDE.md"];
 
-function wikiDirectoryPath(rootPath) {
+function wikiDirectoryPath(rootPath: string): string {
   return path.join(rootPath, WIKI_DIRECTORY_NAME);
 }
 
-function wikiExists(rootPath) {
+function wikiExists(rootPath: string): boolean {
   try {
     return fs.statSync(wikiDirectoryPath(rootPath)).isDirectory();
   } catch {
@@ -19,7 +21,7 @@ function wikiExists(rootPath) {
   }
 }
 
-function detectWikiEnabled(rootPath) {
+function detectWikiEnabled(rootPath: string): boolean {
   for (const filePath of projectInstructionFilePaths(rootPath)) {
     try {
       const contents = fs.readFileSync(filePath, "utf8");
@@ -34,11 +36,11 @@ function detectWikiEnabled(rootPath) {
   return false;
 }
 
-function projectInstructionFilePaths(rootPath) {
+function projectInstructionFilePaths(rootPath: string): string[] {
   return PROJECT_INSTRUCTION_FILE_LAYOUTS.map((relativePath) => path.join(rootPath, relativePath));
 }
 
-function selectInstructionFilePath(rootPath) {
+function selectInstructionFilePath(rootPath: string): string {
   const candidates = projectInstructionFilePaths(rootPath);
   const existingAgentsPath = candidates.find((filePath) => path.basename(filePath) === "AGENTS.md" && fs.existsSync(filePath));
   if (existingAgentsPath) {
@@ -53,7 +55,7 @@ function selectInstructionFilePath(rootPath) {
   return candidates[0];
 }
 
-function wikiInstructionBlock() {
+function wikiInstructionBlock(): string {
   return [
     WIKI_INSTRUCTION_BLOCK_START,
     "## Project Wiki",
@@ -79,7 +81,12 @@ function wikiInstructionBlock() {
   ].join("\n");
 }
 
-function enableWiki(rootPath) {
+function enableWiki(rootPath: string): {
+  wikiPath: string;
+  instructionFilePath: string;
+  enabled: true;
+  exists: true;
+} {
   const wikiPath = wikiDirectoryPath(rootPath);
   fs.mkdirSync(path.join(wikiPath, WIKI_STAGING_DIRECTORY), { recursive: true });
 
@@ -96,8 +103,13 @@ function enableWiki(rootPath) {
   };
 }
 
-function disableWiki(rootPath) {
-  const touchedFiles = [];
+function disableWiki(rootPath: string): {
+  wikiPath: string;
+  instructionFilePaths: string[];
+  enabled: false;
+  exists: boolean;
+} {
+  const touchedFiles: string[] = [];
 
   for (const instructionFilePath of projectInstructionFilePaths(rootPath)) {
     const contents = readTextFile(instructionFilePath);
@@ -117,7 +129,7 @@ function disableWiki(rootPath) {
   };
 }
 
-function getWikiContext(rootPath, enabled) {
+function getWikiContext(rootPath: string, enabled: boolean): WikiContext {
   const wikiPath = wikiDirectoryPath(rootPath);
   const exists = wikiExists(rootPath);
 
@@ -129,7 +141,7 @@ function getWikiContext(rootPath, enabled) {
   };
 }
 
-function readWikiFile(rootPath, relativePath) {
+function readWikiFile(rootPath: string, relativePath: string): WikiFileContents {
   const wikiPath = wikiDirectoryPath(rootPath);
   const resolvedPath = path.resolve(wikiPath, relativePath || "");
   const normalizedWikiPath = `${path.resolve(wikiPath)}${path.sep}`;
@@ -148,8 +160,8 @@ function readWikiFile(rootPath, relativePath) {
   };
 }
 
-function buildWikiTree(wikiPath, currentPath = wikiPath) {
-  let entries = [];
+function buildWikiTree(wikiPath: string, currentPath = wikiPath): WikiTreeNode[] {
+  let entries: import("node:fs").Dirent[] = [];
 
   try {
     entries = fs.readdirSync(currentPath, { withFileTypes: true });
@@ -181,7 +193,7 @@ function buildWikiTree(wikiPath, currentPath = wikiPath) {
     });
 }
 
-function compareWikiEntries(left, right) {
+function compareWikiEntries(left: import("node:fs").Dirent, right: import("node:fs").Dirent): number {
   if (left.isDirectory() !== right.isDirectory()) {
     return left.isDirectory() ? -1 : 1;
   }
@@ -189,7 +201,7 @@ function compareWikiEntries(left, right) {
   return left.name.localeCompare(right.name);
 }
 
-function upsertInstructionBlock(contents) {
+function upsertInstructionBlock(contents: string): string {
   const normalizedContents = normalizeFileContents(contents);
   const block = wikiInstructionBlock();
 
@@ -204,7 +216,7 @@ function upsertInstructionBlock(contents) {
   return `${normalizedContents}\n\n${block}\n`;
 }
 
-function removeInstructionBlock(contents) {
+function removeInstructionBlock(contents: string): string {
   const normalizedContents = normalizeFileContents(contents);
   const pattern = new RegExp(
     `\\n*${escapeRegExp(WIKI_INSTRUCTION_BLOCK_START)}[\\s\\S]*?${escapeRegExp(WIKI_INSTRUCTION_BLOCK_END)}\\n*`,
@@ -214,11 +226,11 @@ function removeInstructionBlock(contents) {
   return stripped ? `${stripped}\n` : "";
 }
 
-function normalizeFileContents(contents) {
+function normalizeFileContents(contents: string): string {
   return String(contents || "").replace(/\r\n/g, "\n").trimEnd();
 }
 
-function readTextFile(filePath) {
+function readTextFile(filePath: string): string {
   try {
     return fs.readFileSync(filePath, "utf8");
   } catch {
@@ -226,7 +238,7 @@ function readTextFile(filePath) {
   }
 }
 
-function escapeRegExp(value) {
+function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 

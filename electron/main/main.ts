@@ -1,4 +1,33 @@
 import type { BrowserWindow as ElectronBrowserWindow } from "electron";
+import type {
+  AgentDefinition,
+  AgentId,
+  AppCommandPayload,
+  AppPreferences,
+  AppStateSnapshot,
+  ClaudeSettingsContext,
+  DirectoryReadResult,
+  FileTreeNode,
+  MarketplaceInspectResponse,
+  MarketplaceInstallResponse,
+  MarketplaceSkillDetails,
+  Point,
+  PtyCreateSessionPayload,
+  PtyHostMessage,
+  ReadFileResult,
+  RepoRecord,
+  SessionBlocker,
+  SessionOrganizationPatch,
+  SessionRecord,
+  SessionSearchResponse,
+  SessionStatus,
+  SessionSummary,
+  SessionTagColor,
+  StoredAppState,
+  TrackedPortStatus,
+  WikiContext,
+  WikiFileContents
+} from "../shared-types";
 
 const { execSync } = require("node:child_process");
 const fs = require("node:fs");
@@ -17,9 +46,36 @@ const {
   shell
 } = require("electron");
 
-const { scanWorkspace } = require("./workspace-scanner");
-const { detectSignal, sanitizeVisibleText } = require("./session-signals");
-const { TerminalTranscriptBuffer } = require("./terminal-transcript-buffer");
+type ClaudeSettingsRepoContext = Pick<RepoRecord, "name" | "path"> | null;
+type TerminalTranscriptBufferInstance = {
+  consume: (rawText: string) => string;
+};
+type TerminalTranscriptBufferConstructor = {
+  new (seedText?: string, maxLength?: number): TerminalTranscriptBufferInstance;
+  visibleText: (rawText: string) => string;
+};
+type PtyHostClientInstance = {
+  onMessage: (listener: (message: PtyHostMessage) => void) => () => void;
+  createSession: (payload: PtyCreateSessionPayload) => void;
+  sendInput: (sessionId: string, data: string) => void;
+  resizeSession: (sessionId: string, cols: number, rows: number) => void;
+  killSession: (sessionId: string) => void;
+  stop: () => void;
+};
+type PtyHostClientConstructor = {
+  new (): PtyHostClientInstance;
+};
+
+const { scanWorkspace } = require("./workspace-scanner") as {
+  scanWorkspace: (rootPath: string, workspaceId: string) => RepoRecord[];
+};
+const { detectSignal, sanitizeVisibleText } = require("./session-signals") as {
+  detectSignal: (chunk: string) => { status: SessionStatus; blocker: SessionBlocker } | null;
+  sanitizeVisibleText: (text: string) => string;
+};
+const { TerminalTranscriptBuffer } = require("./terminal-transcript-buffer") as {
+  TerminalTranscriptBuffer: TerminalTranscriptBufferConstructor;
+};
 const {
   assertEditableClaudeSkillFilePath,
   assertReadableClaudeSettingsFilePath,
@@ -28,14 +84,37 @@ const {
   importSkillIcon,
   readClaudeSettingsFile,
   writeClaudeSettingsFile
-} = require("./claude-settings");
+} = require("./claude-settings") as {
+  assertEditableClaudeSkillFilePath: (filePath: string, repoPaths?: string[]) => string;
+  assertReadableClaudeSettingsFilePath: (filePath: string, repoPaths?: string[]) => string;
+  buildClaudeSettingsContext: (repo: ClaudeSettingsRepoContext) => ClaudeSettingsContext;
+  clearSkillIcon: (skillFilePath: string) => boolean;
+  importSkillIcon: (skillFilePath: string, sourceFilePath: string) => string | null;
+  readClaudeSettingsFile: (filePath: string, repoPaths?: string[]) => string;
+  writeClaudeSettingsFile: (filePath: string, contents: string, repoPaths?: string[]) => void;
+};
 const {
   getMarketplaceSkillDetails,
   inspectMarketplaceGitHubUrl,
   installMarketplaceSkill
-} = require("./skills-marketplace");
-const { inspectTrackedPorts } = require("./port-inspector");
-const { isSessionSearchResultPathForRepo, queryProjectSessions } = require("./session-search");
+} = require("./skills-marketplace") as {
+  getMarketplaceSkillDetails: (payload: {
+    source: { owner: string; repo: string; ref?: string; path: string; reviewState?: string; tags?: string[] };
+  }) => Promise<MarketplaceSkillDetails>;
+  inspectMarketplaceGitHubUrl: (payload: { url: string }) => Promise<MarketplaceInspectResponse>;
+  installMarketplaceSkill: (payload: {
+    source: { owner: string; repo: string; ref?: string; path: string };
+    scope: "user" | "project";
+    repoPath?: string | null;
+  }) => Promise<MarketplaceInstallResponse>;
+};
+const { inspectTrackedPorts } = require("./port-inspector") as {
+  inspectTrackedPorts: () => Promise<TrackedPortStatus>;
+};
+const { isSessionSearchResultPathForRepo, queryProjectSessions } = require("./session-search") as {
+  isSessionSearchResultPathForRepo: (filePath: string, repoPath: string) => boolean;
+  queryProjectSessions: (repoPath: string, query: string) => SessionSearchResponse;
+};
 const {
   AGENT_DEFINITIONS,
   DEFAULT_AGENT_COMMANDS,
@@ -44,9 +123,19 @@ const {
   normalizeAgentId,
   normalizePreferences,
   saveState
-} = require("./state-store");
+} = require("./state-store") as {
+  AGENT_DEFINITIONS: AgentDefinition[];
+  DEFAULT_AGENT_COMMANDS: Record<AgentId, string>;
+  DEFAULT_AGENT_ID: AgentId;
+  loadState: () => StoredAppState;
+  normalizeAgentId: (value: unknown, fallback?: AgentId | null) => AgentId | null;
+  normalizePreferences: (preferences: Record<string, unknown>) => AppPreferences;
+  saveState: (state: StoredAppState) => void;
+};
 const { resolveKeybindings } = require("./keybindings");
-const { PtyHostClient } = require("./pty-host-client");
+const { PtyHostClient } = require("./pty-host-client") as {
+  PtyHostClient: PtyHostClientConstructor;
+};
 const {
   disableWiki,
   enableWiki,
@@ -54,7 +143,14 @@ const {
   readWikiFile,
   wikiDirectoryPath,
   wikiExists
-} = require("./wiki");
+} = require("./wiki") as {
+  disableWiki: (rootPath: string) => unknown;
+  enableWiki: (rootPath: string) => unknown;
+  getWikiContext: (rootPath: string, enabled: boolean) => WikiContext;
+  readWikiFile: (rootPath: string, relativePath: string) => WikiFileContents;
+  wikiDirectoryPath: (rootPath: string) => string;
+  wikiExists: (rootPath: string) => boolean;
+};
 
 app.setName("ClaudeWorkspace");
 
@@ -74,7 +170,9 @@ const SESSION_TAG_COLORS = new Set([
   "gray"
 ]);
 const SESSION_ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
-const AGENT_LABELS = Object.fromEntries(AGENT_DEFINITIONS.map((agent) => [agent.id, agent.label]));
+const AGENT_LABELS: Record<AgentId, string> = Object.fromEntries(
+  AGENT_DEFINITIONS.map((agent) => [agent.id, agent.label])
+) as Record<AgentId, string>;
 
 function normalizeAbsolutePath(input: unknown, label = "path") {
   const value = typeof input === "string" ? input.trim() : "";
@@ -114,17 +212,17 @@ function assertMarketplaceSourceUrl(input: unknown) {
   return parsed.toString();
 }
 
-function buildFileTree(rootPath: string, currentPath: string, depth: number): any[] {
+function buildFileTree(rootPath: string, currentPath: string, depth: number): FileTreeNode[] {
   if (depth >= 5) return [];
 
-  let entries: any[];
+  let entries: import("node:fs").Dirent[];
   try {
     entries = fs.readdirSync(currentPath, { withFileTypes: true });
   } catch {
     return [];
   }
 
-  entries.sort((a: any, b: any) => {
+  entries.sort((a: import("node:fs").Dirent, b: import("node:fs").Dirent) => {
     const aDir = a.isDirectory();
     const bDir = b.isDirectory();
     if (aDir && !bDir) return -1;
@@ -132,7 +230,7 @@ function buildFileTree(rootPath: string, currentPath: string, depth: number): an
     return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
   });
 
-  const nodes: any[] = [];
+  const nodes: FileTreeNode[] = [];
   for (const entry of entries.slice(0, 400)) {
     const { name } = entry;
     const fullPath = path.join(currentPath, name);
@@ -156,7 +254,7 @@ function buildFileTree(rootPath: string, currentPath: string, depth: number): an
 }
 
 class AppController {
-  state: any;
+  state: StoredAppState;
   window: ElectronBrowserWindow | null;
   focusedSessionId: string | null;
   saveTimer: NodeJS.Timeout | null;
@@ -164,10 +262,10 @@ class AppController {
   pendingAgentLaunch: Set<string>;
   pendingAgentLaunchTimers: Map<string, NodeJS.Timeout>;
   sessionSizes: Map<string, { cols: number; rows: number }>;
-  terminalBuffers: Map<string, any>;
+  terminalBuffers: Map<string, TerminalTranscriptBufferInstance>;
   signalBuffers: Map<string, string>;
   blockerClearStreaks: Map<string, number>;
-  ptyHost: any;
+  ptyHost: PtyHostClientInstance;
   ephemeralSessions: Map<string, { repoId: string; kind: "lazygit" | "tokscale" }>;
   lazygitPath: string | null;
   npxPath: string | null;
@@ -208,11 +306,15 @@ class AppController {
       }
     });
 
-    this.window.on("closed", () => {
+    const window = this.window;
+    if (!window) {
+      return;
+    }
+    window.on("closed", () => {
       this.window = null;
     });
 
-    this.window.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+    window.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
   }
 
   setupIpc() {
@@ -747,7 +849,7 @@ class AppController {
       launchesClaudeOnStart !== false
         ? normalizeAgentId(this.state.preferences.defaultAgentId)
         : null;
-    const session = {
+    const session: SessionRecord = {
       id: sessionId,
       repoID: repoId,
       title: repo.name,
@@ -967,7 +1069,7 @@ class AppController {
       return;
     }
 
-    const defaultAgentId = normalizeAgentId(this.state.preferences.defaultAgentId);
+    const defaultAgentId = normalizeAgentId(this.state.preferences.defaultAgentId) || DEFAULT_AGENT_ID;
     const defaultAgentLabel = AGENT_LABELS[defaultAgentId] || "Default Agent";
 
     const menu = Menu.buildFromTemplate([
@@ -1037,7 +1139,7 @@ class AppController {
     }
 
     const sessionId = randomUUID();
-    const session = {
+    const session: SessionRecord = {
       id: sessionId,
       repoID: repoId,
       title: repo.name,
@@ -1071,20 +1173,22 @@ class AppController {
   }
 
   normalizeFolderRepos() {
-    const reposByWorkspaceId = new Map();
+    const reposByWorkspaceId = new Map<string, RepoRecord[]>();
 
     for (const repo of this.state.repos) {
       if (!reposByWorkspaceId.has(repo.workspaceID)) {
         reposByWorkspaceId.set(repo.workspaceID, []);
       }
 
-      reposByWorkspaceId.get(repo.workspaceID).push({
-        wikiEnabled: false,
-        ...repo
-      });
+      const existingRepos = reposByWorkspaceId.get(repo.workspaceID);
+      if (!existingRepos) {
+        continue;
+      }
+
+      existingRepos.push({ ...repo });
     }
 
-    const normalizedRepos = [];
+    const normalizedRepos: RepoRecord[] = [];
 
     for (const workspace of this.state.workspaces) {
       const workspaceRepos = reposByWorkspaceId.get(workspace.id) || [];
@@ -1100,7 +1204,7 @@ class AppController {
           discoveredAt: now()
         };
 
-      const normalizedRepo = {
+      const normalizedRepo: RepoRecord = {
         ...rootRepo,
         workspaceID: workspace.id,
         name: path.basename(workspace.rootPath) || workspace.rootPath,
@@ -1647,9 +1751,9 @@ function compareInboxSessions(left, right) {
   return String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
 }
 
-function normalizeSessionTagColor(value) {
+function normalizeSessionTagColor(value: unknown): SessionTagColor | null {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return SESSION_TAG_COLORS.has(normalized) ? normalized : null;
+  return SESSION_TAG_COLORS.has(normalized) ? normalized as SessionTagColor : null;
 }
 
 function sessionIconDirectoryPath() {

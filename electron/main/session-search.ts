@@ -1,3 +1,5 @@
+import type { SessionSearchResponse, SessionSearchResult, SessionSearchSource } from "../shared-types";
+
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -8,14 +10,23 @@ const INSTALL_COMMAND = "brew install fzf ripgrep";
 const MAX_RESULTS = 50;
 const MAX_CODEX_METADATA_BYTES = 64 * 1024;
 
-function searchProjectSessions(repoPath) {
+type SearchToolPaths = {
+  fzfPath: string | null;
+  rgPath: string | null;
+  missingTools: string[];
+};
+
+type SessionSearchFileRecord = Omit<SessionSearchResult, "lineNumber" | "preview">;
+
+function searchProjectSessions(repoPath: string): SessionSearchResponse {
   const trimmedRepoPath = typeof repoPath === "string" ? repoPath.trim() : "";
   if (!trimmedRepoPath) {
     return {
       ok: false,
       error: "Select a project before searching session files.",
       installCommand: INSTALL_COMMAND,
-      missingTools: []
+      missingTools: [],
+      results: []
     };
   }
 
@@ -25,7 +36,8 @@ function searchProjectSessions(repoPath) {
       ok: false,
       error: `Install required search tools first: ${INSTALL_COMMAND}`,
       installCommand: INSTALL_COMMAND,
-      missingTools: tools.missingTools
+      missingTools: tools.missingTools,
+      results: []
     };
   }
 
@@ -44,7 +56,7 @@ function searchProjectSessions(repoPath) {
   };
 }
 
-function queryProjectSessions(repoPath, query) {
+function queryProjectSessions(repoPath: string, query: string): SessionSearchResponse {
   const trimmedQuery = typeof query === "string" ? query.trim() : "";
   if (!trimmedQuery) {
     return {
@@ -61,7 +73,8 @@ function queryProjectSessions(repoPath, query) {
       ok: false,
       error: "Select a project before searching session files.",
       installCommand: INSTALL_COMMAND,
-      missingTools: []
+      missingTools: [],
+      results: []
     };
   }
 
@@ -71,7 +84,8 @@ function queryProjectSessions(repoPath, query) {
       ok: false,
       error: `Install required search tools first: ${INSTALL_COMMAND}`,
       installCommand: INSTALL_COMMAND,
-      missingTools: tools.missingTools
+      missingTools: tools.missingTools,
+      results: []
     };
   }
 
@@ -89,12 +103,12 @@ function queryProjectSessions(repoPath, query) {
   };
 }
 
-function resolveRequiredTools() {
-  const resolved = {
+function resolveRequiredTools(): SearchToolPaths {
+  const resolved: Omit<SearchToolPaths, "missingTools"> = {
     fzfPath: null,
     rgPath: null
   };
-  const missingTools = [];
+  const missingTools: string[] = [];
 
   for (const toolName of REQUIRED_TOOLS) {
     const toolPath = resolveCommandPath(toolName);
@@ -116,7 +130,7 @@ function resolveRequiredTools() {
   };
 }
 
-function collectClaudeFiles(repoPath) {
+function collectClaudeFiles(repoPath: string): SessionSearchFileRecord[] {
   const projectDir = path.join(os.homedir(), ".claude", "projects", claudeProjectKey(repoPath));
 
   let entries = [];
@@ -127,8 +141,8 @@ function collectClaudeFiles(repoPath) {
   }
 
   return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-    .map((entry) => {
+    .filter((entry: import("node:fs").Dirent) => entry.isFile() && entry.name.endsWith(".jsonl"))
+    .map((entry: import("node:fs").Dirent) => {
       const filePath = path.join(projectDir, entry.name);
       return {
         source: "claude",
@@ -139,7 +153,11 @@ function collectClaudeFiles(repoPath) {
     });
 }
 
-function collectCodexFiles(repoPath, rgPath) {
+function collectCodexFiles(repoPath: string, rgPath: string | null): SessionSearchFileRecord[] {
+  if (!rgPath) {
+    return [];
+  }
+
   const codexRoot = path.join(os.homedir(), ".codex", "sessions");
   const discoveredPaths = runListCommand(
     rgPath,
@@ -147,11 +165,11 @@ function collectCodexFiles(repoPath, rgPath) {
   );
 
   return discoveredPaths
-    .map((filePath) => buildCodexFileRecord(filePath, repoPath))
-    .filter(Boolean);
+    .map((filePath: string) => buildCodexFileRecord(filePath, repoPath))
+    .filter((record): record is SessionSearchFileRecord => !!record);
 }
 
-function buildCodexFileRecord(filePath, repoPath) {
+function buildCodexFileRecord(filePath: string, repoPath: string): SessionSearchFileRecord | null {
   let fileHandle;
   try {
     fileHandle = fs.openSync(filePath, "r");
@@ -182,7 +200,15 @@ function buildCodexFileRecord(filePath, repoPath) {
   }
 }
 
-function collectMatches(query, files, rgPath) {
+function collectMatches(
+  query: string,
+  files: SessionSearchFileRecord[],
+  rgPath: string | null
+): SessionSearchResult[] {
+  if (!rgPath) {
+    return [];
+  }
+
   if (!files.length) {
     return [];
   }
@@ -198,14 +224,14 @@ function collectMatches(query, files, rgPath) {
     ...files.map((file) => file.filePath)
   ];
   const lines = runListCommand(rgPath, args);
-  const fileByPath = new Map(files.map((file) => [file.filePath, file]));
+  const fileByPath = new Map<string, SessionSearchFileRecord>(files.map((file) => [file.filePath, file]));
 
   return lines
     .map((line) => parseRgLine(line, fileByPath))
-    .filter(Boolean);
+    .filter((match): match is SessionSearchResult => !!match);
 }
 
-function parseRgLine(line, fileByPath) {
+function parseRgLine(line: string, fileByPath: Map<string, SessionSearchFileRecord>): SessionSearchResult | null {
   const firstColon = line.indexOf(":");
   if (firstColon === -1) {
     return null;
@@ -232,7 +258,11 @@ function parseRgLine(line, fileByPath) {
   };
 }
 
-function rankMatches(matches, query, fzfPath) {
+function rankMatches(matches: SessionSearchResult[], query: string, fzfPath: string | null): SessionSearchResult[] {
+  if (!fzfPath) {
+    return matches.slice(0, MAX_RESULTS);
+  }
+
   if (!matches.length) {
     return [];
   }
@@ -250,7 +280,7 @@ function rankMatches(matches, query, fzfPath) {
     "--no-sort"
   ], candidates.join("\n"));
 
-  const ordered = [];
+  const ordered: SessionSearchResult[] = [];
   for (const line of rankedLines.slice(0, MAX_RESULTS)) {
     const tabIndex = line.indexOf("\t");
     if (tabIndex === -1) {
@@ -262,13 +292,13 @@ function rankMatches(matches, query, fzfPath) {
       continue;
     }
 
-    ordered.push(matches[matchIndex]);
+    ordered.push(matches[matchIndex] as SessionSearchResult);
   }
 
   return ordered;
 }
 
-function runListCommand(commandPath, args, stdinText = "") {
+function runListCommand(commandPath: string, args: string[], stdinText = ""): string[] {
   const result = spawnSync(commandPath, args, {
     encoding: "utf8",
     input: stdinText,
@@ -288,11 +318,11 @@ function runListCommand(commandPath, args, stdinText = "") {
   return output ? output.split("\n").filter(Boolean) : [];
 }
 
-function claudeProjectKey(repoPath) {
+function claudeProjectKey(repoPath: string): string {
   return path.resolve(repoPath).replace(/[^a-zA-Z0-9]/g, "-");
 }
 
-function isPathWithinRoot(filePath, rootPath) {
+function isPathWithinRoot(filePath: string, rootPath: string): boolean {
   const normalizedFilePath = path.resolve(filePath);
   const normalizedRootPath = path.resolve(rootPath);
   const relativePath = path.relative(normalizedRootPath, normalizedFilePath);
@@ -302,7 +332,7 @@ function isPathWithinRoot(filePath, rootPath) {
   );
 }
 
-function codexSessionBelongsToRepo(filePath, repoPath) {
+function codexSessionBelongsToRepo(filePath: string, repoPath: string): boolean {
   let fileHandle;
   try {
     fileHandle = fs.openSync(filePath, "r");
@@ -320,7 +350,7 @@ function codexSessionBelongsToRepo(filePath, repoPath) {
   }
 }
 
-function isSessionSearchResultPathForRepo(filePath, repoPath) {
+function isSessionSearchResultPathForRepo(filePath: string, repoPath: string): boolean {
   const normalizedFilePath = typeof filePath === "string" && filePath.trim()
     ? path.resolve(filePath)
     : "";
@@ -349,7 +379,7 @@ function isSessionSearchResultPathForRepo(filePath, repoPath) {
   return codexSessionBelongsToRepo(normalizedFilePath, normalizedRepoPath);
 }
 
-function resolveCommandPath(command) {
+function resolveCommandPath(command: string): string | null {
   const searchPaths = [
     "/opt/homebrew/bin",
     "/usr/local/bin",

@@ -1,3 +1,16 @@
+import type {
+  ClaudePluginInventoryItem,
+  ClaudeResolvedValue,
+  ClaudeSettingsContext,
+  ClaudeSettingsFileScope,
+  ClaudeSettingsFileSummary,
+  ClaudeSkillInventoryItem,
+  ClaudeSkillRoots,
+  ClaudeSkillSourceType,
+  JsonObject,
+  JsonValue
+} from "../shared-types";
+
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -24,7 +37,17 @@ const MANAGED_SKILLS_ROOT =
     : null;
 const PLUGIN_ROOT = path.join(os.homedir(), ".claude", "plugins");
 
-function buildClaudeSettingsContext(repo) {
+type RepoContext = { path: string; name: string } | null;
+type SettingsLayer = { file: ClaudeSettingsFileSummary; data: JsonObject };
+type EnabledPluginsResolution = { values: Map<string, boolean>; sources: Map<string, string> };
+type InstalledPluginEntry = {
+  installPath?: string;
+  version?: string;
+  installedAt?: string;
+  lastUpdated?: string;
+};
+
+function buildClaudeSettingsContext(repo: RepoContext): ClaudeSettingsContext {
   const homeDirectory = os.homedir();
   const globalFiles = filesFor(homeDirectory, "global", "Global");
   const projectFiles = repo ? filesFor(repo.path, "project", repo.name) : [];
@@ -43,7 +66,7 @@ function buildClaudeSettingsContext(repo) {
   };
 }
 
-function loadSettingsFile(filePath) {
+function loadSettingsFile(filePath: string): string {
   try {
     return fs.readFileSync(filePath, "utf8");
   } catch {
@@ -51,16 +74,16 @@ function loadSettingsFile(filePath) {
   }
 }
 
-function saveSettingsFile(filePath, contents) {
+function saveSettingsFile(filePath: string, contents: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, contents, "utf8");
 }
 
-function normalizeAccessPath(filePath) {
+function normalizeAccessPath(filePath: unknown): string {
   return typeof filePath === "string" && filePath.trim() ? path.resolve(filePath) : "";
 }
 
-function normalizeRepoPaths(repoPaths) {
+function normalizeRepoPaths(repoPaths: unknown): string[] {
   return Array.isArray(repoPaths)
     ? repoPaths
         .map((repoPath) => normalizeAccessPath(repoPath))
@@ -68,7 +91,7 @@ function normalizeRepoPaths(repoPaths) {
     : [];
 }
 
-function isPathWithinRoot(filePath, rootPath) {
+function isPathWithinRoot(filePath: string, rootPath: string): boolean {
   const relativePath = path.relative(rootPath, filePath);
   return (
     relativePath === "" ||
@@ -76,7 +99,7 @@ function isPathWithinRoot(filePath, rootPath) {
   );
 }
 
-function isKnownSettingsLayoutPath(filePath, rootPath) {
+function isKnownSettingsLayoutPath(filePath: string, rootPath: string): boolean {
   const normalizedRootPath = normalizeAccessPath(rootPath);
   if (!normalizedRootPath) {
     return false;
@@ -85,7 +108,7 @@ function isKnownSettingsLayoutPath(filePath, rootPath) {
   return FILE_LAYOUTS.some(([relativePath]) => path.join(normalizedRootPath, relativePath) === filePath);
 }
 
-function isSkillMarkdownPath(filePath, roots) {
+function isSkillMarkdownPath(filePath: string, roots: string[]): boolean {
   const baseName = path.basename(filePath);
   if (!SKILL_FILE_NAMES.includes(baseName) && baseName.toLowerCase() !== "skill.md") {
     return false;
@@ -94,7 +117,7 @@ function isSkillMarkdownPath(filePath, roots) {
   return roots.some((rootPath) => isPathWithinRoot(filePath, rootPath));
 }
 
-function readableSkillRoots(repoPaths) {
+function readableSkillRoots(repoPaths: unknown): string[] {
   return [
     path.join(os.homedir(), ".claude", "skills"),
     ...normalizeRepoPaths(repoPaths).map((repoPath) => path.join(repoPath, ".claude", "skills")),
@@ -105,7 +128,7 @@ function readableSkillRoots(repoPaths) {
     .filter(Boolean);
 }
 
-function writableSkillRoots(repoPaths) {
+function writableSkillRoots(repoPaths: unknown): string[] {
   return [
     path.join(os.homedir(), ".claude", "skills"),
     ...normalizeRepoPaths(repoPaths).map((repoPath) => path.join(repoPath, ".claude", "skills"))
@@ -114,7 +137,7 @@ function writableSkillRoots(repoPaths) {
     .filter(Boolean);
 }
 
-function assertReadableClaudeSettingsFilePath(filePath, repoPaths = []) {
+function assertReadableClaudeSettingsFilePath(filePath: string, repoPaths: string[] = []): string {
   const normalizedFilePath = normalizeAccessPath(filePath);
   const normalizedRepoPaths = normalizeRepoPaths(repoPaths);
   if (!normalizedFilePath) {
@@ -132,7 +155,7 @@ function assertReadableClaudeSettingsFilePath(filePath, repoPaths = []) {
   throw new Error("Settings access denied for the requested path.");
 }
 
-function assertWritableClaudeSettingsFilePath(filePath, repoPaths = []) {
+function assertWritableClaudeSettingsFilePath(filePath: string, repoPaths: string[] = []): string {
   const normalizedFilePath = normalizeAccessPath(filePath);
   const normalizedRepoPaths = normalizeRepoPaths(repoPaths);
   if (!normalizedFilePath) {
@@ -150,7 +173,7 @@ function assertWritableClaudeSettingsFilePath(filePath, repoPaths = []) {
   throw new Error("Settings write denied for the requested path.");
 }
 
-function assertEditableClaudeSkillFilePath(filePath, repoPaths = []) {
+function assertEditableClaudeSkillFilePath(filePath: string, repoPaths: string[] = []): string {
   const normalizedFilePath = normalizeAccessPath(filePath);
   const normalizedRepoPaths = normalizeRepoPaths(repoPaths);
   if (!normalizedFilePath) {
@@ -164,15 +187,15 @@ function assertEditableClaudeSkillFilePath(filePath, repoPaths = []) {
   throw new Error("Skill updates are limited to user and project skills.");
 }
 
-function readClaudeSettingsFile(filePath, repoPaths = []) {
+function readClaudeSettingsFile(filePath: string, repoPaths: string[] = []): string {
   return loadSettingsFile(assertReadableClaudeSettingsFilePath(filePath, repoPaths));
 }
 
-function writeClaudeSettingsFile(filePath, contents, repoPaths = []) {
+function writeClaudeSettingsFile(filePath: string, contents: string, repoPaths: string[] = []): void {
   saveSettingsFile(assertWritableClaudeSettingsFilePath(filePath, repoPaths), contents);
 }
 
-function importSkillIcon(skillFilePath, sourceFilePath) {
+function importSkillIcon(skillFilePath: string, sourceFilePath: string): string | null {
   if (!skillFilePath || !sourceFilePath) {
     return null;
   }
@@ -194,7 +217,7 @@ function importSkillIcon(skillFilePath, sourceFilePath) {
   return targetFilePath;
 }
 
-function clearSkillIcon(skillFilePath) {
+function clearSkillIcon(skillFilePath: string): boolean {
   if (!skillFilePath) {
     return false;
   }
@@ -203,7 +226,7 @@ function clearSkillIcon(skillFilePath) {
   return true;
 }
 
-function filesFor(rootPath, scope, prefix) {
+function filesFor(rootPath: string, scope: ClaudeSettingsFileScope, prefix: string): ClaudeSettingsFileSummary[] {
   return FILE_LAYOUTS.map(([relativePath, title]) => {
     const filePath = path.join(rootPath, relativePath);
     return {
@@ -216,20 +239,26 @@ function filesFor(rootPath, scope, prefix) {
   });
 }
 
-function loadSettingsLayers(globalFiles, projectFiles) {
+function loadSettingsLayers(
+  globalFiles: ClaudeSettingsFileSummary[],
+  projectFiles: ClaudeSettingsFileSummary[]
+): SettingsLayer[] {
   return [...globalFiles, ...projectFiles]
     .filter((file) => file.exists && path.extname(file.path) === ".json")
     .map((file) => ({
       file,
       data: readJsonFile(file.path)
     }))
-    .filter((entry) => isPlainObject(entry.data));
+    .filter((entry): entry is SettingsLayer => isPlainObject(entry.data));
 }
 
-function resolveValues(globalFiles, projectFiles) {
+function resolveValues(
+  globalFiles: ClaudeSettingsFileSummary[],
+  projectFiles: ClaudeSettingsFileSummary[]
+): ClaudeResolvedValue[] {
   const precedence = loadSettingsLayers(globalFiles, projectFiles).map((entry) => entry.file);
 
-  const valuesByKey = new Map();
+  const valuesByKey = new Map<string, ClaudeResolvedValue>();
 
   for (const file of precedence) {
     try {
@@ -252,12 +281,12 @@ function resolveValues(globalFiles, projectFiles) {
   );
 }
 
-function flatten(value, prefix = null) {
+function flatten(value: unknown, prefix: string | null = null): Array<[string, string]> {
   if (Array.isArray(value)) {
     return [[prefix ?? "$", JSON.stringify(value)]];
   }
 
-  if (value && typeof value === "object") {
+  if (isPlainObject(value)) {
     return Object.keys(value)
       .sort()
       .flatMap((key) => {
@@ -269,7 +298,7 @@ function flatten(value, prefix = null) {
   return [[prefix ?? "$", stringify(value)]];
 }
 
-function stringify(value) {
+function stringify(value: unknown): string {
   if (value === null) {
     return "null";
   }
@@ -285,7 +314,10 @@ function stringify(value) {
   return JSON.stringify(value);
 }
 
-function buildPluginInventory(homeDirectory, settingsLayers) {
+function buildPluginInventory(
+  homeDirectory: string,
+  settingsLayers: SettingsLayer[]
+): ClaudePluginInventoryItem[] {
   const installedPluginsPath = path.join(
     homeDirectory,
     ".claude",
@@ -307,7 +339,7 @@ function buildPluginInventory(homeDirectory, settingsLayers) {
   return Array.from(pluginIds)
     .map((pluginId) => {
       const installedEntries = Array.isArray(installedPlugins[pluginId])
-        ? installedPlugins[pluginId].filter(isPlainObject)
+        ? installedPlugins[pluginId].filter(isPlainObject) as InstalledPluginEntry[]
         : [];
       const activeInstall = latestInstalledEntry(installedEntries);
       const skillFiles = activeInstall?.installPath
@@ -321,7 +353,7 @@ function buildPluginInventory(homeDirectory, settingsLayers) {
         installed: !!activeInstall,
         enabled: effectivePlugins.values.get(pluginId) === true,
         enabledValue: effectivePlugins.values.has(pluginId)
-          ? effectivePlugins.values.get(pluginId)
+          ? (effectivePlugins.values.get(pluginId) ?? null)
           : null,
         sourceLabel: effectivePlugins.sources.get(pluginId) || null,
         installPath: activeInstall?.installPath || null,
@@ -343,9 +375,9 @@ function buildPluginInventory(homeDirectory, settingsLayers) {
     });
 }
 
-function resolveEnabledPlugins(settingsLayers) {
-  const values = new Map();
-  const sources = new Map();
+function resolveEnabledPlugins(settingsLayers: SettingsLayer[]): EnabledPluginsResolution {
+  const values = new Map<string, boolean>();
+  const sources = new Map<string, string>();
 
   for (const { file, data } of settingsLayers) {
     if (!isPlainObject(data.enabledPlugins)) {
@@ -365,7 +397,7 @@ function resolveEnabledPlugins(settingsLayers) {
   return { values, sources };
 }
 
-function latestInstalledEntry(entries) {
+function latestInstalledEntry(entries: InstalledPluginEntry[]): InstalledPluginEntry | null {
   if (!entries.length) {
     return null;
   }
@@ -373,13 +405,17 @@ function latestInstalledEntry(entries) {
   return [...entries].sort((left, right) => entryTimestamp(right) - entryTimestamp(left))[0];
 }
 
-function entryTimestamp(entry) {
+function entryTimestamp(entry: InstalledPluginEntry): number {
   const value = entry?.lastUpdated || entry?.installedAt || "";
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function buildSkillInventory(homeDirectory, repo, plugins) {
+function buildSkillInventory(
+  homeDirectory: string,
+  repo: RepoContext,
+  plugins: ClaudePluginInventoryItem[]
+): { skills: ClaudeSkillInventoryItem[]; skillRoots: ClaudeSkillRoots } {
   const userSkillsRoot = path.join(homeDirectory, ".claude", "skills");
   const projectSkillsRoot = repo ? path.join(repo.path, ".claude", "skills") : null;
   const managedSkillsRoot = MANAGED_SKILLS_ROOT;
@@ -394,7 +430,7 @@ function buildSkillInventory(homeDirectory, repo, plugins) {
   const pluginSkills = plugins
     .filter((plugin) => plugin.enabled && plugin.installPath)
     .flatMap((plugin) =>
-      listSkillEntries(path.join(plugin.installPath, "skills"), "plugin", plugin.name, false, {
+      listSkillEntries(path.join(plugin.installPath as string, "skills"), "plugin", plugin.name, false, {
         pluginId: plugin.id
       })
     );
@@ -414,12 +450,12 @@ function buildSkillInventory(homeDirectory, repo, plugins) {
 }
 
 function listSkillEntries(
-  rootPath,
-  sourceType,
-  sourceLabel,
-  editable,
+  rootPath: string,
+  sourceType: ClaudeSkillSourceType,
+  sourceLabel: string,
+  editable: boolean,
   extra: { pluginId?: string | null } = {}
-) {
+): ClaudeSkillInventoryItem[] {
   return listSkillFiles(rootPath).map((filePath) => {
     const metadata = readSkillMetadata(filePath);
 
@@ -438,7 +474,7 @@ function listSkillEntries(
   });
 }
 
-function listSkillFiles(rootPath) {
+function listSkillFiles(rootPath: string): string[] {
   if (!rootPath || !fs.existsSync(rootPath)) {
     return [];
   }
@@ -446,15 +482,15 @@ function listSkillFiles(rootPath) {
   try {
     return fs
       .readdirSync(rootPath, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => findSkillFile(path.join(rootPath, entry.name)))
-      .filter(Boolean);
+      .filter((entry: import("node:fs").Dirent) => entry.isDirectory())
+      .map((entry: import("node:fs").Dirent) => findSkillFile(path.join(rootPath, entry.name)))
+      .filter((resolvedPath: string | null): resolvedPath is string => !!resolvedPath);
   } catch {
     return [];
   }
 }
 
-function findSkillFile(skillDirectoryPath) {
+function findSkillFile(skillDirectoryPath: string): string | null {
   for (const fileName of SKILL_FILE_NAMES) {
     const filePath = path.join(skillDirectoryPath, fileName);
     if (fs.existsSync(filePath)) {
@@ -465,14 +501,14 @@ function findSkillFile(skillDirectoryPath) {
   try {
     const fallback = fs
       .readdirSync(skillDirectoryPath)
-      .find((fileName) => fileName.toLowerCase() === "skill.md");
+      .find((fileName: string) => fileName.toLowerCase() === "skill.md");
     return fallback ? path.join(skillDirectoryPath, fallback) : null;
   } catch {
     return null;
   }
 }
 
-function readSkillMetadata(filePath) {
+function readSkillMetadata(filePath: string): { description: string; iconPath: string; iconUrl: string } {
   const contents = loadSettingsFile(filePath);
   const frontmatter = parseFrontmatter(contents);
   const description = frontmatter.values.description || "";
@@ -486,7 +522,12 @@ function readSkillMetadata(filePath) {
   };
 }
 
-function parseFrontmatter(contents) {
+function parseFrontmatter(contents: string): {
+  hasFrontmatter: boolean;
+  lines: string[];
+  values: Record<string, string>;
+  body: string;
+} {
   if (!contents.startsWith("---")) {
     return {
       hasFrontmatter: false,
@@ -506,7 +547,7 @@ function parseFrontmatter(contents) {
     };
   }
 
-  const closingIndex = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+  const closingIndex = lines.findIndex((line: string, index: number) => index > 0 && line.trim() === "---");
   if (closingIndex === -1) {
     return {
       hasFrontmatter: false,
@@ -536,7 +577,7 @@ function parseFrontmatter(contents) {
   };
 }
 
-function resolveSkillIconPath(skillFilePath, iconReference) {
+function resolveSkillIconPath(skillFilePath: string, iconReference: string): string {
   if (!iconReference) {
     return "";
   }
@@ -548,7 +589,7 @@ function resolveSkillIconPath(skillFilePath, iconReference) {
   return fs.existsSync(iconPath) ? iconPath : "";
 }
 
-function setFrontmatterValue(contents, key, nextValue) {
+function setFrontmatterValue(contents: string, key: string, nextValue: string | null): string {
   const parsed = parseFrontmatter(contents);
   const nextLine = nextValue === null ? null : `${key}: ${JSON.stringify(String(nextValue))}`;
   const nextLines = [...parsed.lines];
@@ -578,19 +619,19 @@ function setFrontmatterValue(contents, key, nextValue) {
   return `${frontmatterBlock}\n\n${body}`;
 }
 
-function stripYamlScalarQuotes(value) {
+function stripYamlScalarQuotes(value: string): string {
   return value.replace(/^["']|["']$/g, "");
 }
 
-function isSupportedSkillIconExtension(extension) {
+function isSupportedSkillIconExtension(extension: string): boolean {
   return new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]).has(extension);
 }
 
-function skillNameFromFile(filePath) {
+function skillNameFromFile(filePath: string): string {
   return path.basename(path.dirname(filePath));
 }
 
-function compareSkills(left, right) {
+function compareSkills(left: ClaudeSkillInventoryItem, right: ClaudeSkillInventoryItem): number {
   const sourceOrder = skillSourceOrder(left.sourceType) - skillSourceOrder(right.sourceType);
   if (sourceOrder !== 0) {
     return sourceOrder;
@@ -599,7 +640,7 @@ function compareSkills(left, right) {
   return left.name.localeCompare(right.name);
 }
 
-function skillSourceOrder(sourceType) {
+function skillSourceOrder(sourceType: ClaudeSkillSourceType): number {
   switch (sourceType) {
     case "project":
       return 0;
@@ -614,21 +655,21 @@ function skillSourceOrder(sourceType) {
   }
 }
 
-function pluginDisplayName(pluginId) {
+function pluginDisplayName(pluginId: string): string {
   return humanizeIdentifier(pluginName(pluginId));
 }
 
-function pluginName(pluginId) {
+function pluginName(pluginId: string): string {
   const markerIndex = pluginId.lastIndexOf("@");
   return markerIndex >= 0 ? pluginId.slice(0, markerIndex) : pluginId;
 }
 
-function pluginMarketplace(pluginId) {
+function pluginMarketplace(pluginId: string): string {
   const markerIndex = pluginId.lastIndexOf("@");
   return markerIndex >= 0 ? pluginId.slice(markerIndex + 1) : "";
 }
 
-function humanizeIdentifier(value) {
+function humanizeIdentifier(value: string): string {
   return String(value || "")
     .split(/[-_]+/)
     .filter(Boolean)
@@ -636,7 +677,7 @@ function humanizeIdentifier(value) {
     .join(" ");
 }
 
-function readJsonFile(filePath) {
+function readJsonFile(filePath: string): unknown {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch {
@@ -644,7 +685,7 @@ function readJsonFile(filePath) {
   }
 }
 
-function isPlainObject(value) {
+function isPlainObject(value: unknown): value is JsonObject {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 

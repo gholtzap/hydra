@@ -1,3 +1,15 @@
+import type {
+  MarketplaceInspectResponse,
+  MarketplaceInstallResponse,
+  MarketplaceInstallScope,
+  MarketplaceReviewState,
+  MarketplaceSearchResponse,
+  MarketplaceSkillDetails,
+  MarketplaceSkillFile,
+  MarketplaceSkillSource,
+  MarketplaceSkillSummary
+} from "../shared-types";
+
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
@@ -5,7 +17,11 @@ const path = require("node:path");
 const GITHUB_API_ROOT = "https://api.github.com";
 const GITHUB_RAW_ROOT = "https://raw.githubusercontent.com";
 const USER_AGENT = "claude-workspace-skills-marketplace";
-const REVIEWED_CATALOG = [
+const REVIEWED_CATALOG: Array<{
+  url: string;
+  tags: string[];
+  reviewState: MarketplaceReviewState;
+}> = [
   {
     url: "https://github.com/vercel-labs/agent-skills/tree/main/skills/vercel-react-best-practices",
     tags: ["react", "nextjs", "performance"],
@@ -13,8 +29,45 @@ const REVIEWED_CATALOG = [
   }
 ];
 
-const repoInfoCache = new Map<string, Promise<any>>();
-const repoTreeCache = new Map<string, Promise<any>>();
+type GitHubRepoInfo = {
+  default_branch?: string;
+  description?: string;
+  topics?: string[];
+  stargazers_count?: number;
+  pushed_at?: string;
+  updated_at?: string;
+};
+
+type GitHubTreeEntry = {
+  path: string;
+  type: string;
+  size?: number;
+};
+
+type GitHubTreePayload = {
+  tree?: GitHubTreeEntry[];
+};
+
+type GitHubCodeSearchItem = {
+  repository?: {
+    owner?: { login?: string };
+    name?: string;
+  };
+  path?: string;
+};
+
+type GitHubCodeSearchPayload = {
+  items?: GitHubCodeSearchItem[];
+};
+
+type ResolvedMarketplaceSkill = MarketplaceSkillSummary & {
+  markdown: string;
+  skillFilePath: string;
+  files: MarketplaceSkillFile[];
+};
+
+const repoInfoCache = new Map<string, Promise<GitHubRepoInfo>>();
+const repoTreeCache = new Map<string, Promise<GitHubTreePayload>>();
 const skillMarkdownCache = new Map<string, Promise<string>>();
 
 function githubHeaders() {
@@ -31,7 +84,7 @@ function githubHeaders() {
   return headers;
 }
 
-async function githubJson(endpoint: string) {
+async function githubJson<T>(endpoint: string): Promise<T> {
   const response = await fetch(`${GITHUB_API_ROOT}${endpoint}`, {
     headers: githubHeaders()
   });
@@ -41,13 +94,13 @@ async function githubJson(endpoint: string) {
     throw new Error(message);
   }
 
-  return response.json();
+  return response.json() as Promise<T>;
 }
 
 async function githubText(url: string) {
   const cacheKey = `text:${url}`;
   if (skillMarkdownCache.has(cacheKey)) {
-    return skillMarkdownCache.get(cacheKey);
+    return skillMarkdownCache.get(cacheKey)!;
   }
 
   const task = (async () => {
@@ -227,19 +280,19 @@ function stripYamlQuotes(value: string) {
   return value;
 }
 
-async function getRepoInfo(owner: string, repo: string) {
+async function getRepoInfo(owner: string, repo: string): Promise<GitHubRepoInfo> {
   const key = `${owner}/${repo}`;
   if (!repoInfoCache.has(key)) {
     repoInfoCache.set(
       key,
-      githubJson(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`)
+      githubJson<GitHubRepoInfo>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`)
     );
   }
 
-  return repoInfoCache.get(key);
+  return repoInfoCache.get(key)!;
 }
 
-async function getRepoTree(owner: string, repo: string, ref = "") {
+async function getRepoTree(owner: string, repo: string, ref = ""): Promise<{ ref: string; tree: GitHubTreeEntry[] }> {
   const repoInfo = await getRepoInfo(owner, repo);
   const resolvedRef = ref || repoInfo.default_branch || "main";
   const key = `${owner}/${repo}@${resolvedRef}`;
@@ -247,20 +300,20 @@ async function getRepoTree(owner: string, repo: string, ref = "") {
   if (!repoTreeCache.has(key)) {
     repoTreeCache.set(
       key,
-      githubJson(
+      githubJson<GitHubTreePayload>(
         `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(resolvedRef)}?recursive=1`
       )
     );
   }
 
-  const payload = await repoTreeCache.get(key);
+  const payload = await repoTreeCache.get(key)!;
   return {
     ref: resolvedRef,
     tree: Array.isArray(payload?.tree) ? payload.tree : []
   };
 }
 
-function findSkillRoots(treeEntries: any[]) {
+function findSkillRoots(treeEntries: GitHubTreeEntry[]): string[] {
   const roots = new Set<string>();
 
   for (const entry of treeEntries) {
@@ -280,7 +333,7 @@ function deriveTags(args: {
   skillPath: string;
   description: string;
   repoDescription: string;
-}) {
+  }): string[] {
   const tags = new Set<string>();
   const input = `${args.skillPath} ${args.description} ${args.repoDescription}`.toLowerCase();
 
@@ -318,7 +371,7 @@ function deriveTags(args: {
 
 function deriveCompatibility(tags: string[], description: string) {
   const normalized = `${tags.join(" ")} ${description}`.toLowerCase();
-  const matches = [];
+  const matches: string[] = [];
 
   if (normalized.includes("nextjs") || normalized.includes("next.js")) {
     matches.push("Next.js");
@@ -354,17 +407,17 @@ async function buildSkillSummary(source: {
   repo: string;
   ref?: string;
   path: string;
-  reviewState?: string;
+  reviewState?: MarketplaceReviewState;
   catalogTags?: string[];
-}) {
+}): Promise<ResolvedMarketplaceSkill> {
   const repoInfo = await getRepoInfo(source.owner, source.repo);
   const repoTree = await getRepoTree(source.owner, source.repo, source.ref || "");
   const skillPath = normalizePath(source.path);
-  const skillFiles = repoTree.tree.filter((entry) => entry?.type === "blob" && isPathWithinRoot(entry.path, skillPath));
+  const skillFiles = repoTree.tree.filter((entry) => entry.type === "blob" && isPathWithinRoot(entry.path, skillPath));
   const skillFileEntry =
-    skillFiles.find((entry) => normalizePath(entry.path) === `${skillPath}/SKILL.md`) ||
-    skillFiles.find((entry) => normalizePath(entry.path) === `${skillPath}/skill.md`) ||
-    skillFiles.find((entry) => isSkillFile(entry.path || ""));
+    skillFiles.find((entry: GitHubTreeEntry) => normalizePath(entry.path) === `${skillPath}/SKILL.md`) ||
+    skillFiles.find((entry: GitHubTreeEntry) => normalizePath(entry.path) === `${skillPath}/skill.md`) ||
+    skillFiles.find((entry: GitHubTreeEntry) => isSkillFile(entry.path));
 
   if (!skillFileEntry) {
     throw new Error(`No SKILL.md file was found in ${source.owner}/${source.repo}/${skillPath || "."}.`);
@@ -398,14 +451,14 @@ async function buildSkillSummary(source: {
     repoUrl: `https://github.com/${source.owner}/${source.repo}`,
     repoFullName: `${source.owner}/${source.repo}`,
     stars: Number(repoInfo.stargazers_count || 0),
-    updatedAt: repoInfo.pushed_at || repoInfo.updated_at || "",
+    updatedAt: repoInfo.pushed_at ?? repoInfo.updated_at ?? "",
     tags,
     compatibility: deriveCompatibility(tags, description),
     fileCount: skillFiles.length,
     markdown,
     skillFilePath: normalizePath(skillFileEntry.path),
     files: skillFiles
-      .map((entry) => ({
+      .map((entry: GitHubTreeEntry) => ({
         path: normalizePath(entry.path),
         relativePath: normalizePath(entry.path).slice(skillPath.length + 1),
         size: Number(entry.size || 0)
@@ -414,7 +467,7 @@ async function buildSkillSummary(source: {
   };
 }
 
-async function searchReviewedCatalog(query: string) {
+async function searchReviewedCatalog(query: string): Promise<ResolvedMarketplaceSkill[]> {
   const tasks = REVIEWED_CATALOG.map(async (entry) => {
     try {
       const parsed = parseGitHubUrl(entry.url);
@@ -434,10 +487,10 @@ async function searchReviewedCatalog(query: string) {
   });
 
   const values = await Promise.all(tasks);
-  return values.filter(Boolean);
+  return values.filter((value): value is ResolvedMarketplaceSkill => !!value);
 }
 
-async function searchGithubCode(query: string) {
+async function searchGithubCode(query: string): Promise<ResolvedMarketplaceSkill[]> {
   const trimmed = String(query || "").trim();
   if (trimmed.length < 2) {
     return [];
@@ -449,8 +502,8 @@ async function searchGithubCode(query: string) {
   ];
   const payloads = await Promise.all(
     queries.map((value) =>
-      githubJson(`/search/code?q=${encodeURIComponent(value)}&per_page=8`)
-        .catch(() => ({ items: [] }))
+      githubJson<GitHubCodeSearchPayload>(`/search/code?q=${encodeURIComponent(value)}&per_page=8`)
+        .catch(() => ({ items: [] as GitHubCodeSearchItem[] }))
     )
   );
 
@@ -493,10 +546,10 @@ async function searchGithubCode(query: string) {
     });
 
   const values = await Promise.all(tasks);
-  return values.filter(Boolean);
+  return values.filter((value): value is ResolvedMarketplaceSkill => !!value);
 }
 
-function summarizeSkill(summary: any) {
+function summarizeSkill(summary: ResolvedMarketplaceSkill): MarketplaceSkillSummary {
   return {
     id: summary.id,
     title: summary.title,
@@ -514,14 +567,14 @@ function summarizeSkill(summary: any) {
   };
 }
 
-async function searchMarketplaceSkills(payload: { query?: string }) {
+async function searchMarketplaceSkills(payload: { query?: string }): Promise<MarketplaceSearchResponse> {
   const query = String(payload?.query || "").trim();
   const [reviewed, unreviewed] = await Promise.all([
     searchReviewedCatalog(query),
     searchGithubCode(query)
   ]);
   const seen = new Set<string>();
-  const results = [];
+  const results: MarketplaceSkillSummary[] = [];
 
   for (const entry of [...reviewed, ...unreviewed].sort((left, right) => {
     if (left.reviewState !== right.reviewState) {
@@ -547,7 +600,9 @@ async function searchMarketplaceSkills(payload: { query?: string }) {
   };
 }
 
-async function getMarketplaceSkillDetails(payload: { source: { owner: string; repo: string; ref?: string; path: string; reviewState?: string; tags?: string[] } }) {
+async function getMarketplaceSkillDetails(payload: {
+  source: { owner: string; repo: string; ref?: string; path: string; reviewState?: MarketplaceReviewState; tags?: string[] };
+}): Promise<MarketplaceSkillDetails> {
   const summary = await buildSkillSummary({
     owner: payload.source.owner,
     repo: payload.source.repo,
@@ -568,7 +623,7 @@ async function getMarketplaceSkillDetails(payload: { source: { owner: string; re
   };
 }
 
-async function inspectMarketplaceGitHubUrl(payload: { url: string }) {
+async function inspectMarketplaceGitHubUrl(payload: { url: string }): Promise<MarketplaceInspectResponse> {
   const parsed = parseGitHubUrl(payload.url);
   const repoTree = await getRepoTree(parsed.owner, parsed.repo, parsed.ref || "");
   const skillRoots = findSkillRoots(repoTree.tree);
@@ -606,9 +661,9 @@ async function inspectMarketplaceGitHubUrl(payload: { url: string }) {
 
 async function installMarketplaceSkill(payload: {
   source: { owner: string; repo: string; ref?: string; path: string };
-  scope: "user" | "project";
+  scope: MarketplaceInstallScope;
   repoPath?: string | null;
-}) {
+}): Promise<MarketplaceInstallResponse> {
   const scope = payload?.scope === "project" ? "project" : "user";
   const repoPath = payload?.repoPath || "";
 

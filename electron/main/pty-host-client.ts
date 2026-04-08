@@ -1,10 +1,13 @@
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { PtyCreateSessionPayload, PtyHostMessage } from "../shared-types";
+
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 
 class PtyHostClient {
-  child: any;
+  child: ChildProcessWithoutNullStreams | null;
   pending: string;
-  listeners: Set<(message: any) => void>;
+  listeners: Set<(message: PtyHostMessage) => void>;
 
   constructor() {
     this.child = null;
@@ -20,10 +23,10 @@ class PtyHostClient {
     const hostPath = path.join(__dirname, "pty_host.py");
     this.child = spawn("/usr/bin/env", ["python3", hostPath], {
       stdio: ["pipe", "pipe", "inherit"]
-    });
+    }) as ChildProcessWithoutNullStreams;
 
     this.child.stdout.setEncoding("utf8");
-    this.child.stdout.on("data", (chunk) => {
+    this.child.stdout.on("data", (chunk: string) => {
       this.pending += chunk;
       let newlineIndex = this.pending.indexOf("\n");
 
@@ -33,7 +36,7 @@ class PtyHostClient {
 
         if (line) {
           try {
-            const message = JSON.parse(line);
+            const message = JSON.parse(line) as PtyHostMessage;
             this.listeners.forEach((listener) => listener(message));
           } catch {
             continue;
@@ -59,21 +62,21 @@ class PtyHostClient {
     this.child = null;
   }
 
-  onMessage(listener) {
+  onMessage(listener: (message: PtyHostMessage) => void) {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
     };
   }
 
-  createSession(payload) {
+  createSession(payload: PtyCreateSessionPayload) {
     this.send({
       type: "create",
       ...payload
     });
   }
 
-  sendInput(sessionId, data) {
+  sendInput(sessionId: string, data: string) {
     this.send({
       type: "input",
       sessionId,
@@ -81,7 +84,7 @@ class PtyHostClient {
     });
   }
 
-  resizeSession(sessionId, cols, rows) {
+  resizeSession(sessionId: string, cols: number, rows: number) {
     this.send({
       type: "resize",
       sessionId,
@@ -90,14 +93,21 @@ class PtyHostClient {
     });
   }
 
-  killSession(sessionId) {
+  killSession(sessionId: string) {
     this.send({
       type: "kill",
       sessionId
     });
   }
 
-  send(payload) {
+  send(
+    payload:
+      | (PtyCreateSessionPayload & { type: "create" })
+      | { type: "shutdown" }
+      | { type: "input"; sessionId: string; data: string }
+      | { type: "resize"; sessionId: string; cols: number; rows: number }
+      | { type: "kill"; sessionId: string }
+  ) {
     this.start();
     if (!this.child || !this.child.stdin.writable) {
       return;

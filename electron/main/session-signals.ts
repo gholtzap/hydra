@@ -1,10 +1,12 @@
+import type { SessionBlocker, SessionBlockerKind, SessionStatus } from "../shared-types";
+
 const { TerminalTranscriptBuffer } = require("./terminal-transcript-buffer");
 
-function sanitizeVisibleText(text) {
+function sanitizeVisibleText(text: string): string {
   return TerminalTranscriptBuffer.visibleText(text);
 }
 
-function detectSignal(chunk) {
+function detectSignal(chunk: string): { status: SessionStatus; blocker: SessionBlocker } | null {
   const lowered = normalizeSignalText(chunk);
 
   if (!lowered) {
@@ -63,14 +65,14 @@ function detectSignal(chunk) {
   return null;
 }
 
-function normalizeSignalText(text) {
+function normalizeSignalText(text: string): string {
   return String(text || "")
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function blocker(kind, summary) {
+function blocker(kind: SessionBlockerKind, summary: string): SessionBlocker {
   return {
     kind,
     summary,

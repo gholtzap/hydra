@@ -16,13 +16,13 @@ class TerminalTranscriptBuffer {
     return this.committedText + this.currentLine.join("");
   }
 
-  consume(rawText) {
+  consume(rawText: string): string {
     this.apply(rawText);
     this.trimIfNeeded();
     return this.renderedText;
   }
 
-  replaceSeed(text) {
+  replaceSeed(text: string): void {
     const newlineIndex = text.lastIndexOf("\n");
 
     if (newlineIndex >= 0) {
@@ -36,7 +36,7 @@ class TerminalTranscriptBuffer {
     this.cursorColumn = this.currentLine.length;
   }
 
-  apply(rawText) {
+  apply(rawText: string): void {
     const chars = Array.from(rawText);
     let index = 0;
 
@@ -81,7 +81,7 @@ class TerminalTranscriptBuffer {
     }
   }
 
-  parseEscapeSequence(chars, startIndex) {
+  parseEscapeSequence(chars: string[], startIndex: number): number {
     const nextIndex = startIndex + 1;
     if (nextIndex >= chars.length) {
       return startIndex + 1;
@@ -97,7 +97,7 @@ class TerminalTranscriptBuffer {
     }
   }
 
-  parseCSISequence(chars, startIndex) {
+  parseCSISequence(chars: string[], startIndex: number): number {
     let index = startIndex;
     let parameterString = "";
 
@@ -117,7 +117,7 @@ class TerminalTranscriptBuffer {
     return index;
   }
 
-  skipOSCSequence(chars, startIndex) {
+  skipOSCSequence(chars: string[], startIndex: number): number {
     let index = startIndex;
 
     while (index < chars.length) {
@@ -137,7 +137,7 @@ class TerminalTranscriptBuffer {
     return index;
   }
 
-  applyCSI(finalChar, parameterString) {
+  applyCSI(finalChar: string, parameterString: string): void {
     const parameters = parameterString.split(";").map((value) => Number.parseInt(value, 10) || 0);
 
     switch (finalChar) {
@@ -169,7 +169,7 @@ class TerminalTranscriptBuffer {
     }
   }
 
-  write(char) {
+  write(char: string): void {
     if (this.cursorColumn < this.currentLine.length) {
       this.currentLine[this.cursorColumn] = char;
     } else {
@@ -183,7 +183,7 @@ class TerminalTranscriptBuffer {
     this.cursorColumn += 1;
   }
 
-  clearLine(mode) {
+  clearLine(mode: number): void {
     switch (mode) {
       case 1: {
         const upperBound = Math.min(this.cursorColumn, this.currentLine.length);
@@ -203,7 +203,7 @@ class TerminalTranscriptBuffer {
     }
   }
 
-  clearScreen(mode) {
+  clearScreen(mode: number): void {
     if (mode === 2 || mode === 3) {
       this.committedText = "";
       this.currentLine = [];
@@ -211,26 +211,26 @@ class TerminalTranscriptBuffer {
     }
   }
 
-  moveCursorForward(amount) {
+  moveCursorForward(amount: number): void {
     this.cursorColumn += amount;
   }
 
-  moveCursorBackward(amount) {
+  moveCursorBackward(amount: number): void {
     this.cursorColumn = Math.max(this.cursorColumn - amount, 0);
   }
 
-  moveCursorToColumn(column) {
+  moveCursorToColumn(column: number): void {
     this.cursorColumn = Math.max(column, 0);
   }
 
-  deleteCharacters(count) {
+  deleteCharacters(count: number): void {
     if (this.cursorColumn < this.currentLine.length) {
       const upperBound = Math.min(this.cursorColumn + count, this.currentLine.length);
       this.currentLine.splice(this.cursorColumn, upperBound - this.cursorColumn);
     }
   }
 
-  eraseCharacters(count) {
+  eraseCharacters(count: number): void {
     if (this.cursorColumn >= this.currentLine.length) {
       return;
     }
@@ -241,18 +241,18 @@ class TerminalTranscriptBuffer {
     }
   }
 
-  trimIfNeeded() {
+  trimIfNeeded(): void {
     if (this.renderedText.length > this.maxLength) {
       this.replaceSeed(this.renderedText.slice(-this.maxLength));
     }
   }
 
-  static visibleText(rawText) {
+  static visibleText(rawText: string): string {
     return new TerminalTranscriptBuffer("", Math.max(rawText.length * 2, 4096)).consume(rawText);
   }
 }
 
-function isControlCharacter(char) {
+function isControlCharacter(char: string): boolean {
   const code = char.codePointAt(0) || 0;
   return (code >= 0 && code <= 0x1f) || code === 0x7f;
 }

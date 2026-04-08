@@ -1,8 +1,18 @@
+import type {
+  AgentDefinition,
+  AgentId,
+  AppPreferences,
+  RepoRecord,
+  SessionRecord,
+  SessionTagColor,
+  StoredAppState
+} from "../shared-types";
+
 const fs = require("node:fs");
 const path = require("node:path");
 const { app } = require("electron");
 
-const AGENT_DEFINITIONS = [
+const AGENT_DEFINITIONS: AgentDefinition[] = [
   { id: "claude", label: "Claude Code", defaultCommand: "claude" },
   { id: "codex", label: "Codex CLI", defaultCommand: "codex" },
   { id: "gemini", label: "Gemini CLI", defaultCommand: "gemini" },
@@ -16,14 +26,14 @@ const AGENT_DEFINITIONS = [
   { id: "amp", label: "Amp", defaultCommand: "amp" },
   { id: "warp", label: "Warp", defaultCommand: "warp" }
 ];
-const DEFAULT_AGENT_ID = "claude";
+const DEFAULT_AGENT_ID: AgentId = "claude";
 const LEGACY_CLAUDE_EXECUTABLE_PATH = "/opt/homebrew/bin/claude";
 const KNOWN_AGENT_IDS = new Set(AGENT_DEFINITIONS.map((agent) => agent.id));
-const DEFAULT_AGENT_COMMANDS = Object.fromEntries(
+const DEFAULT_AGENT_COMMANDS: Record<AgentId, string> = Object.fromEntries(
   AGENT_DEFINITIONS.map((agent) => [agent.id, agent.defaultCommand])
-);
+) as Record<AgentId, string>;
 
-const DEFAULT_PREFERENCES = {
+const DEFAULT_PREFERENCES: AppPreferences = {
   defaultAgentId: DEFAULT_AGENT_ID,
   agentCommandOverrides: { ...DEFAULT_AGENT_COMMANDS },
   claudeExecutablePath: DEFAULT_AGENT_COMMANDS.claude,
@@ -47,11 +57,11 @@ const SESSION_TAG_COLORS = new Set([
   "gray"
 ]);
 
-function loadState() {
+function loadState(): StoredAppState {
   const statePath = getStatePath();
 
   try {
-    const parsed = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    const parsed = JSON.parse(fs.readFileSync(statePath, "utf8")) as unknown;
     const migrated = migrateSnapshot(parsed);
     normalizeRestoredSessions(migrated.sessions);
     return migrated;
@@ -60,13 +70,13 @@ function loadState() {
   }
 }
 
-function saveState(state) {
+function saveState(state: StoredAppState): void {
   const statePath = getStatePath();
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
 }
 
-function emptyState() {
+function emptyState(): StoredAppState {
   return {
     workspaces: [],
     repos: [],
@@ -75,14 +85,15 @@ function emptyState() {
   };
 }
 
-function migrateSnapshot(snapshot) {
+function migrateSnapshot(snapshot: unknown): StoredAppState {
+  const safeSnapshot = isPlainObject(snapshot) ? snapshot : {};
   const preferences = normalizePreferences({
     ...DEFAULT_PREFERENCES,
-    ...(snapshot.preferences || {})
+    ...(isPlainObject(safeSnapshot.preferences) ? safeSnapshot.preferences : {})
   });
 
-  const sessions = Array.isArray(snapshot.sessions)
-    ? snapshot.sessions.map((session) => ({
+  const sessions = Array.isArray(safeSnapshot.sessions)
+    ? safeSnapshot.sessions.map((session) => ({
         initialPrompt: "",
         launchesClaudeOnStart: true,
         startupAgentId: null,
@@ -96,24 +107,26 @@ function migrateSnapshot(snapshot) {
         tagColor: null,
         sessionIconPath: null,
         sessionIconUpdatedAt: null,
-        ...session
-      }))
+        ...(isPlainObject(session) ? session : {})
+      })) as SessionRecord[]
     : [];
 
   return {
-    workspaces: Array.isArray(snapshot.workspaces) ? snapshot.workspaces : [],
-    repos: normalizeRepos(snapshot.repos),
+    workspaces: Array.isArray(safeSnapshot.workspaces)
+      ? safeSnapshot.workspaces as StoredAppState["workspaces"]
+      : [],
+    repos: normalizeRepos(safeSnapshot.repos),
     sessions,
     preferences
   };
 }
 
-function normalizePreferences(preferences) {
+function normalizePreferences(preferences: Record<string, unknown>): AppPreferences {
   const defaultAgentId = normalizeAgentId(preferences.defaultAgentId);
-  const nextAgentCommands = { ...DEFAULT_AGENT_COMMANDS };
-  const savedOverrides =
+  const nextAgentCommands: Record<AgentId, string> = { ...DEFAULT_AGENT_COMMANDS };
+  const savedOverrides: Record<string, unknown> =
     preferences && typeof preferences.agentCommandOverrides === "object"
-      ? preferences.agentCommandOverrides
+      ? preferences.agentCommandOverrides as Record<string, unknown>
       : {};
 
   for (const agent of AGENT_DEFINITIONS) {
@@ -128,14 +141,15 @@ function normalizePreferences(preferences) {
   }
 
   return {
+    ...DEFAULT_PREFERENCES,
     ...preferences,
-    defaultAgentId,
+    defaultAgentId: defaultAgentId || DEFAULT_AGENT_ID,
     agentCommandOverrides: nextAgentCommands,
     claudeExecutablePath: nextAgentCommands.claude
   };
 }
 
-function normalizeRestoredSessions(sessions) {
+function normalizeRestoredSessions(sessions: SessionRecord[]): void {
   const now = new Date().toISOString();
 
   for (const session of sessions) {
@@ -164,23 +178,23 @@ function normalizeRestoredSessions(sessions) {
   }
 }
 
-function normalizeRepos(repos) {
+function normalizeRepos(repos: unknown): RepoRecord[] {
   if (!Array.isArray(repos)) {
     return [];
   }
 
   return repos.map((repo) => ({
     wikiEnabled: false,
-    ...repo
-  }));
+    ...(isPlainObject(repo) ? repo : {})
+  })) as RepoRecord[];
 }
 
-function normalizeAgentId(value, fallback = DEFAULT_AGENT_ID) {
+function normalizeAgentId(value: unknown, fallback: AgentId | null = DEFAULT_AGENT_ID): AgentId | null {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return KNOWN_AGENT_IDS.has(normalized) ? normalized : fallback;
+  return KNOWN_AGENT_IDS.has(normalized as AgentId) ? normalized as AgentId : fallback;
 }
 
-function normalizeAgentCommand(value, agentId) {
+function normalizeAgentCommand(value: unknown, agentId: AgentId): string {
   const normalized = typeof value === "string" ? value.trim() : "";
   if (!normalized) {
     return DEFAULT_AGENT_COMMANDS[agentId] || "";
@@ -193,7 +207,7 @@ function normalizeAgentCommand(value, agentId) {
   return normalized;
 }
 
-function isExecutableFile(filePath) {
+function isExecutableFile(filePath: string): boolean {
   try {
     fs.accessSync(filePath, fs.constants.X_OK);
     return true;
@@ -202,12 +216,12 @@ function isExecutableFile(filePath) {
   }
 }
 
-function normalizeSessionTagColor(value) {
+function normalizeSessionTagColor(value: unknown): SessionTagColor | null {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return SESSION_TAG_COLORS.has(normalized) ? normalized : null;
+  return SESSION_TAG_COLORS.has(normalized) ? normalized as SessionTagColor : null;
 }
 
-function normalizeSessionIconPath(value) {
+function normalizeSessionIconPath(value: unknown): string | null {
   if (typeof value !== "string" || !value) {
     return null;
   }
@@ -215,8 +229,12 @@ function normalizeSessionIconPath(value) {
   return fs.existsSync(value) ? value : null;
 }
 
-function getStatePath() {
+function getStatePath(): string {
   return path.join(app.getPath("userData"), "state.json");
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 module.exports = {

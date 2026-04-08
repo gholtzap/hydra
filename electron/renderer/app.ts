@@ -1,3 +1,21 @@
+import type {
+  AgentId,
+  AppPreferences,
+  AppStateSnapshot,
+  ClaudeSettingsContext,
+  FileTreeNode as SharedFileTreeNode,
+  JsonObject,
+  JsonValue,
+  RepoSnapshot,
+  SessionSearchResult as SharedSessionSearchResult,
+  SessionSummary,
+  SessionTagColor,
+  TrackedPortStatus,
+  WikiContext,
+  WikiTreeNode as SharedWikiTreeNode,
+  WorkspaceRecord
+} from "../shared-types";
+
 const api = window.claudeWorkspace;
 let sessionSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 const SECTION_ORDER = ["sidebar", "sidebar-drawer", "main", "terminal"] as const;
@@ -195,6 +213,13 @@ type WorkspaceSplitNode = {
 
 type WorkspaceLayoutNode = WorkspaceLeafNode | WorkspaceSplitNode;
 type WorkspaceNavigationDirection = "left" | "right" | "up" | "down";
+type RendererSelection =
+  | { type: "inbox"; id: null }
+  | { type: "repo"; id: string }
+  | { type: "wiki"; id: string }
+  | { type: "session"; id: string }
+  | { type: "files"; id: string }
+  | { type: "status"; id: null };
 
 type VisibleSessionPane = {
   sessionId: string;
@@ -207,34 +232,16 @@ type VisibleSessionPane = {
 };
 
 type TerminalMount = {
-  terminal: any;
-  fitAddon: any;
+  terminal: InstanceType<typeof Terminal>;
+  fitAddon: InstanceType<typeof FitAddon.FitAddon>;
   resizeObserver: ResizeObserver;
 };
 
-type WikiTreeNode = {
-  type: "directory" | "file";
-  name: string;
-  relativePath: string;
-  children?: WikiTreeNode[];
-};
+type WikiTreeNode = SharedWikiTreeNode;
+type FileTreeNode = SharedFileTreeNode;
 
-type FileTreeNode = {
-  type: "directory" | "file";
-  name: string;
-  path: string;
-  relativePath: string;
-  children?: FileTreeNode[];
-};
-
-type SessionSearchResult = {
-  source: "claude" | "codex";
-  filePath: string;
-  sessionId: string | null;
+type SessionSearchResult = SharedSessionSearchResult & {
   hydraSessionId?: string | null;
-  lineNumber: number | null;
-  preview: string;
-  title: string;
 };
 
 const SESSION_TAG_OPTIONS = [
@@ -264,21 +271,128 @@ const AGENT_OPTIONS = [
   { id: "amp", label: "Amp", defaultCommand: "amp" },
   { id: "warp", label: "Warp", defaultCommand: "warp" }
 ] as const;
-const DEFAULT_AGENT_ID = "claude";
-const AGENT_IDS = new Set<string>(AGENT_OPTIONS.map((agent) => agent.id));
+const DEFAULT_AGENT_ID: AgentId = "claude";
+const AGENT_IDS = new Set<AgentId>(AGENT_OPTIONS.map((agent) => agent.id));
 const DEFAULT_AGENT_COMMANDS = Object.fromEntries(
   AGENT_OPTIONS.map((agent) => [agent.id, agent.defaultCommand])
-) as Record<string, string>;
+) as Record<AgentId, string>;
 
-const state = {
-  workspaces: [] as any[],
-  repos: [] as any[],
-  sessions: [] as any[],
-  preferences: {} as Record<string, any>,
+const INITIAL_PREFERENCES: AppPreferences = {
+  defaultAgentId: DEFAULT_AGENT_ID,
+  agentCommandOverrides: { ...DEFAULT_AGENT_COMMANDS },
+  claudeExecutablePath: DEFAULT_AGENT_COMMANDS.claude,
+  shellExecutablePath: "/bin/zsh",
+  notificationsEnabled: true,
+  showInAppBadges: true,
+  showNativeNotifications: true,
+  sessionWorkspaceLayout: null,
+  keybindings: {},
+  themeAppearance: "system",
+  themeActiveId: "workspace-default",
+  themeCustomThemes: []
+};
+
+const state: AppStateSnapshot = {
+  workspaces: [] as WorkspaceRecord[],
+  repos: [] as RepoSnapshot[],
+  sessions: [] as SessionSummary[],
+  preferences: { ...INITIAL_PREFERENCES },
   lazygitInstalled: false
 };
 
-const ui = {
+type UiState = {
+  selection: RendererSelection;
+  focusSection: SectionId;
+  sidebarExpandedRepoId: string | null;
+  sidebarNavItem: string;
+  mainListSessionId: string | null;
+  terminalMounts: Map<string, TerminalMount>;
+  renamingSessionId: string | null;
+  renamingSessionTitle: string;
+  quickSwitcherQuery: string;
+  sessionSearchQuery: string;
+  sessionSearchRepoId: string | null;
+  sessionSearchResults: SessionSearchResult[];
+  sessionSearchError: string;
+  sessionSearchLoading: boolean;
+  sessionSearchSelectedIndex: number;
+  sessionSearchLoadId: number;
+  commandPaletteQuery: string;
+  settingsTab: string;
+  settingsClaudeView: ClaudeSettingsView;
+  settingsContext: ClaudeSettingsContext | null;
+  settingsSelectedFilePath: string | null;
+  settingsJsonCategoryId: string;
+  settingsEditorText: string;
+  settingsSaveMessage: string;
+  settingsJsonDraft: JsonValue | null;
+  settingsJsonError: string;
+  settingsShowRawJson: boolean;
+  marketplaceResults: MarketplaceSkillSummary[];
+  marketplaceSelectedId: string | null;
+  marketplaceSelectedDetail: MarketplaceSkillDetails | null;
+  marketplaceLoading: boolean;
+  marketplaceDetailLoading: boolean;
+  marketplaceError: string;
+  marketplaceInstallMessage: string;
+  marketplaceInspectUrl: string;
+  marketplaceInspectMessage: string;
+  marketplacePreferredScope: "user" | "project";
+  portStatusData: TrackedPortStatus | null;
+  portStatusLoading: boolean;
+  portStatusShowAll: boolean;
+  portStatusPollTimer: number | null;
+  wikiContextRepoId: string | null;
+  wikiContext: WikiContext | null;
+  wikiSelectedPath: string | null;
+  wikiPreviewMarkdown: string;
+  wikiStatusMessage: string;
+  wikiLoading: boolean;
+  workspaceStructureSignature: string;
+  draggingSessionId: string | null;
+  draggingSessionSource: string | null;
+  dragTargetSessionId: string | null;
+  dragTargetZone: WorkspaceDropZone | null;
+  fileBrowserRepoId: string | null;
+  fileBrowserTree: FileTreeNode[] | null;
+  fileBrowserSelectedPath: string | null;
+  fileBrowserFileContent: string | null;
+  fileBrowserFileTooLarge: boolean;
+  fileBrowserLoadingFile: boolean;
+  fileBrowserLoadId: number;
+  fileBrowserLoading: boolean;
+  fileBrowserExpandedDirs: Set<string>;
+  resizeDragState: {
+    splitPath: string;
+    handleIndex: number;
+    axis: WorkspaceSplitAxis;
+    startPos: number;
+    startSizes: number[];
+    containerSize: number;
+    splitContainer: HTMLElement | null;
+  } | null;
+  tokscaleSessionId: string | null;
+  tokscaleTerminalMount: TerminalMount | null;
+  tokscaleUnsubOutput: (() => void) | null;
+  tokscaleUnsubExit: (() => void) | null;
+  lazygitSessionId: string | null;
+  lazygitTerminalMount: TerminalMount | null;
+  lazygitUnsubOutput: (() => void) | null;
+  lazygitUnsubExit: (() => void) | null;
+  keybindingRecordingAction: KeybindingAction | null;
+  lassoActive: boolean;
+  lassoPending: boolean;
+  lassoOriginX: number;
+  lassoOriginY: number;
+  lassoCurrentX: number;
+  lassoCurrentY: number;
+  lassoContainerRepoId: string | null;
+  lassoPressedSessionId: string | null;
+  lassoSuppressClickUntil: number;
+  selectedSessionIds: Set<string>;
+};
+
+const ui: UiState = {
   selection: { type: "inbox", id: null },
   focusSection: "main" as SectionId,
   sidebarExpandedRepoId: null as string | null,
@@ -321,7 +435,7 @@ const ui = {
   portStatusShowAll: false,
   portStatusPollTimer: null as number | null,
   wikiContextRepoId: null as string | null,
-  wikiContext: null as any,
+  wikiContext: null,
   wikiSelectedPath: null as string | null,
   wikiPreviewMarkdown: "",
   wikiStatusMessage: "",
@@ -1029,32 +1143,33 @@ api.onSessionUpdated((payload) => {
 });
 
 api.onCommand(async ({ command, sessionId, repoId }) => {
+  const targetRepoId = repoId || currentRepoId();
   switch (command) {
     case "new-session":
-      await startDefaultAgentSession(repoId || currentRepoId());
+      await startDefaultAgentSession(targetRepoId);
       break;
     case "open-wiki":
-      await openWiki(repoId || currentRepoId());
+      await openWiki(targetRepoId);
       break;
     case "initialize-wiki":
-      await initializeWiki(repoId || currentRepoId());
+      await initializeWiki(targetRepoId);
       break;
     case "refresh-wiki":
-      await runWikiAgentAction("refresh", repoId || currentRepoId());
+      await runWikiAgentAction("refresh", targetRepoId);
       break;
     case "lint-wiki":
-      await runWikiAgentAction("lint", repoId || currentRepoId());
+      await runWikiAgentAction("lint", targetRepoId);
       break;
     case "ask-wiki":
-      await runWikiAgentAction("ask", repoId || currentRepoId());
+      await runWikiAgentAction("ask", targetRepoId);
       break;
     case "reveal-wiki":
-      if (repoId || currentRepoId()) {
-        await api.revealWiki(repoId || currentRepoId());
+      if (targetRepoId) {
+        await api.revealWiki(targetRepoId);
       }
       break;
     case "toggle-wiki":
-      await toggleWiki(repoId || currentRepoId());
+      await toggleWiki(targetRepoId);
       break;
     case "quick-switcher":
       openQuickSwitcher();
@@ -4744,8 +4859,11 @@ async function handleClick(event) {
       }
       break;
     case "reveal-wiki":
-      if (target.dataset.repoId || currentRepoId()) {
-        await api.revealWiki(target.dataset.repoId || currentRepoId());
+      {
+        const repoId = target.dataset.repoId || currentRepoId();
+        if (repoId) {
+          await api.revealWiki(repoId);
+        }
       }
       break;
     case "toggle-wiki":
@@ -5837,9 +5955,15 @@ async function handleChange(event) {
   }
 
   if (target.dataset.agentCommandId) {
+    const agentId = normalizeAgentId(target.dataset.agentCommandId, null);
+    if (!agentId) {
+      return;
+    }
+
     await api.updatePreferences({
       agentCommandOverrides: {
-        [target.dataset.agentCommandId]: target.value
+        ...state.preferences.agentCommandOverrides,
+        [agentId]: target.value
       }
     });
     return;
@@ -5853,7 +5977,12 @@ async function handleChange(event) {
       await api.updatePreferences({ notificationsEnabled: (target as HTMLInputElement).checked });
       break;
     case "pref-default-agent":
-      await api.updatePreferences({ defaultAgentId: target.value });
+      {
+        const nextAgentId = normalizeAgentId(target.value, null);
+        if (nextAgentId) {
+          await api.updatePreferences({ defaultAgentId: nextAgentId });
+        }
+      }
       break;
     case "pref-shell-executable":
       await api.updatePreferences({ shellExecutablePath: target.value });
@@ -5972,7 +6101,7 @@ async function selectRepo(
 }
 
 async function openWiki(
-  repoId,
+  repoId: string | null,
   nextFocusSection: SectionId | null = null
 ) {
   if (!repoId) {
@@ -5994,7 +6123,7 @@ async function openWiki(
   await loadWikiContext(repoId);
 }
 
-async function initializeWiki(repoId) {
+async function initializeWiki(repoId: string | null) {
   if (!repoId) {
     window.alert("Select a folder first.");
     return;
@@ -6005,7 +6134,7 @@ async function initializeWiki(repoId) {
   await openWiki(repoId);
 }
 
-async function toggleWiki(repoId) {
+async function toggleWiki(repoId: string | null) {
   if (!repoId) {
     window.alert("Select a folder first.");
     return;
@@ -6188,16 +6317,19 @@ function syncPortStatusPolling() {
   }
 }
 
-function normalizeAgentId(value: string | null | undefined, fallback: string | null = DEFAULT_AGENT_ID) {
+function normalizeAgentId(
+  value: string | null | undefined,
+  fallback: AgentId | null = DEFAULT_AGENT_ID
+): AgentId | null {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return AGENT_IDS.has(normalized) ? normalized : fallback;
+  return AGENT_IDS.has(normalized as AgentId) ? normalized as AgentId : fallback;
 }
 
-function defaultSessionAgentId() {
+function defaultSessionAgentId(): AgentId {
   return normalizeAgentId(state.preferences.defaultAgentId) || DEFAULT_AGENT_ID;
 }
 
-function sessionAgentId(session) {
+function sessionAgentId(session: SessionSummary | null | undefined): AgentId | null {
   return normalizeAgentId(session?.startupAgentId, null);
 }
 
@@ -6210,13 +6342,13 @@ function agentLabel(agentId: string | null | undefined) {
   return agentOption(agentId)?.label || "Shell";
 }
 
-function agentCommandValue(agentId: string) {
+function agentCommandValue(agentId: AgentId): string {
   const savedValue = state.preferences.agentCommandOverrides?.[agentId];
   const normalized = typeof savedValue === "string" ? savedValue.trim() : "";
   return normalized || DEFAULT_AGENT_COMMANDS[agentId] || "";
 }
 
-function defaultSessionRepoId(explicitRepoId = null) {
+function defaultSessionRepoId(explicitRepoId: string | null = null): string | null {
   return (
     explicitRepoId ||
     currentRepoId() ||
@@ -6227,7 +6359,7 @@ function defaultSessionRepoId(explicitRepoId = null) {
   );
 }
 
-async function startDefaultAgentSession(explicitRepoId = null) {
+async function startDefaultAgentSession(explicitRepoId: string | null = null): Promise<string | null> {
   const repoId = defaultSessionRepoId(explicitRepoId);
   if (!repoId) {
     window.alert("Open a folder first.");
@@ -6284,7 +6416,7 @@ async function clearSessionIcon(sessionId) {
   }
 }
 
-async function setSessionTagColor(sessionId, tagColor) {
+async function setSessionTagColor(sessionId: string | null | undefined, tagColor: string | null) {
   if (!sessionId) {
     return;
   }
@@ -6609,7 +6741,10 @@ function clearWikiState() {
   ui.wikiLoading = false;
 }
 
-async function loadWikiContext(repoId, preferredPath = null) {
+async function loadWikiContext(
+  repoId: string | null,
+  preferredPath: string | null = null
+): Promise<WikiContext | null> {
   if (!repoId) {
     clearWikiState();
     return null;
@@ -6652,7 +6787,11 @@ async function loadWikiContext(repoId, preferredPath = null) {
   }
 }
 
-async function selectWikiFile(repoId, relativePath, options: { suppressReload?: boolean } = {}) {
+async function selectWikiFile(
+  repoId: string | null,
+  relativePath: string | null | undefined,
+  options: { suppressReload?: boolean } = {}
+) {
   if (!repoId || !relativePath) {
     return;
   }
@@ -6672,7 +6811,7 @@ async function selectWikiFile(repoId, relativePath, options: { suppressReload?: 
   }
 }
 
-async function runWikiAgentAction(action: "refresh" | "lint" | "ask", repoId) {
+async function runWikiAgentAction(action: "refresh" | "lint" | "ask", repoId: string | null) {
   if (!repoId) {
     window.alert("Select a folder first.");
     return;
@@ -6711,7 +6850,8 @@ function activeClaudeSessionForRepo(repoId) {
   if (ui.selection.type === "session") {
     const selectedSession = sessionById(ui.selection.id);
     if (
-      selectedSession?.repoID === repoId &&
+      selectedSession &&
+      selectedSession.repoID === repoId &&
       sessionAgentId(selectedSession) === DEFAULT_AGENT_ID &&
       selectedSession.runtimeState === "live"
     ) {
@@ -7030,11 +7170,11 @@ function syncSettingsJsonDraftFromText() {
     ui.settingsJsonError = "";
   } catch (error) {
     ui.settingsJsonDraft = null;
-    ui.settingsJsonError = error.message;
+    ui.settingsJsonError = error instanceof Error ? error.message : "Invalid JSON.";
   }
 }
 
-function currentJsonSettingsValue() {
+function currentJsonSettingsValue(): JsonValue {
   return ui.settingsJsonDraft ?? {};
 }
 
@@ -7100,7 +7240,7 @@ function addRootJsonSetting() {
   ui.settingsSaveMessage = "";
 }
 
-function currentEnabledPluginsSettingsValue() {
+function currentEnabledPluginsSettingsValue(): JsonObject | null {
   const rootValue = currentJsonSettingsValue();
   if (!isJsonObject(rootValue)) {
     return null;
@@ -7113,7 +7253,7 @@ function currentEnabledPluginsSettingsValue() {
   return isJsonObject(rootValue.enabledPlugins) ? rootValue.enabledPlugins : null;
 }
 
-function selectedEnabledPluginOverride(pluginId: string) {
+function selectedEnabledPluginOverride(pluginId: string): boolean | undefined {
   const enabledPluginsValue = currentEnabledPluginsSettingsValue();
   if (!enabledPluginsValue) {
     return undefined;
@@ -7155,10 +7295,10 @@ async function createClaudeSkillFile() {
   const nameInput = settingsDialog.querySelector("#skills-new-name") as HTMLInputElement | null;
   const scopeInput = settingsDialog.querySelector("#skills-new-scope") as HTMLSelectElement | null;
   const rawName = nameInput?.value.trim() || "";
-  const scope = scopeInput?.value || "project";
+  const scope: "user" | "project" = scopeInput?.value === "user" ? "user" : "project";
   const skillName = slugifySkillName(rawName);
-  const skillRoots = ui.settingsContext?.skillRoots || {};
-  const rootPath = scope === "user" ? skillRoots.user : skillRoots.project;
+  const skillRoots = ui.settingsContext?.skillRoots || null;
+  const rootPath = scope === "user" ? skillRoots?.user ?? null : skillRoots?.project ?? null;
 
   if (!rawName) {
     ui.settingsSaveMessage = "Enter a skill name first.";
@@ -7487,7 +7627,7 @@ function jsonValueTypeLabel(value) {
   }
 }
 
-function isJsonObject(value) {
+function isJsonObject(value: unknown): value is JsonObject {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -8247,15 +8387,19 @@ function workspaceDropLabel(
   }
 }
 
-function sessionById(sessionId) {
+function sessionById(sessionId: string): SessionSummary | null {
   return state.sessions.find((session) => session.id === sessionId) || null;
 }
 
-function repoById(repoId) {
+function repoById(repoId: string | null | undefined): RepoSnapshot | null {
+  if (!repoId) {
+    return null;
+  }
+
   return state.repos.find((repo) => repo.id === repoId) || null;
 }
 
-function currentRepoId() {
+function currentRepoId(): string | null {
   if (ui.selection.type === "repo") {
     return ui.selection.id;
   }
@@ -8995,9 +9139,9 @@ function compareInboxSessions(left, right) {
   return compareSessionsByUpdatedAt(left, right);
 }
 
-function normalizeSessionTagColor(value) {
+function normalizeSessionTagColor(value: unknown): SessionTagColor | null {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return SESSION_TAG_VALUES.has(normalized) ? normalized : null;
+  return SESSION_TAG_VALUES.has(normalized) ? normalized as SessionTagColor : null;
 }
 
 function sessionTagLabel(tagColor) {
@@ -9099,7 +9243,7 @@ function renderPinIcon() {
   `;
 }
 
-function selectionMatches(type, id = null) {
+function selectionMatches(type: RendererSelection["type"], id: string | null = null): boolean {
   return ui.selection.type === type && (id === null || ui.selection.id === id);
 }
 

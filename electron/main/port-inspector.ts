@@ -1,10 +1,6 @@
-const { execFile } = require("node:child_process");
+import type { PortListener, PortStatusGroup, PortStatusItem, TrackedPortStatus } from "../shared-types";
 
-type PortListener = {
-  pid: number;
-  command: string;
-  address: string;
-};
+const { execFile } = require("node:child_process");
 
 const TRACKED_PORT_GROUPS = [
   {
@@ -43,12 +39,12 @@ const TRACKED_PORTS = [...new Set(TRACKED_PORT_GROUPS.flatMap((group) => group.p
   (left, right) => left - right
 );
 
-async function inspectTrackedPorts() {
+async function inspectTrackedPorts(): Promise<TrackedPortStatus> {
   const scannedAt = new Date().toISOString();
 
   try {
     const listenersByPort = await loadListeningPorts();
-    const portsByNumber = new Map();
+    const portsByNumber = new Map<number, PortStatusItem>();
 
     const ports = TRACKED_PORTS.map((port) => {
       const status = summarizePort(port, listenersByPort.get(port) || []);
@@ -56,8 +52,10 @@ async function inspectTrackedPorts() {
       return status;
     });
 
-    const groups = TRACKED_PORT_GROUPS.map((group) => {
-      const groupPorts = group.ports.map((port) => portsByNumber.get(port));
+    const groups: PortStatusGroup[] = TRACKED_PORT_GROUPS.map((group) => {
+      const groupPorts = group.ports
+        .map((port) => portsByNumber.get(port))
+        .filter((port): port is PortStatusItem => !!port);
       return {
         id: group.id,
         label: group.label,
@@ -80,7 +78,7 @@ async function inspectTrackedPorts() {
       ports,
       activePorts
     };
-  } catch (error) {
+  } catch (error: unknown) {
     return {
       available: false,
       scannedAt,
@@ -102,7 +100,7 @@ async function inspectTrackedPorts() {
   }
 }
 
-function summarizePort(port, listeners) {
+function summarizePort(port: number, listeners: PortListener[]): PortStatusItem {
   const sortedListeners = [...listeners].sort((left, right) => {
     const commandDelta = left.command.localeCompare(right.command);
     if (commandDelta !== 0) {
@@ -130,10 +128,10 @@ function loadListeningPorts(): Promise<Map<number, PortListener[]>> {
       "lsof",
       ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"],
       { maxBuffer: 1024 * 1024 },
-      (error, stdout, stderr) => {
+      (error: (NodeJS.ErrnoException & { code?: number | string }) | null, stdout: string, stderr: string) => {
         if (error) {
-          const code = error.code;
-          if (code === 1 && !stdout.trim() && !stderr.trim()) {
+          const code = error.code as number | string | undefined;
+          if ((code === 1 || code === "1") && !stdout.trim() && !stderr.trim()) {
             resolve(new Map());
             return;
           }
@@ -148,10 +146,10 @@ function loadListeningPorts(): Promise<Map<number, PortListener[]>> {
   });
 }
 
-function parseLsofListeners(output): Map<number, PortListener[]> {
+function parseLsofListeners(output: string): Map<number, PortListener[]> {
   const listenersByPort = new Map<number, PortListener[]>();
   const seenListeners = new Set();
-  let currentPid = null;
+  let currentPid: number | null = null;
   let currentCommand = "unknown";
 
   for (const rawLine of String(output || "").split(/\r?\n/)) {
@@ -199,7 +197,7 @@ function parseLsofListeners(output): Map<number, PortListener[]> {
   return listenersByPort;
 }
 
-function parsePort(value) {
+function parsePort(value: string): number | null {
   const match = /:(\d+)(?:->.*)?$/.exec(String(value || ""));
   if (!match) {
     return null;
@@ -209,23 +207,23 @@ function parsePort(value) {
   return Number.isFinite(port) ? port : null;
 }
 
-function humanizePortInspectionError(error) {
-  if (error?.code === "ENOENT") {
+function humanizePortInspectionError(error: unknown): string {
+  if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
     return "Port inspection requires lsof, but it is not available on this system.";
   }
 
-  if (error?.message) {
+  if (error instanceof Error && error.message) {
     return `Port inspection failed: ${error.message}`;
   }
 
   return "Port inspection failed for an unknown reason.";
 }
 
-function uniqueValues(values) {
+function uniqueValues(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
 }
 
-function range(start, end) {
+function range(start: number, end: number): number[] {
   return Array.from({ length: end - start + 1 }, (_, index) => start + index);
 }
 

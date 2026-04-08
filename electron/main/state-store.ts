@@ -2,8 +2,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { app } = require("electron");
 
+const DEFAULT_CLAUDE_EXECUTABLE = "claude";
+const LEGACY_CLAUDE_EXECUTABLE_PATH = "/opt/homebrew/bin/claude";
+
 const DEFAULT_PREFERENCES = {
-  claudeExecutablePath: "/opt/homebrew/bin/claude",
+  claudeExecutablePath: DEFAULT_CLAUDE_EXECUTABLE,
   shellExecutablePath: process.env.SHELL || "/bin/zsh",
   notificationsEnabled: true,
   showInAppBadges: true,
@@ -53,10 +56,10 @@ function emptyState() {
 }
 
 function migrateSnapshot(snapshot) {
-  const preferences = {
+  const preferences = normalizePreferences({
     ...DEFAULT_PREFERENCES,
     ...(snapshot.preferences || {})
-  };
+  });
 
   const sessions = Array.isArray(snapshot.sessions)
     ? snapshot.sessions.map((session) => ({
@@ -81,6 +84,13 @@ function migrateSnapshot(snapshot) {
     repos: normalizeRepos(snapshot.repos),
     sessions,
     preferences
+  };
+}
+
+function normalizePreferences(preferences) {
+  return {
+    ...preferences,
+    claudeExecutablePath: normalizeClaudeExecutablePath(preferences.claudeExecutablePath)
   };
 }
 
@@ -115,6 +125,28 @@ function normalizeRepos(repos) {
     wikiEnabled: false,
     ...repo
   }));
+}
+
+function normalizeClaudeExecutablePath(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized) {
+    return DEFAULT_CLAUDE_EXECUTABLE;
+  }
+
+  if (normalized === LEGACY_CLAUDE_EXECUTABLE_PATH && !isExecutableFile(normalized)) {
+    return DEFAULT_CLAUDE_EXECUTABLE;
+  }
+
+  return normalized;
+}
+
+function isExecutableFile(filePath) {
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeSessionTagColor(value) {

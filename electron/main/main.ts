@@ -59,6 +59,8 @@ const SESSION_TAG_COLORS = new Set([
   "gray"
 ]);
 const SESSION_ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
+const DEFAULT_CLAUDE_EXECUTABLE = "claude";
+const LEGACY_CLAUDE_EXECUTABLE_PATH = "/opt/homebrew/bin/claude";
 
 function buildFileTree(rootPath: string, currentPath: string, depth: number): any[] {
   if (depth >= 5) return [];
@@ -1582,7 +1584,7 @@ function resolveCommandPath(command) {
 }
 
 function resolvedClaudeCommand(preferences, session) {
-  const executable = shellEscape(preferences.claudeExecutablePath?.trim() || "claude");
+  const executable = shellEscape(resolvedClaudeExecutable(preferences));
   if (!session?.launchesClaudeOnStart) {
     return executable;
   }
@@ -1602,8 +1604,30 @@ function resolvedClaudeCommand(preferences, session) {
   return executable;
 }
 
+function resolvedClaudeExecutable(preferences) {
+  const candidate = preferences.claudeExecutablePath?.trim();
+  if (!candidate) {
+    return DEFAULT_CLAUDE_EXECUTABLE;
+  }
+
+  if (candidate === LEGACY_CLAUDE_EXECUTABLE_PATH && !isExecutableFile(candidate)) {
+    return DEFAULT_CLAUDE_EXECUTABLE;
+  }
+
+  return candidate;
+}
+
 function shellEscape(value) {
   return `'${String(value || "").replace(/'/g, `'\\''`)}'`;
+}
+
+function isExecutableFile(filePath) {
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function blockerKey(blocker) {

@@ -11,7 +11,7 @@ interface ClaudeWorkspaceApi {
   renameSession: (sessionId: string, title: string) => Promise<any>;
   updateSessionOrganization: (
     sessionId: string,
-    patch: { isPinned?: boolean; tagColor?: string | null }
+    patch: { isPinned?: boolean; tagColor?: string | null; repoID?: string }
   ) => Promise<any>;
   importSessionIcon: (sessionId: string) => Promise<any>;
   clearSessionIcon: (sessionId: string) => Promise<any>;

@@ -250,6 +250,25 @@ const SESSION_TAG_OPTIONS = [
 const SESSION_TAG_VALUES = new Set<string>(
   SESSION_TAG_OPTIONS.map((option) => option.value).filter(Boolean) as string[]
 );
+const AGENT_OPTIONS = [
+  { id: "claude", label: "Claude Code", defaultCommand: "claude" },
+  { id: "codex", label: "Codex CLI", defaultCommand: "codex" },
+  { id: "gemini", label: "Gemini CLI", defaultCommand: "gemini" },
+  { id: "aider", label: "Aider", defaultCommand: "aider" },
+  { id: "opencode", label: "OpenCode", defaultCommand: "opencode" },
+  { id: "goose", label: "Goose", defaultCommand: "goose" },
+  { id: "amazon-q", label: "Amazon Q Developer CLI", defaultCommand: "q chat" },
+  { id: "github-copilot", label: "GitHub Copilot CLI", defaultCommand: "gh copilot" },
+  { id: "junie", label: "Junie CLI", defaultCommand: "junie" },
+  { id: "qwen", label: "Qwen Code", defaultCommand: "qwen-code" },
+  { id: "amp", label: "Amp", defaultCommand: "amp" },
+  { id: "warp", label: "Warp", defaultCommand: "warp" }
+] as const;
+const DEFAULT_AGENT_ID = "claude";
+const AGENT_IDS = new Set<string>(AGENT_OPTIONS.map((agent) => agent.id));
+const DEFAULT_AGENT_COMMANDS = Object.fromEntries(
+  AGENT_OPTIONS.map((agent) => [agent.id, agent.defaultCommand])
+) as Record<string, string>;
 
 const state = {
   workspaces: [] as any[],
@@ -328,7 +347,17 @@ const ui = {
   lazygitTerminalMount: null as TerminalMount | null,
   lazygitUnsubOutput: null as (() => void) | null,
   lazygitUnsubExit: null as (() => void) | null,
-  keybindingRecordingAction: null as KeybindingAction | null
+  keybindingRecordingAction: null as KeybindingAction | null,
+  lassoActive: false,
+  lassoPending: false,
+  lassoOriginX: 0,
+  lassoOriginY: 0,
+  lassoCurrentX: 0,
+  lassoCurrentY: 0,
+  lassoContainerRepoId: null as string | null,
+  lassoPressedSessionId: null as string | null,
+  lassoSuppressClickUntil: 0,
+  selectedSessionIds: new Set<string>()
 };
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
@@ -954,7 +983,7 @@ api.onSessionUpdated((payload) => {
 api.onCommand(async ({ command, sessionId, repoId }) => {
   switch (command) {
     case "new-session":
-      await startDefaultClaudeSession(repoId || currentRepoId());
+      await startDefaultAgentSession(repoId || currentRepoId());
       break;
     case "open-wiki":
       await openWiki(repoId || currentRepoId());
@@ -1151,7 +1180,8 @@ function sidebarSignature() {
       ).join(",")
     : "";
   const selSig = `${ui.selection.type}:${(ui.selection as any).id ?? ""}`;
-  return `${inboxCount}|${railSig}|${drawerSig}|${selSig}|${ui.sidebarNavItem}|${ui.sidebarExpandedRepoId}`;
+  const multiSelSig = ui.selectedSessionIds.size ? [...ui.selectedSessionIds].sort().join(",") : "";
+  return `${inboxCount}|${railSig}|${drawerSig}|${selSig}|${ui.sidebarNavItem}|${ui.sidebarExpandedRepoId}|${multiSelSig}`;
 }
 
 function renderSidebar() {
@@ -1272,8 +1302,9 @@ function renderSidebarProjectDrawer(repo) {
 }
 
 function renderSidebarDrawerSession(session, repo) {
+  const multiSelected = ui.selectedSessionIds.has(session.id);
   return `
-    <button class="session-row ${session.isPinned ? "session-row-pinned" : ""} ${selectionMatches("session", session.id) ? "active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
+    <button class="session-row ${session.isPinned ? "session-row-pinned" : ""} ${selectionMatches("session", session.id) ? "active" : ""} ${multiSelected ? "session-row-selected" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
       <div class="row-title">
         <span class="row-title-main">
           ${renderSessionVisual(session, "session-visual-list")}
@@ -1287,6 +1318,35 @@ function renderSidebarDrawerSession(session, repo) {
       <div class="row-subtitle">${escapeHtml(repo.name)}</div>
       <div class="row-meta">${escapeHtml(previewTranscript(session.transcript))}</div>
     </button>
+  `;
+}
+
+function renderBulkActionBar(currentRepoId: string) {
+  if (ui.selectedSessionIds.size < 2) {
+    return "";
+  }
+
+  const otherRepos = state.repos.filter((r) => r.id !== currentRepoId);
+  const moveOptions = otherRepos.map((r) =>
+    `<button class="bulk-action-move-target" data-action="bulk-move-sessions" data-target-repo-id="${r.id}">${escapeHtml(r.name)}</button>`
+  ).join("");
+
+  return `
+    <div class="bulk-action-bar">
+      <span class="bulk-action-count">${ui.selectedSessionIds.size} selected</span>
+      <div class="bulk-action-buttons">
+        ${otherRepos.length ? `
+          <div class="bulk-action-move-group">
+            <button class="bulk-action-btn" data-action="bulk-move-toggle">Move to\u2026</button>
+            <div class="bulk-move-menu" style="display:none">
+              ${moveOptions}
+            </div>
+          </div>
+        ` : ""}
+        <button class="bulk-action-btn bulk-action-danger" data-action="bulk-delete-sessions">Delete</button>
+        <button class="bulk-action-btn bulk-action-cancel" data-action="bulk-clear-selection">Cancel</button>
+      </div>
+    </div>
   `;
 }
 
@@ -1369,7 +1429,7 @@ function renderRepoDetail(repo) {
   const sessions = sessionsForRepo(repo.id);
 
   detailElement.innerHTML = `
-    <section class="detail-panel">
+    <section class="detail-panel" ${sessions.length ? `data-lasso-container data-lasso-repo-id="${repo.id}"` : ""}>
       <div class="detail-hero">
         <div>
           <div class="eyebrow">Folder</div>
@@ -1388,9 +1448,13 @@ function renderRepoDetail(repo) {
       </div>
       ${
         sessions.length
-          ? `<div class="repo-session-list">${sessions.map((session) => renderRepoSession(session, repo)).join("")}</div>`
+          ? `<div class="repo-session-list">
+              ${sessions.map((session) => renderRepoSession(session, repo)).join("")}
+            </div>
+            ${renderBulkActionBar(repo.id)}`
           : `<div class="empty-state">Start a shell session for this folder.</div>`
       }
+      ${sessions.length ? `<div class="lasso-rect" style="display:none"></div>` : ""}
     </section>
   `;
 
@@ -2268,9 +2332,13 @@ function renderPausedSessionNotice(session) {
     return "";
   }
 
-  const body = session.launchesClaudeOnStart
-    ? "This Claude conversation was restored from history. Resume it to send another message in this project."
-    : "This shell session was restored from history. Restart it to type in the terminal again.";
+  const startupAgentId = sessionAgentId(session);
+  const body =
+    startupAgentId === DEFAULT_AGENT_ID
+      ? "This Claude conversation was restored from history. Resume it to send another message in this project."
+      : startupAgentId
+        ? `This ${agentLabel(startupAgentId)} session was restored from history. Restart it to relaunch the agent in this project.`
+        : "This shell session was restored from history. Restart it to type in the terminal again.";
 
   return `
     <div class="terminal-paused-notice">
@@ -2284,7 +2352,16 @@ function renderPausedSessionNotice(session) {
 }
 
 function resumeSessionActionLabel(session) {
-  return session.launchesClaudeOnStart ? "Resume Claude" : "Restart Shell";
+  const startupAgentId = sessionAgentId(session);
+  if (startupAgentId === DEFAULT_AGENT_ID) {
+    return "Resume Claude Code";
+  }
+
+  if (startupAgentId) {
+    return `Restart ${agentLabel(startupAgentId)}`;
+  }
+
+  return "Restart Shell";
 }
 
 function startSessionRename(sessionId) {
@@ -2504,8 +2581,9 @@ function renderInboxCard(session) {
 }
 
 function renderRepoSession(session, repo) {
+  const multiSelected = ui.selectedSessionIds.has(session.id);
   return `
-    <button class="session-row ${session.isPinned ? "session-row-pinned" : ""} ${selectionMatches("session", session.id) ? "active" : ""} ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
+    <button class="session-row ${session.isPinned ? "session-row-pinned" : ""} ${selectionMatches("session", session.id) ? "active" : ""} ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""} ${multiSelected ? "session-row-selected" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
       <div class="row-title">
         <span class="row-title-main">
           ${renderSessionVisual(session, "session-visual-list")}
@@ -3079,19 +3157,37 @@ function renderThemeColorField(
 }
 
 function renderGeneralSettingsPane() {
+  const selectedAgentId = defaultSessionAgentId();
+  const selectedAgent = agentOption(selectedAgentId) || AGENT_OPTIONS[0];
   return `
     <div class="dialog-panel">
-      <label>
-        <div class="row-title">Claude Command</div>
-        <input id="pref-claude-command" value="${escapeAttribute(state.preferences.claudeExecutablePath || "")}" />
-      </label>
-      <div class="muted">This command is typed into the session shell when Launch Claude immediately is enabled.</div>
+      <section class="settings-field-card agent-default-card">
+        <div class="agent-default-grid">
+          <label>
+            <div class="row-title">Default Session Agent</div>
+            <select id="pref-default-agent">
+              ${AGENT_OPTIONS.map(
+                (agent) =>
+                  `<option value="${escapeAttribute(agent.id)}" ${selectedAgentId === agent.id ? "selected" : ""}>${escapeHtml(agent.label)}</option>`
+              ).join("")}
+            </select>
+          </label>
+          <label>
+            <div class="row-title">Default Launch Command</div>
+            <input
+              data-agent-command-id="${escapeAttribute(selectedAgent.id)}"
+              value="${escapeAttribute(agentCommandValue(selectedAgent.id))}"
+            />
+          </label>
+        </div>
+        <div class="muted">Every new session launches the selected agent. If you choose ${escapeHtml(selectedAgent.label)}, this command is what gets typed into the terminal on session start.</div>
+      </section>
 
       <label>
         <div class="row-title">Shell Executable</div>
         <input id="pref-shell-executable" value="${escapeAttribute(state.preferences.shellExecutablePath || "")}" />
       </label>
-      <div class="muted">Sessions start as login shells in the selected repo so you can enter and exit Claude normally.</div>
+      <div class="muted">Sessions start as login shells in the selected repo so you can enter and exit agents normally.</div>
 
       <label class="inline-toggle">
         <input type="checkbox" id="pref-notifications-enabled" ${state.preferences.notificationsEnabled ? "checked" : ""} />
@@ -4227,6 +4323,10 @@ function renderSettingsFileRow(file) {
 }
 
 async function handleClick(event) {
+  if (Date.now() < ui.lassoSuppressClickUntil) {
+    return;
+  }
+
   const target = event.target.closest("[data-action]");
   if (!target) {
     return;
@@ -4253,6 +4353,10 @@ async function handleClick(event) {
       await openTokscaleOverlay(target.dataset.repoId || currentRepoId());
       break;
     case "select-session": {
+      if (ui.selectedSessionIds.size) {
+        ui.selectedSessionIds.clear();
+        renderSidebar();
+      }
       const session = sessionById(target.dataset.sessionId);
       await selectSession(target.dataset.sessionId, sessionOpenFocusSection(session));
       break;
@@ -4264,7 +4368,7 @@ async function handleClick(event) {
       collapseSidebarProjectDrawer(target.dataset.repoId);
       break;
     case "open-launcher":
-      await startDefaultClaudeSession(target.dataset.repoId || currentRepoId());
+      await startDefaultAgentSession(target.dataset.repoId || currentRepoId());
       break;
     case "open-status":
       await selectStatus();
@@ -4573,6 +4677,24 @@ async function handleClick(event) {
       }
       break;
     }
+    case "bulk-delete-sessions":
+      await bulkDeleteSessions();
+      break;
+    case "bulk-move-sessions":
+      if (target.dataset.targetRepoId) {
+        await bulkMoveSessions(target.dataset.targetRepoId);
+      }
+      break;
+    case "bulk-move-toggle": {
+      const moveMenu = target.closest(".bulk-action-move-group")?.querySelector(".bulk-move-menu") as HTMLElement | null;
+      if (moveMenu) {
+        moveMenu.style.display = moveMenu.style.display === "none" ? "flex" : "none";
+      }
+      break;
+    }
+    case "bulk-clear-selection":
+      clearBulkSelection();
+      break;
     default:
       break;
   }
@@ -4632,6 +4754,27 @@ function handlePointerDown(event) {
     return;
   }
 
+  const lassoContainer = target.closest("[data-lasso-container]") as HTMLElement | null;
+  if (
+    lassoContainer &&
+    !target.closest(".bulk-action-bar") &&
+    !target.closest(".detail-actions")
+  ) {
+    const repoId = lassoContainer.dataset.lassoRepoId || null;
+    ui.lassoActive = false;
+    ui.lassoOriginX = event.clientX;
+    ui.lassoOriginY = event.clientY;
+    ui.lassoCurrentX = event.clientX;
+    ui.lassoCurrentY = event.clientY;
+    ui.lassoContainerRepoId = repoId;
+    ui.lassoPressedSessionId =
+      (target.closest(".session-row") as HTMLElement | null)?.dataset.sessionId || null;
+    ui.lassoPending = true;
+    setFocusSection("main");
+    event.preventDefault();
+    return;
+  }
+
   if (isSidebarDrawerTarget(target)) {
     setFocusSection("sidebar-drawer");
     return;
@@ -4649,6 +4792,25 @@ function handlePointerDown(event) {
 }
 
 function handlePointerMove(event: PointerEvent) {
+  if (ui.lassoPending && !ui.lassoActive) {
+    const dx = event.clientX - ui.lassoOriginX;
+    const dy = event.clientY - ui.lassoOriginY;
+    const dist = dx * dx + dy * dy;
+    if (dist > 64) {
+      ui.lassoActive = true;
+      ui.lassoPending = false;
+      ui.selectedSessionIds.clear();
+    }
+  }
+
+  if (ui.lassoActive) {
+    ui.lassoCurrentX = event.clientX;
+    ui.lassoCurrentY = event.clientY;
+    updateLassoSelection();
+    event.preventDefault();
+    return;
+  }
+
   if (!ui.resizeDragState) return;
 
   const { splitPath, splitContainer, handleIndex, axis, startPos, startSizes, containerSize } = ui.resizeDragState;
@@ -4670,7 +4832,47 @@ function handlePointerMove(event: PointerEvent) {
   }
 }
 
-function handlePointerUp(_event: PointerEvent) {
+function handlePointerUp(event: PointerEvent) {
+  if (ui.lassoPending && !ui.lassoActive) {
+    const pressedSessionId = ui.lassoPressedSessionId;
+    ui.lassoPending = false;
+    ui.lassoPressedSessionId = null;
+    const target = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
+    const releasedSessionId =
+      (target?.closest("[data-action='select-session']") as HTMLElement | null)?.dataset.sessionId || null;
+    if (pressedSessionId && (!releasedSessionId || releasedSessionId === pressedSessionId)) {
+      ui.lassoSuppressClickUntil = Date.now() + 120;
+      if (ui.selectedSessionIds.size) {
+        ui.selectedSessionIds.clear();
+        renderSidebar();
+      }
+      const session = sessionById(pressedSessionId);
+      if (session) {
+        void selectSession(pressedSessionId, sessionOpenFocusSection(session));
+      }
+      return;
+    }
+    if (ui.selectedSessionIds.size) {
+      ui.lassoSuppressClickUntil = Date.now() + 120;
+      clearBulkSelection();
+    }
+    return;
+  }
+
+  if (ui.lassoActive) {
+    ui.lassoActive = false;
+    ui.lassoPending = false;
+    ui.lassoPressedSessionId = null;
+    ui.lassoSuppressClickUntil = Date.now() + 120;
+    const lassoRects = document.querySelectorAll(".lasso-rect");
+    for (const el of lassoRects) {
+      (el as HTMLElement).style.display = "none";
+    }
+    renderSidebar();
+    renderDetail();
+    return;
+  }
+
   if (!ui.resizeDragState) return;
 
   const { splitPath } = ui.resizeDragState;
@@ -4713,7 +4915,119 @@ function workspaceLayoutStructureSignature(layout: WorkspaceLayoutNode | null): 
   return `split:${layout.axis}:[${layout.children.map(workspaceLayoutStructureSignature).join(",")}]`;
 }
 
+function updateLassoSelection() {
+  const repoId = ui.lassoContainerRepoId;
+  const containers = document.querySelectorAll("[data-lasso-container]");
+  let container: HTMLElement | null = null;
+  for (const c of containers) {
+    if ((c as HTMLElement).dataset.lassoRepoId === repoId) {
+      container = c as HTMLElement;
+      break;
+    }
+  }
+  if (!container) return;
+
+  const containerRect = container.getBoundingClientRect();
+  const x1 = Math.min(ui.lassoOriginX, ui.lassoCurrentX);
+  const y1 = Math.min(ui.lassoOriginY, ui.lassoCurrentY);
+  const x2 = Math.max(ui.lassoOriginX, ui.lassoCurrentX);
+  const y2 = Math.max(ui.lassoOriginY, ui.lassoCurrentY);
+
+  const lassoEl = container.querySelector(".lasso-rect") as HTMLElement | null;
+  if (lassoEl) {
+    const left = Math.max(0, x1 - containerRect.left);
+    const top = Math.max(0, y1 - containerRect.top + container.scrollTop);
+    const right = Math.min(containerRect.width, x2 - containerRect.left);
+    const bottom = y2 - containerRect.top + container.scrollTop;
+    lassoEl.style.display = "block";
+    lassoEl.style.left = `${left}px`;
+    lassoEl.style.top = `${top}px`;
+    lassoEl.style.width = `${Math.max(0, right - left)}px`;
+    lassoEl.style.height = `${Math.max(0, bottom - top)}px`;
+  }
+
+  const nextSelected = new Set<string>();
+  const rows = container.querySelectorAll(".session-row");
+  for (const row of rows) {
+    const rowRect = row.getBoundingClientRect();
+    const overlaps =
+      rowRect.left < x2 && rowRect.right > x1 &&
+      rowRect.top < y2 && rowRect.bottom > y1;
+    if (overlaps) {
+      const sessionId = (row as HTMLElement).dataset.sessionId;
+      if (sessionId) nextSelected.add(sessionId);
+    }
+  }
+
+  if (setsEqual(nextSelected, ui.selectedSessionIds)) return;
+  ui.selectedSessionIds = nextSelected;
+
+  for (const row of rows) {
+    const sessionId = (row as HTMLElement).dataset.sessionId;
+    if (sessionId && nextSelected.has(sessionId)) {
+      row.classList.add("session-row-selected");
+    } else {
+      row.classList.remove("session-row-selected");
+    }
+  }
+}
+
+function setsEqual(a: Set<string>, b: Set<string>) {
+  if (a.size !== b.size) return false;
+  for (const v of a) if (!b.has(v)) return false;
+  return true;
+}
+
+function clearBulkSelection() {
+  ui.selectedSessionIds.clear();
+  ui.lassoContainerRepoId = null;
+  renderSidebar();
+  renderDetail();
+}
+
+async function bulkDeleteSessions() {
+  const ids = [...ui.selectedSessionIds];
+  const count = ids.length;
+  if (!count) return;
+  if (!window.confirm(`Delete ${count} session${count > 1 ? "s" : ""}?`)) return;
+
+  ui.selectedSessionIds.clear();
+  for (const id of ids) {
+    removeSessionFromWorkspace(id, { persistSelection: false });
+    await api.closeSession(id);
+  }
+
+  if (ui.selection.type === "session" && ids.includes(ui.selection.id)) {
+    const nextVisibleSessionId = workspaceVisibleSessionIds()[0] || null;
+    if (nextVisibleSessionId) {
+      await selectSession(nextVisibleSessionId, "main");
+    } else {
+      await selectInbox();
+    }
+  }
+
+  renderSidebar();
+  renderDetail();
+}
+
+async function bulkMoveSessions(targetRepoId: string) {
+  const ids = [...ui.selectedSessionIds];
+  if (!ids.length) return;
+
+  for (const id of ids) {
+    await api.updateSessionOrganization(id, { repoID: targetRepoId });
+  }
+
+  ui.selectedSessionIds.clear();
+  renderSidebar();
+  renderDetail();
+}
+
 function handleDragStart(event: DragEvent) {
+  if (ui.lassoPending || ui.lassoActive) {
+    event.preventDefault();
+    return;
+  }
   const target = event.target as HTMLElement | null;
   if (target?.closest("[data-no-drag]")) {
     event.preventDefault();
@@ -4977,7 +5291,7 @@ async function handleKeyDown(event) {
     const repoId = currentRepoId();
     if (repoId) {
       event.preventDefault();
-      await startDefaultClaudeSession(repoId);
+      await startDefaultAgentSession(repoId);
       return;
     }
   }
@@ -5047,7 +5361,7 @@ async function handleAppShortcut(event) {
 
   if (isOpenLauncherShortcut(event)) {
     event.preventDefault();
-    await startDefaultClaudeSession();
+    await startDefaultAgentSession();
     return true;
   }
 
@@ -5170,12 +5484,21 @@ async function handleChange(event) {
     return;
   }
 
+  if (target.dataset.agentCommandId) {
+    await api.updatePreferences({
+      agentCommandOverrides: {
+        [target.dataset.agentCommandId]: target.value
+      }
+    });
+    return;
+  }
+
   switch (target.id) {
     case "pref-notifications-enabled":
       await api.updatePreferences({ notificationsEnabled: (target as HTMLInputElement).checked });
       break;
-    case "pref-claude-command":
-      await api.updatePreferences({ claudeExecutablePath: target.value });
+    case "pref-default-agent":
+      await api.updatePreferences({ defaultAgentId: target.value });
       break;
     case "pref-shell-executable":
       await api.updatePreferences({ shellExecutablePath: target.value });
@@ -5510,6 +5833,34 @@ function syncPortStatusPolling() {
   }
 }
 
+function normalizeAgentId(value: string | null | undefined, fallback: string | null = DEFAULT_AGENT_ID) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return AGENT_IDS.has(normalized) ? normalized : fallback;
+}
+
+function defaultSessionAgentId() {
+  return normalizeAgentId(state.preferences.defaultAgentId) || DEFAULT_AGENT_ID;
+}
+
+function sessionAgentId(session) {
+  return normalizeAgentId(session?.startupAgentId, null);
+}
+
+function agentOption(agentId: string | null | undefined) {
+  const normalized = normalizeAgentId(agentId, null);
+  return AGENT_OPTIONS.find((agent) => agent.id === normalized) || null;
+}
+
+function agentLabel(agentId: string | null | undefined) {
+  return agentOption(agentId)?.label || "Shell";
+}
+
+function agentCommandValue(agentId: string) {
+  const savedValue = state.preferences.agentCommandOverrides?.[agentId];
+  const normalized = typeof savedValue === "string" ? savedValue.trim() : "";
+  return normalized || DEFAULT_AGENT_COMMANDS[agentId] || "";
+}
+
 function defaultSessionRepoId(explicitRepoId = null) {
   return (
     explicitRepoId ||
@@ -5521,7 +5872,7 @@ function defaultSessionRepoId(explicitRepoId = null) {
   );
 }
 
-async function startDefaultClaudeSession(explicitRepoId = null) {
+async function startDefaultAgentSession(explicitRepoId = null) {
   const repoId = defaultSessionRepoId(explicitRepoId);
   if (!repoId) {
     window.alert("Open a folder first.");
@@ -6006,7 +6357,7 @@ function activeClaudeSessionForRepo(repoId) {
     const selectedSession = sessionById(ui.selection.id);
     if (
       selectedSession?.repoID === repoId &&
-      selectedSession.launchesClaudeOnStart &&
+      sessionAgentId(selectedSession) === DEFAULT_AGENT_ID &&
       selectedSession.runtimeState === "live"
     ) {
       return selectedSession;
@@ -6014,7 +6365,7 @@ function activeClaudeSessionForRepo(repoId) {
   }
 
   return sessionsForRepo(repoId).find(
-    (session) => session.launchesClaudeOnStart && session.runtimeState === "live"
+    (session) => sessionAgentId(session) === DEFAULT_AGENT_ID && session.runtimeState === "live"
   );
 }
 

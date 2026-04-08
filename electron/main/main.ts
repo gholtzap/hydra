@@ -29,7 +29,15 @@ const {
 } = require("./claude-settings");
 const { inspectTrackedPorts } = require("./port-inspector");
 const { queryProjectSessions } = require("./session-search");
-const { loadState, saveState } = require("./state-store");
+const {
+  AGENT_DEFINITIONS,
+  DEFAULT_AGENT_COMMANDS,
+  DEFAULT_AGENT_ID,
+  loadState,
+  normalizeAgentId,
+  normalizePreferences,
+  saveState
+} = require("./state-store");
 const { resolveKeybindings } = require("./keybindings");
 const { PtyHostClient } = require("./pty-host-client");
 const {
@@ -59,8 +67,7 @@ const SESSION_TAG_COLORS = new Set([
   "gray"
 ]);
 const SESSION_ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
-const DEFAULT_CLAUDE_EXECUTABLE = "claude";
-const LEGACY_CLAUDE_EXECUTABLE_PATH = "/opt/homebrew/bin/claude";
+const AGENT_LABELS = Object.fromEntries(AGENT_DEFINITIONS.map((agent) => [agent.id, agent.label]));
 
 function buildFileTree(rootPath: string, currentPath: string, depth: number): any[] {
   if (depth >= 5) return [];
@@ -109,8 +116,8 @@ class AppController {
   focusedSessionId: string | null;
   saveTimer: NodeJS.Timeout | null;
   allowQuit: boolean;
-  pendingClaudeLaunch: Set<string>;
-  pendingClaudeLaunchTimers: Map<string, NodeJS.Timeout>;
+  pendingAgentLaunch: Set<string>;
+  pendingAgentLaunchTimers: Map<string, NodeJS.Timeout>;
   sessionSizes: Map<string, { cols: number; rows: number }>;
   terminalBuffers: Map<string, any>;
   signalBuffers: Map<string, string>;
@@ -126,8 +133,8 @@ class AppController {
     this.focusedSessionId = null;
     this.saveTimer = null;
     this.allowQuit = false;
-    this.pendingClaudeLaunch = new Set();
-    this.pendingClaudeLaunchTimers = new Map();
+    this.pendingAgentLaunch = new Set();
+    this.pendingAgentLaunchTimers = new Map();
     this.sessionSizes = new Map();
     this.terminalBuffers = new Map();
     this.signalBuffers = new Map();
@@ -619,13 +626,18 @@ class AppController {
     }
 
     const sessionId = randomUUID();
+    const startupAgentId =
+      launchesClaudeOnStart !== false
+        ? normalizeAgentId(this.state.preferences.defaultAgentId)
+        : null;
     const session = {
       id: sessionId,
       repoID: repoId,
       title: repo.name,
       initialPrompt: "",
-      launchesClaudeOnStart: launchesClaudeOnStart !== false,
-      claudeSessionId: launchesClaudeOnStart !== false ? sessionId : null,
+      launchesClaudeOnStart: !!startupAgentId,
+      startupAgentId,
+      claudeSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
       status: "running",
       runtimeState: "live",
       blocker: null,
@@ -689,6 +701,14 @@ class AppController {
       const nextTagColor = normalizeSessionTagColor(patch.tagColor);
       if (session.tagColor !== nextTagColor) {
         session.tagColor = nextTagColor;
+        changed = true;
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, "repoID")) {
+      const nextRepoID = typeof patch.repoID === "string" ? patch.repoID : "";
+      if (nextRepoID && this.repoById(nextRepoID) && session.repoID !== nextRepoID) {
+        session.repoID = nextRepoID;
         changed = true;
       }
     }
@@ -787,7 +807,7 @@ class AppController {
 
   closeSession(sessionId) {
     const session = this.sessionById(sessionId);
-    this.cancelPendingClaudeLaunch(sessionId);
+    this.cancelPendingAgentLaunch(sessionId);
     this.sessionSizes.delete(sessionId);
     this.terminalBuffers.delete(sessionId);
     this.resetSignalTracking(sessionId);
@@ -830,9 +850,12 @@ class AppController {
       return;
     }
 
+    const defaultAgentId = normalizeAgentId(this.state.preferences.defaultAgentId);
+    const defaultAgentLabel = AGENT_LABELS[defaultAgentId] || "Default Agent";
+
     const menu = Menu.buildFromTemplate([
       {
-        label: "Start Claude Code Session",
+        label: `Start ${defaultAgentLabel} Session`,
         click: () => this.sendCommand("new-session", { repoId })
       },
       {
@@ -903,6 +926,7 @@ class AppController {
       title: repo.name,
       initialPrompt: "",
       launchesClaudeOnStart: true,
+      startupAgentId: DEFAULT_AGENT_ID,
       claudeSessionId,
       status: "running",
       runtimeState: "live",
@@ -986,10 +1010,15 @@ class AppController {
   }
 
   updatePreferences(patch) {
-    this.state.preferences = {
+    const nextPreferences = normalizePreferences({
       ...this.state.preferences,
-      ...patch
-    };
+      ...patch,
+      agentCommandOverrides: {
+        ...(this.state.preferences.agentCommandOverrides || {}),
+        ...(patch?.agentCommandOverrides || {})
+      }
+    });
+    this.state.preferences = nextPreferences;
 
     if (patch.keybindings) {
       this.setupMenu();
@@ -1006,14 +1035,16 @@ class AppController {
 
     const match = this.state.sessions.find((session) =>
       session.repoID === repoId &&
-      (session.id === externalSessionId || session.claudeSessionId === externalSessionId)
+      (session.id === externalSessionId ||
+        (session.startupAgentId === DEFAULT_AGENT_ID &&
+          session.claudeSessionId === externalSessionId))
     );
 
     return match ? match.id : null;
   }
 
   launchRuntime(session, repo) {
-    this.cancelPendingClaudeLaunch(session.id);
+    this.cancelPendingAgentLaunch(session.id);
     this.ptyHost.createSession({
       sessionId: session.id,
       cwd: repo.path,
@@ -1100,12 +1131,12 @@ class AppController {
 
   handleHostCreated(sessionId) {
     const session = this.sessionById(sessionId);
-    if (!session || !session.launchesClaudeOnStart) {
+    if (!session || !session.startupAgentId) {
       return;
     }
 
-    this.pendingClaudeLaunch.add(sessionId);
-    this.maybeLaunchClaude(sessionId);
+    this.pendingAgentLaunch.add(sessionId);
+    this.maybeLaunchAgent(sessionId);
   }
 
   handleHostData(sessionId, rawChunk) {
@@ -1171,7 +1202,7 @@ class AppController {
       return;
     }
 
-    this.cancelPendingClaudeLaunch(sessionId);
+    this.cancelPendingAgentLaunch(sessionId);
     this.resetSignalTracking(sessionId);
     this.sessionSizes.delete(sessionId);
     session.runtimeState = "stopped";
@@ -1375,7 +1406,7 @@ class AppController {
     this.allowQuit = true;
     for (const session of this.state.sessions) {
       if (session.runtimeState === "live") {
-        this.cancelPendingClaudeLaunch(session.id);
+        this.cancelPendingAgentLaunch(session.id);
         this.sessionSizes.delete(session.id);
         session.runtimeState = "stopped";
         session.stoppedAt = now();
@@ -1398,11 +1429,11 @@ class AppController {
       rows: safeRows
     });
     this.ptyHost.resizeSession(sessionId, safeCols, safeRows);
-    this.maybeLaunchClaude(sessionId);
+    this.maybeLaunchAgent(sessionId);
   }
 
-  maybeLaunchClaude(sessionId) {
-    if (!this.pendingClaudeLaunch.has(sessionId) || this.pendingClaudeLaunchTimers.has(sessionId)) {
+  maybeLaunchAgent(sessionId) {
+    if (!this.pendingAgentLaunch.has(sessionId) || this.pendingAgentLaunchTimers.has(sessionId)) {
       return;
     }
 
@@ -1413,34 +1444,36 @@ class AppController {
     }
 
     const timer = setTimeout(() => {
-      this.pendingClaudeLaunchTimers.delete(sessionId);
+      this.pendingAgentLaunchTimers.delete(sessionId);
 
       const currentSession = this.sessionById(sessionId);
       if (
         !currentSession ||
         currentSession.runtimeState !== "live" ||
-        !this.pendingClaudeLaunch.has(sessionId)
+        !this.pendingAgentLaunch.has(sessionId)
       ) {
         return;
       }
 
-      this.pendingClaudeLaunch.delete(sessionId);
-      this.ptyHost.sendInput(
-        sessionId,
-        `${resolvedClaudeCommand(this.state.preferences, currentSession)}\r`
-      );
+      const launchCommand = resolvedSessionLaunchCommand(this.state.preferences, currentSession);
+      this.pendingAgentLaunch.delete(sessionId);
+      if (!launchCommand) {
+        return;
+      }
+
+      this.ptyHost.sendInput(sessionId, `${launchCommand}\r`);
     }, 120);
 
-    this.pendingClaudeLaunchTimers.set(sessionId, timer);
+    this.pendingAgentLaunchTimers.set(sessionId, timer);
   }
 
-  cancelPendingClaudeLaunch(sessionId) {
-    this.pendingClaudeLaunch.delete(sessionId);
+  cancelPendingAgentLaunch(sessionId) {
+    this.pendingAgentLaunch.delete(sessionId);
 
-    const timer = this.pendingClaudeLaunchTimers.get(sessionId);
+    const timer = this.pendingAgentLaunchTimers.get(sessionId);
     if (timer) {
       clearTimeout(timer);
-      this.pendingClaudeLaunchTimers.delete(sessionId);
+      this.pendingAgentLaunchTimers.delete(sessionId);
     }
   }
 }
@@ -1452,6 +1485,7 @@ function summarizeSession(session) {
     title: session.title,
     initialPrompt: session.initialPrompt,
     launchesClaudeOnStart: session.launchesClaudeOnStart,
+    startupAgentId: session.startupAgentId,
     claudeSessionId: session.claudeSessionId,
     status: session.status,
     runtimeState: session.runtimeState,
@@ -1583,51 +1617,40 @@ function resolveCommandPath(command) {
   return null;
 }
 
-function resolvedClaudeCommand(preferences, session) {
-  const executable = shellEscape(resolvedClaudeExecutable(preferences));
-  if (!session?.launchesClaudeOnStart) {
-    return executable;
+function resolvedSessionLaunchCommand(preferences, session) {
+  const startupAgentId = normalizeAgentId(session?.startupAgentId, null);
+  if (!session?.launchesClaudeOnStart || !startupAgentId) {
+    return "";
+  }
+
+  const command = resolvedAgentCommand(preferences, startupAgentId);
+  if (startupAgentId !== DEFAULT_AGENT_ID) {
+    return command;
   }
 
   if (session.launchCount > 1) {
     if (session.claudeSessionId) {
-      return `${executable} --resume ${shellEscape(session.claudeSessionId)}`;
+      return `${command} --resume ${shellEscape(session.claudeSessionId)}`;
     }
 
-    return `${executable} --continue`;
+    return `${command} --continue`;
   }
 
   if (session.claudeSessionId) {
-    return `${executable} --session-id ${shellEscape(session.claudeSessionId)}`;
+    return `${command} --session-id ${shellEscape(session.claudeSessionId)}`;
   }
 
-  return executable;
+  return command;
 }
 
-function resolvedClaudeExecutable(preferences) {
-  const candidate = preferences.claudeExecutablePath?.trim();
-  if (!candidate) {
-    return DEFAULT_CLAUDE_EXECUTABLE;
-  }
-
-  if (candidate === LEGACY_CLAUDE_EXECUTABLE_PATH && !isExecutableFile(candidate)) {
-    return DEFAULT_CLAUDE_EXECUTABLE;
-  }
-
-  return candidate;
+function resolvedAgentCommand(preferences, agentId) {
+  const candidate = preferences?.agentCommandOverrides?.[agentId];
+  const normalized = typeof candidate === "string" ? candidate.trim() : "";
+  return normalized || DEFAULT_AGENT_COMMANDS[agentId] || DEFAULT_AGENT_COMMANDS[DEFAULT_AGENT_ID];
 }
 
 function shellEscape(value) {
   return `'${String(value || "").replace(/'/g, `'\\''`)}'`;
-}
-
-function isExecutableFile(filePath) {
-  try {
-    fs.accessSync(filePath, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function blockerKey(blocker) {

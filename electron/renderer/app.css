@@ -100,6 +100,13 @@
   --terminal-shell-top: transparent;
   --terminal-shell-bottom: transparent;
   --terminal-scrollbar: oklch(0.5600 0.0060 80 / 0.25);
+  --session-tag-red: oklch(0.6300 0.2200 28);
+  --session-tag-orange: oklch(0.7200 0.1800 52);
+  --session-tag-yellow: oklch(0.8400 0.1600 96);
+  --session-tag-green: oklch(0.7000 0.1800 145);
+  --session-tag-blue: oklch(0.6200 0.1700 250);
+  --session-tag-purple: oklch(0.6200 0.1900 320);
+  --session-tag-gray: oklch(0.6200 0.0100 85);
 }
 
 .dark {
@@ -781,6 +788,30 @@ textarea {
   gap: 12px;
   font-size: 13px;
   font-weight: 600;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.row-title-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.row-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-title-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
 }
 
 .row-subtitle,
@@ -1253,6 +1284,7 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
   padding: 4px 4px 6px;
   border-bottom: 1px solid var(--border);
   flex: none;
@@ -1306,6 +1338,8 @@ textarea {
   align-items: center;
   gap: 4px;
   flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .ws-layout-group {
@@ -1351,6 +1385,12 @@ textarea {
   font-size: 11px;
   font-weight: 600;
   border-radius: 7px;
+}
+
+.ws-action-btn-active {
+  background: var(--surface-muted);
+  border-color: var(--surface-active-border);
+  color: var(--text);
 }
 
 .ws-action-btn.primary {
@@ -1493,6 +1533,20 @@ textarea {
     box-shadow 120ms ease;
 }
 
+.session-pane-pinned {
+  border-color: color-mix(in oklab, var(--accent-2) 28%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent-2) 18%, transparent);
+}
+
+.session-pane-pinned::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-top: 2px solid color-mix(in oklab, var(--accent-2) 72%, white 8%);
+  pointer-events: none;
+  z-index: 1;
+}
+
 .session-pane-active {
   border-color: var(--surface-active-border);
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--surface-active-border) 80%, transparent);
@@ -1622,6 +1676,105 @@ textarea {
   line-height: 1;
   opacity: 0;
   transition: opacity 80ms, background 80ms, color 80ms;
+}
+
+.session-pin-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--badge-bg);
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  flex: none;
+}
+
+.session-pin-icon {
+  width: 10px;
+  height: 10px;
+  flex: none;
+}
+
+.session-pin-indicator-toolbar {
+  font-size: 10px;
+}
+
+.session-pin-indicator-compact {
+  padding: 1px 6px;
+}
+
+.session-tag-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: none;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, white 26%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--border-strong) 55%, transparent);
+}
+
+.session-tag-dot-list {
+  width: 12px;
+  height: 12px;
+}
+
+.session-tag-red {
+  background: var(--session-tag-red);
+}
+
+.session-tag-orange {
+  background: var(--session-tag-orange);
+}
+
+.session-tag-yellow {
+  background: var(--session-tag-yellow);
+}
+
+.session-tag-green {
+  background: var(--session-tag-green);
+}
+
+.session-tag-blue {
+  background: var(--session-tag-blue);
+}
+
+.session-tag-purple {
+  background: var(--session-tag-purple);
+}
+
+.session-tag-gray {
+  background: var(--session-tag-gray);
+}
+
+.session-tag-select {
+  width: auto;
+  min-width: 104px;
+  max-width: 132px;
+  padding: 4px 26px 4px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  flex: none;
+}
+
+.session-row-pinned,
+.session-card-pinned {
+  border-color: color-mix(in oklab, var(--accent-2) 18%, var(--border));
+  box-shadow: inset 3px 0 0 color-mix(in oklab, var(--accent-2) 68%, transparent);
+}
+
+.session-row-pinned:hover,
+.session-card-pinned:hover {
+  border-color: color-mix(in oklab, var(--accent-2) 28%, var(--border-strong));
+}
+
+.session-row-pinned.active,
+.session-card-pinned.keyboard-active {
+  border-color: color-mix(in oklab, var(--accent-2) 28%, var(--surface-active-border));
 }
 
 .session-pane:hover .pane-hide-btn {
@@ -2704,6 +2857,16 @@ textarea {
   background: oklch(0.93 0.025 35 / 0.9);
 }
 
+.settings-nav-icon-skill {
+  background: oklch(0.84 0.055 230 / 0.95);
+  color: oklch(0.31 0.06 235);
+}
+
+.dark .settings-nav-icon-skill {
+  background: oklch(0.38 0.045 230 / 0.95);
+  color: oklch(0.9 0.02 230);
+}
+
 .settings-file-summary-card,
 .settings-editor-card,
 .settings-effective-panel,
@@ -2721,6 +2884,143 @@ textarea {
 .settings-warning-card {
   background: var(--warn-bg);
   border-color: var(--warn-border);
+}
+
+.claude-settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.claude-settings-mode-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.claude-settings-mode-buttons,
+.claude-settings-chip-row,
+.claude-plugin-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.claude-settings-mode-button,
+.claude-settings-chip-button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.claude-settings-mode-button.active,
+.claude-settings-chip-button.active {
+  background: var(--surface-active);
+  border-color: var(--surface-active-border);
+}
+
+.claude-settings-mode-button:hover,
+.claude-settings-chip-button:hover {
+  background: var(--surface-soft);
+}
+
+.claude-plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.claude-plugin-card {
+  gap: 14px;
+}
+
+.claude-plugin-add-card .settings-add-grid {
+  align-items: center;
+}
+
+.claude-plugin-add-toggle {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.claude-skill-add-card {
+  margin-bottom: 4px;
+}
+
+.claude-skill-add-card .settings-add-grid {
+  grid-template-columns: 1fr;
+}
+
+.claude-skill-add-card .settings-add-grid > * {
+  min-width: 0;
+}
+
+.claude-skill-add-card .settings-add-grid > button {
+  width: 100%;
+}
+
+.claude-skills-shell {
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  height: min(66vh, 760px);
+  min-height: 620px;
+  align-items: stretch;
+}
+
+.claude-skills-shell .settings-sidebar,
+.claude-skills-shell .settings-detail-panel {
+  min-height: 0;
+  height: 100%;
+}
+
+.claude-skills-shell .settings-sidebar {
+  overflow: hidden;
+}
+
+.claude-skills-shell .settings-sidebar-sections {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.claude-skills-detail-panel {
+  overflow: hidden;
+}
+
+.claude-skill-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.claude-skill-editor-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.claude-skill-editor {
+  flex: 1 1 auto;
+  min-height: 380px;
+  height: 100%;
+  resize: vertical;
+}
+
+.claude-skills-empty-state {
+  height: 100%;
+  min-height: 0;
+}
+
+.settings-editor-card textarea[readonly] {
+  opacity: 0.8;
 }
 
 .settings-values {
@@ -3164,6 +3464,7 @@ textarea {
   }
 
   .settings-shell,
+  .claude-skills-shell,
   .settings-guided-layout,
   .themes-toolbar-header,
   .themes-toolbar-controls,
@@ -3192,6 +3493,24 @@ textarea {
   .terminal-paused-notice {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .claude-skills-shell {
+    height: auto;
+    min-height: 0;
+  }
+
+  .claude-skills-shell .settings-sidebar,
+  .claude-skills-shell .settings-detail-panel,
+  .claude-skill-panel,
+  .claude-skill-editor-card {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .claude-skill-editor {
+    min-height: 280px;
   }
 }
 

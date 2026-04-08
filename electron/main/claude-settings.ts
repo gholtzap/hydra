@@ -8,17 +8,35 @@ const FILE_LAYOUTS = [
   [path.join(".claude", "settings.json"), "settings.json"],
   [path.join(".claude", "settings.local.json"), "settings.local.json"]
 ];
+const SKILL_FILE_NAMES = ["SKILL.md", "skill.md"];
+const MANAGED_SKILLS_ROOT =
+  process.platform === "darwin"
+    ? path.join(
+        path.sep,
+        "Library",
+        "Application Support",
+        "ClaudeCode",
+        ".claude",
+        "skills"
+      )
+    : null;
 
 function buildClaudeSettingsContext(repo) {
   const homeDirectory = os.homedir();
   const globalFiles = filesFor(homeDirectory, "global", "Global");
   const projectFiles = repo ? filesFor(repo.path, "project", repo.name) : [];
   const resolvedValues = resolveValues(globalFiles, projectFiles);
+  const settingsLayers = loadSettingsLayers(globalFiles, projectFiles);
+  const plugins = buildPluginInventory(homeDirectory, settingsLayers);
+  const { skills, skillRoots } = buildSkillInventory(homeDirectory, repo, plugins);
 
   return {
     globalFiles,
     projectFiles,
-    resolvedValues
+    resolvedValues,
+    plugins,
+    skills,
+    skillRoots
   };
 }
 
@@ -48,10 +66,18 @@ function filesFor(rootPath, scope, prefix) {
   });
 }
 
+function loadSettingsLayers(globalFiles, projectFiles) {
+  return [...globalFiles, ...projectFiles]
+    .filter((file) => file.exists && path.extname(file.path) === ".json")
+    .map((file) => ({
+      file,
+      data: readJsonFile(file.path)
+    }))
+    .filter((entry) => isPlainObject(entry.data));
+}
+
 function resolveValues(globalFiles, projectFiles) {
-  const precedence = [...globalFiles, ...projectFiles].filter(
-    (file) => file.exists && path.extname(file.path) === ".json"
-  );
+  const precedence = loadSettingsLayers(globalFiles, projectFiles).map((entry) => entry.file);
 
   const valuesByKey = new Map();
 
@@ -107,6 +133,291 @@ function stringify(value) {
   }
 
   return JSON.stringify(value);
+}
+
+function buildPluginInventory(homeDirectory, settingsLayers) {
+  const installedPluginsPath = path.join(
+    homeDirectory,
+    ".claude",
+    "plugins",
+    "installed_plugins.json"
+  );
+  const installedPluginsData = readJsonFile(installedPluginsPath);
+  const installedPlugins =
+    isPlainObject(installedPluginsData) && isPlainObject(installedPluginsData.plugins)
+      ? installedPluginsData.plugins
+      : {};
+
+  const effectivePlugins = resolveEnabledPlugins(settingsLayers);
+  const pluginIds = new Set([
+    ...Object.keys(installedPlugins),
+    ...Array.from(effectivePlugins.values.keys())
+  ]);
+
+  return Array.from(pluginIds)
+    .map((pluginId) => {
+      const installedEntries = Array.isArray(installedPlugins[pluginId])
+        ? installedPlugins[pluginId].filter(isPlainObject)
+        : [];
+      const activeInstall = latestInstalledEntry(installedEntries);
+      const skillFiles = activeInstall?.installPath
+        ? listSkillFiles(path.join(activeInstall.installPath, "skills"))
+        : [];
+
+      return {
+        id: pluginId,
+        name: pluginDisplayName(pluginId),
+        marketplace: pluginMarketplace(pluginId),
+        installed: !!activeInstall,
+        enabled: effectivePlugins.values.get(pluginId) === true,
+        enabledValue: effectivePlugins.values.has(pluginId)
+          ? effectivePlugins.values.get(pluginId)
+          : null,
+        sourceLabel: effectivePlugins.sources.get(pluginId) || null,
+        installPath: activeInstall?.installPath || null,
+        version: activeInstall?.version || null,
+        installedAt: activeInstall?.installedAt || null,
+        lastUpdated: activeInstall?.lastUpdated || null,
+        skillCount: skillFiles.length,
+        skillNames: skillFiles.map((filePath) => skillNameFromFile(filePath))
+      };
+    })
+    .sort((left, right) => {
+      if (left.enabled !== right.enabled) {
+        return left.enabled ? -1 : 1;
+      }
+      if (left.installed !== right.installed) {
+        return left.installed ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name);
+    });
+}
+
+function resolveEnabledPlugins(settingsLayers) {
+  const values = new Map();
+  const sources = new Map();
+
+  for (const { file, data } of settingsLayers) {
+    if (!isPlainObject(data.enabledPlugins)) {
+      continue;
+    }
+
+    for (const [pluginId, enabled] of Object.entries(data.enabledPlugins)) {
+      if (typeof enabled !== "boolean") {
+        continue;
+      }
+
+      values.set(pluginId, enabled);
+      sources.set(pluginId, file.title);
+    }
+  }
+
+  return { values, sources };
+}
+
+function latestInstalledEntry(entries) {
+  if (!entries.length) {
+    return null;
+  }
+
+  return [...entries].sort((left, right) => entryTimestamp(right) - entryTimestamp(left))[0];
+}
+
+function entryTimestamp(entry) {
+  const value = entry?.lastUpdated || entry?.installedAt || "";
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function buildSkillInventory(homeDirectory, repo, plugins) {
+  const userSkillsRoot = path.join(homeDirectory, ".claude", "skills");
+  const projectSkillsRoot = repo ? path.join(repo.path, ".claude", "skills") : null;
+  const managedSkillsRoot = MANAGED_SKILLS_ROOT;
+
+  const projectSkills = projectSkillsRoot
+    ? listSkillEntries(projectSkillsRoot, "project", repo?.name || "Project Skills", true)
+    : [];
+  const userSkills = listSkillEntries(userSkillsRoot, "user", "User Skills", true);
+  const managedSkills = managedSkillsRoot
+    ? listSkillEntries(managedSkillsRoot, "managed", "Managed Skills", false)
+    : [];
+  const pluginSkills = plugins
+    .filter((plugin) => plugin.enabled && plugin.installPath)
+    .flatMap((plugin) =>
+      listSkillEntries(path.join(plugin.installPath, "skills"), "plugin", plugin.name, false, {
+        pluginId: plugin.id
+      })
+    );
+
+  const skills = [...projectSkills, ...userSkills, ...managedSkills, ...pluginSkills].sort(
+    compareSkills
+  );
+
+  return {
+    skills,
+    skillRoots: {
+      user: userSkillsRoot,
+      project: projectSkillsRoot,
+      managed: managedSkillsRoot
+    }
+  };
+}
+
+function listSkillEntries(
+  rootPath,
+  sourceType,
+  sourceLabel,
+  editable,
+  extra: { pluginId?: string | null } = {}
+) {
+  return listSkillFiles(rootPath).map((filePath) => {
+    const metadata = readSkillMetadata(filePath);
+
+    return {
+      id: `${sourceType}:${filePath}`,
+      name: skillNameFromFile(filePath),
+      path: filePath,
+      sourceType,
+      sourceLabel,
+      editable,
+      description: metadata.description,
+      pluginId: extra.pluginId || null
+    };
+  });
+}
+
+function listSkillFiles(rootPath) {
+  if (!rootPath || !fs.existsSync(rootPath)) {
+    return [];
+  }
+
+  try {
+    return fs
+      .readdirSync(rootPath, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => findSkillFile(path.join(rootPath, entry.name)))
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function findSkillFile(skillDirectoryPath) {
+  for (const fileName of SKILL_FILE_NAMES) {
+    const filePath = path.join(skillDirectoryPath, fileName);
+    if (fs.existsSync(filePath)) {
+      return filePath;
+    }
+  }
+
+  try {
+    const fallback = fs
+      .readdirSync(skillDirectoryPath)
+      .find((fileName) => fileName.toLowerCase() === "skill.md");
+    return fallback ? path.join(skillDirectoryPath, fallback) : null;
+  } catch {
+    return null;
+  }
+}
+
+function readSkillMetadata(filePath) {
+  const contents = loadSettingsFile(filePath);
+  const description = extractFrontmatterValue(contents, "description");
+
+  return {
+    description: description || ""
+  };
+}
+
+function extractFrontmatterValue(contents, key) {
+  if (!contents.startsWith("---")) {
+    return "";
+  }
+
+  const lines = contents.split(/\r?\n/);
+  let insideFrontmatter = false;
+
+  for (const line of lines) {
+    if (line.trim() === "---") {
+      if (!insideFrontmatter) {
+        insideFrontmatter = true;
+        continue;
+      }
+      break;
+    }
+
+    if (!insideFrontmatter) {
+      continue;
+    }
+
+    if (line.startsWith(`${key}:`)) {
+      return line.slice(key.length + 1).trim().replace(/^["']|["']$/g, "");
+    }
+  }
+
+  return "";
+}
+
+function skillNameFromFile(filePath) {
+  return path.basename(path.dirname(filePath));
+}
+
+function compareSkills(left, right) {
+  const sourceOrder = skillSourceOrder(left.sourceType) - skillSourceOrder(right.sourceType);
+  if (sourceOrder !== 0) {
+    return sourceOrder;
+  }
+
+  return left.name.localeCompare(right.name);
+}
+
+function skillSourceOrder(sourceType) {
+  switch (sourceType) {
+    case "project":
+      return 0;
+    case "user":
+      return 1;
+    case "managed":
+      return 2;
+    case "plugin":
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+function pluginDisplayName(pluginId) {
+  return humanizeIdentifier(pluginName(pluginId));
+}
+
+function pluginName(pluginId) {
+  const markerIndex = pluginId.lastIndexOf("@");
+  return markerIndex >= 0 ? pluginId.slice(0, markerIndex) : pluginId;
+}
+
+function pluginMarketplace(pluginId) {
+  const markerIndex = pluginId.lastIndexOf("@");
+  return markerIndex >= 0 ? pluginId.slice(markerIndex + 1) : "";
+}
+
+function humanizeIdentifier(value) {
+  return String(value || "")
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function readJsonFile(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function isPlainObject(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 module.exports = {

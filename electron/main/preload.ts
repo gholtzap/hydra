@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
   reopenSession: (sessionId) => ipcRenderer.invoke("session:reopen", sessionId),
   closeSession: (sessionId) => ipcRenderer.invoke("session:close", sessionId),
   renameSession: (sessionId, title) => ipcRenderer.invoke("session:rename", { sessionId, title }),
+  updateSessionOrganization: (sessionId, patch) =>
+    ipcRenderer.invoke("session:organize", { sessionId, patch }),
   sendInput: (sessionId, data) => ipcRenderer.invoke("session:input", { sessionId, data }),
   sendBinaryInput: (sessionId, data) =>
     ipcRenderer.invoke("session:binaryInput", { sessionId, data }),

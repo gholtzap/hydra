@@ -220,6 +220,20 @@ type SessionSearchResult = {
   title: string;
 };
 
+const SESSION_TAG_OPTIONS = [
+  { value: "", label: "No Tag" },
+  { value: "red", label: "Red" },
+  { value: "orange", label: "Orange" },
+  { value: "yellow", label: "Yellow" },
+  { value: "green", label: "Green" },
+  { value: "blue", label: "Blue" },
+  { value: "purple", label: "Purple" },
+  { value: "gray", label: "Gray" }
+] as const;
+const SESSION_TAG_VALUES = new Set<string>(
+  SESSION_TAG_OPTIONS.map((option) => option.value).filter(Boolean) as string[]
+);
+
 const state = {
   workspaces: [] as any[],
   repos: [] as any[],
@@ -247,6 +261,7 @@ const ui = {
   sessionSearchLoadId: 0,
   commandPaletteQuery: "",
   settingsTab: "general",
+  settingsClaudeView: "files" as ClaudeSettingsView,
   settingsContext: null,
   settingsSelectedFilePath: null,
   settingsJsonCategoryId: "",
@@ -319,6 +334,8 @@ type JsonRenderOptions = {
   includeJsonToggle?: boolean;
   forceRawEditor?: boolean;
 };
+
+type ClaudeSettingsView = "files" | "skills" | "plugins";
 
 type SimplifiedJsonCategory = {
   id: string;
@@ -1223,10 +1240,16 @@ function renderSidebarProjectDrawer(repo) {
 
 function renderSidebarDrawerSession(session, repo) {
   return `
-    <button class="session-row ${selectionMatches("session", session.id) ? "active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
+    <button class="session-row ${session.isPinned ? "session-row-pinned" : ""} ${selectionMatches("session", session.id) ? "active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
       <div class="row-title">
-        <span>${escapeHtml(session.title)}</span>
-        ${session.unreadCount && state.preferences.showInAppBadges ? '<span class="unread-dot"></span>' : ""}
+        <span class="row-title-main">
+          ${renderSessionTagDot(session.tagColor, "session-tag-dot-list")}
+          <span class="row-title-text">${escapeHtml(session.title)}</span>
+        </span>
+        <span class="row-title-meta">
+          ${session.isPinned ? renderSessionPinIndicator("Pin") : ""}
+          ${session.unreadCount && state.preferences.showInAppBadges ? '<span class="unread-dot"></span>' : ""}
+        </span>
       </div>
       <div class="row-subtitle">${escapeHtml(repo.name)}</div>
       <div class="row-meta">${escapeHtml(previewTranscript(session.transcript))}</div>
@@ -1310,9 +1333,7 @@ function renderRepoDetail(repo) {
     return;
   }
 
-  const sessions = state.sessions
-    .filter((session) => session.repoID === repo.id)
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const sessions = sessionsForRepo(repo.id);
 
   detailElement.innerHTML = `
     <section class="detail-panel">
@@ -2013,7 +2034,7 @@ function renderSessionPane(sessionId) {
   }
 
   return `
-    <article class="session-pane ${selectionMatches("session", session.id) ? "session-pane-active" : ""}" data-session-id="${session.id}">
+    <article class="session-pane ${session.isPinned ? "session-pane-pinned" : ""} ${selectionMatches("session", session.id) ? "session-pane-active" : ""}" data-session-id="${session.id}">
       <div class="session-pane-drop-indicator">
         <span class="session-pane-drop-label"></span>
       </div>
@@ -2046,7 +2067,7 @@ function updateSessionWorkspaceToolbar() {
   const repo = repoById(session.repoID);
   const visibleSessionCount = workspaceVisibleSessionIds().length;
 
-  const sig = `${session.id}|${session.title}|${session.runtimeState}|${visibleSessionCount}|${repo?.id}`;
+  const sig = `${session.id}|${session.title}|${session.runtimeState}|${visibleSessionCount}|${repo?.id}|${session.isPinned}|${session.tagColor || ""}`;
   if (toolbar.dataset.sig === sig) {
     return;
   }
@@ -2055,7 +2076,9 @@ function updateSessionWorkspaceToolbar() {
   toolbar.innerHTML = `
     <div class="ws-toolbar">
       <div class="ws-toolbar-info">
+        ${renderSessionTagDot(session.tagColor, "session-tag-dot-toolbar")}
         <span class="ws-toolbar-title">${escapeHtml(session.title)}</span>
+        ${session.isPinned ? renderSessionPinIndicator("Pinned", "session-pin-indicator-toolbar") : ""}
         <span class="ws-toolbar-sep">/</span>
         <span class="ws-toolbar-repo">${escapeHtml(repo?.name || "Unknown")}</span>
         <span class="ws-toolbar-meta">${visibleSessionCount} ${pluralize(visibleSessionCount, "pane", "panes")}</span>
@@ -2066,10 +2089,14 @@ function updateSessionWorkspaceToolbar() {
           <button class="ws-layout-btn" data-action="workspace-layout-stack" title="Stacked vertically">Stack</button>
           <button class="ws-layout-btn" data-action="workspace-layout-grid" title="2x2 Grid" ${visibleSessionCount > 1 ? "" : "disabled"}>Grid</button>
         </div>
+        <button class="ws-action-btn ${session.isPinned ? "ws-action-btn-active" : ""}" data-action="toggle-session-pin" data-session-id="${session.id}">${session.isPinned ? "Unpin" : "Pin"}</button>
+        ${renderSessionTagSelect(session, "session-tag-select-toolbar")}
         <button class="ws-action-btn primary" data-action="open-launcher" data-repo-id="${repo?.id || ""}">+ Session</button>
         <button class="ws-action-btn" data-action="open-wiki" data-repo-id="${repo?.id || ""}">Wiki</button>
         <button class="ws-action-btn" data-action="open-tokscale" data-repo-id="${repo?.id || ""}">Tokens</button>
         <button class="ws-action-btn" data-action="open-lazygit" data-repo-id="${repo?.id || ""}">Git</button>
+        <button class="ws-action-btn" data-action="open-settings" data-settings-tab="claude" data-settings-claude-view="skills">Skills</button>
+        <button class="ws-action-btn" data-action="open-settings" data-settings-tab="claude" data-settings-claude-view="plugins">Plugins</button>
         <button class="ws-action-btn" data-action="open-settings" data-settings-tab="claude">Agent Files</button>
         ${
           session.runtimeState !== "live"
@@ -2107,16 +2134,18 @@ function updateSessionPane(session) {
   }
 
   pane.classList.toggle("session-pane-active", selectionMatches("session", session.id));
+  pane.classList.toggle("session-pane-pinned", !!session.isPinned);
   terminalWrap.classList.toggle("session-pane-terminal-wrap-paused", session.runtimeState !== "live");
 
   const isRenaming = ui.renamingSessionId === session.id;
-  const headerSig = `${session.title}|${session.status}|${session.runtimeState}|${isRenaming}`;
+  const headerSig = `${session.title}|${session.status}|${session.runtimeState}|${isRenaming}|${session.isPinned}|${session.tagColor || ""}`;
   if (header.dataset.sig !== headerSig) {
     header.dataset.sig = headerSig;
     header.innerHTML = `
     <div class="pane-bar" ${isRenaming ? "" : `draggable="true" data-drag-session-id="${session.id}" data-drag-source="pane" title="Drag to reorder"`}>
       <div class="pane-bar-left">
         <span class="pane-grip" aria-hidden="true">\u2801\u2801\u2801</span>
+        ${renderSessionTagDot(session.tagColor, "session-tag-dot-pane")}
         ${
           isRenaming
             ? `<input
@@ -2128,6 +2157,7 @@ function updateSessionPane(session) {
                 aria-label="Rename session" />`
             : `<span class="pane-title">${escapeHtml(session.title)}</span>`
         }
+        ${session.isPinned ? renderSessionPinIndicator("Pin", "session-pin-indicator-compact") : ""}
         <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
       </div>
       <div class="pane-bar-right">
@@ -2417,10 +2447,16 @@ function activeTerminalMount() {
 function renderInboxCard(session) {
   const repo = repoById(session.repoID);
   return `
-    <button class="inbox-card ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
+    <button class="inbox-card ${session.isPinned ? "session-card-pinned" : ""} ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
       <div class="row-title">
-        <span>${escapeHtml(session.title)}</span>
-        <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
+        <span class="row-title-main">
+          ${renderSessionTagDot(session.tagColor, "session-tag-dot-list")}
+          <span class="row-title-text">${escapeHtml(session.title)}</span>
+        </span>
+        <span class="row-title-meta">
+          ${session.isPinned ? renderSessionPinIndicator("Pin") : ""}
+          <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
+        </span>
       </div>
       <div class="row-subtitle">${escapeHtml(repo?.name || "Unknown Repo")}</div>
       <div class="row-meta">${escapeHtml(session.blocker?.summary || previewTranscript(session.transcript))}</div>
@@ -2430,10 +2466,16 @@ function renderInboxCard(session) {
 
 function renderRepoSession(session, repo) {
   return `
-    <button class="session-row ${selectionMatches("session", session.id) ? "active" : ""} ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
+    <button class="session-row ${session.isPinned ? "session-row-pinned" : ""} ${selectionMatches("session", session.id) ? "active" : ""} ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
       <div class="row-title">
-        <span>${escapeHtml(session.title)}</span>
-        <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
+        <span class="row-title-main">
+          ${renderSessionTagDot(session.tagColor, "session-tag-dot-list")}
+          <span class="row-title-text">${escapeHtml(session.title)}</span>
+        </span>
+        <span class="row-title-meta">
+          ${session.isPinned ? renderSessionPinIndicator("Pin") : ""}
+          <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
+        </span>
       </div>
       <div class="row-subtitle">${escapeHtml(repo.name)}</div>
       <div class="row-meta">${escapeHtml(previewTranscript(session.transcript))}</div>
@@ -2452,13 +2494,15 @@ function renderDialogs() {
 
 function renderQuickSwitcherDialog() {
   const normalized = ui.quickSwitcherQuery.trim().toLowerCase();
-  const sessions = state.sessions.filter((session) => {
-    if (!normalized) {
-      return true;
-    }
-    const repoName = (repoById(session.repoID)?.name || "").toLowerCase();
-    return session.title.toLowerCase().includes(normalized) || repoName.includes(normalized);
-  });
+  const sessions = state.sessions
+    .filter((session) => {
+      if (!normalized) {
+        return true;
+      }
+      const repoName = (repoById(session.repoID)?.name || "").toLowerCase();
+      return session.title.toLowerCase().includes(normalized) || repoName.includes(normalized);
+    })
+    .sort(compareSessions);
   const repos = state.repos.filter((repo) => {
     if (!normalized) {
       return true;
@@ -2483,8 +2527,16 @@ function renderQuickSwitcherDialog() {
             .slice(0, 20)
             .map(
               (session) => `
-                <button type="button" class="switcher-row" data-action="switch-session" data-session-id="${session.id}">
-                  <div class="row-title">${escapeHtml(session.title)}</div>
+                <button type="button" class="switcher-row ${session.isPinned ? "session-card-pinned" : ""}" data-action="switch-session" data-session-id="${session.id}">
+                  <div class="row-title">
+                    <span class="row-title-main">
+                      ${renderSessionTagDot(session.tagColor, "session-tag-dot-list")}
+                      <span class="row-title-text">${escapeHtml(session.title)}</span>
+                    </span>
+                    <span class="row-title-meta">
+                      ${session.isPinned ? renderSessionPinIndicator("Pin") : ""}
+                    </span>
+                  </div>
                   <div class="row-subtitle">${escapeHtml(repoById(session.repoID)?.name || "Unknown Repo")}</div>
                 </button>
               `
@@ -2672,15 +2724,7 @@ async function renderSettingsDialog() {
     ui.settingsContext = await api.getClaudeSettingsContext(repoId);
   }
 
-  const availableFiles = allSettingsFiles();
-  const selectedExists = availableFiles.some((file) => file.path === ui.settingsSelectedFilePath);
-
-  if (!selectedExists) {
-    const firstFile = availableFiles[0];
-    if (firstFile) {
-      await loadSelectedSettingsFile(firstFile.path);
-    }
-  }
+  await ensureSettingsSelection();
 
   settingsDialog.innerHTML = `
     <form method="dialog" class="dialog-body settings-dialog-body ${ui.settingsTab === "themes" ? "settings-dialog-body-sticky-header" : ""}">
@@ -2689,7 +2733,7 @@ async function renderSettingsDialog() {
           <div>
             <div class="eyebrow">Settings</div>
             <h2 class="dialog-title">Preferences and agent files</h2>
-            <div class="muted">Edit app preferences, project instructions, and JSON settings in a format people can actually read.</div>
+            <div class="muted">Edit app preferences, project instructions, custom skills, plugin toggles, and JSON settings in one place.</div>
           </div>
           <button value="cancel">Close</button>
         </div>
@@ -2715,6 +2759,84 @@ async function renderSettingsDialog() {
       </div>
     </form>
   `;
+}
+
+async function ensureSettingsSelection() {
+  if (ui.settingsTab !== "claude") {
+    await ensureClaudeFileSelection();
+    return;
+  }
+
+  if (ui.settingsClaudeView === "skills") {
+    await ensureClaudeSkillSelection();
+    return;
+  }
+
+  if (ui.settingsClaudeView === "plugins") {
+    await ensureClaudePluginSelection();
+    return;
+  }
+
+  await ensureClaudeFileSelection();
+}
+
+async function ensureClaudeFileSelection() {
+  const availableFiles = allSettingsFiles();
+  const selectedExists = availableFiles.some((file) => file.path === ui.settingsSelectedFilePath);
+
+  if (!selectedExists) {
+    const firstFile = availableFiles[0];
+    if (firstFile) {
+      await loadSelectedSettingsFile(firstFile.path);
+    }
+  }
+}
+
+async function ensureClaudePluginSelection() {
+  const availableFiles = editableClaudeJsonFiles();
+  const selectedExists = availableFiles.some((file) => file.path === ui.settingsSelectedFilePath);
+
+  if (!selectedExists) {
+    const preferredFile = preferredClaudeJsonFile(availableFiles);
+    if (preferredFile) {
+      await loadSelectedSettingsFile(preferredFile.path);
+      return;
+    }
+  }
+
+  if (!availableFiles.length) {
+    clearSelectedSettingsFile();
+  }
+}
+
+async function ensureClaudeSkillSelection() {
+  const availableSkills = allClaudeSkills();
+  const selectedExists = availableSkills.some((skill) => skill.path === ui.settingsSelectedFilePath);
+
+  if (!selectedExists) {
+    const preferredSkill =
+      availableSkills.find((skill) => skill.editable && skill.sourceType === "project") ||
+      availableSkills.find((skill) => skill.editable) ||
+      availableSkills[0];
+
+    if (preferredSkill) {
+      await loadSelectedSettingsFile(preferredSkill.path);
+      return;
+    }
+  }
+
+  if (!availableSkills.length) {
+    clearSelectedSettingsFile();
+  }
+}
+
+function clearSelectedSettingsFile() {
+  ui.settingsSelectedFilePath = null;
+  ui.settingsEditorText = "";
+  ui.settingsSaveMessage = "";
+  ui.settingsJsonDraft = null;
+  ui.settingsJsonError = "";
+  ui.settingsShowRawJson = false;
 }
 
 function renderThemesSettingsPane() {
@@ -2981,7 +3103,58 @@ function renderKeybindingsSettingsPane() {
 }
 
 function renderClaudeSettingsPane() {
-  const context = ui.settingsContext || { globalFiles: [], projectFiles: [], resolvedValues: [] };
+  const context = ui.settingsContext || {
+    globalFiles: [],
+    projectFiles: [],
+    resolvedValues: [],
+    plugins: [],
+    skills: [],
+    skillRoots: {}
+  };
+
+  return `
+    <div class="claude-settings-stack">
+      ${renderClaudeSettingsModeBar()}
+      ${
+        ui.settingsClaudeView === "plugins"
+          ? renderClaudePluginsPane(context)
+          : ui.settingsClaudeView === "skills"
+            ? renderClaudeSkillsPane(context)
+            : renderClaudeFilesPane(context)
+      }
+    </div>
+  `;
+}
+
+function renderClaudeSettingsModeBar() {
+  return `
+    <div class="settings-group-card claude-settings-mode-bar">
+      <div>
+        <div class="row-title">Claude Workspace</div>
+        <div class="muted">Switch between raw Claude files, installed skills, and enabled plugins for this project.</div>
+      </div>
+      <div class="claude-settings-mode-buttons" role="tablist" aria-label="Claude settings views">
+        ${renderClaudeSettingsModeButton("files", "Agent Files")}
+        ${renderClaudeSettingsModeButton("skills", "Skills")}
+        ${renderClaudeSettingsModeButton("plugins", "Plugins")}
+      </div>
+    </div>
+  `;
+}
+
+function renderClaudeSettingsModeButton(view: ClaudeSettingsView, label: string) {
+  return `
+    <button
+      type="button"
+      class="claude-settings-mode-button ${ui.settingsClaudeView === view ? "active" : ""}"
+      data-action="settings-claude-view"
+      data-claude-view="${view}">
+      ${escapeHtml(label)}
+    </button>
+  `;
+}
+
+function renderClaudeFilesPane(context) {
   const globalFiles = sortSettingsFiles(context.globalFiles);
   const projectFiles = sortSettingsFiles(context.projectFiles);
   const selectedFile = allSettingsFiles().find((file) => file.path === ui.settingsSelectedFilePath) || null;
@@ -3021,6 +3194,343 @@ function renderClaudeSettingsPane() {
             ? renderSelectedSettingsPanel(selectedFile, context)
             : `<div class="empty-state">Select a global or project Claude file to edit it.</div>`
         }
+      </div>
+    </div>
+  `;
+}
+
+function renderClaudePluginsPane(context) {
+  const selectedFile =
+    editableClaudeJsonFiles().find((file) => file.path === ui.settingsSelectedFilePath) || null;
+  const parseError = ui.settingsJsonError;
+  const showRawEditor = ui.settingsShowRawJson || !!parseError;
+  const currentRootValue = currentJsonSettingsValue();
+  const enabledPluginsValue = currentEnabledPluginsSettingsValue();
+  const canEditPlugins = !showRawEditor && isJsonObject(currentRootValue) && enabledPluginsValue !== null;
+
+  return `
+    <div class="settings-surface">
+      ${
+        selectedFile
+          ? renderSettingsFileSummaryCard(selectedFile, [
+              renderSettingsMetaPill(showRawEditor ? "Raw JSON" : "Plugin Toggles"),
+              renderSettingsMetaPill(`${context.plugins?.length || 0} Known`),
+              renderSettingsMetaPill(selectedFile.exists ? "Ready" : "Create on Save")
+            ], { includeJsonToggle: true, forceRawEditor: !!parseError })
+          : `
+            <div class="settings-warning-card">
+              <div class="row-title">No Claude JSON settings file is available</div>
+              <div class="row-subtitle">Create a project or global settings JSON file first to edit plugins.</div>
+            </div>
+          `
+      }
+
+      ${
+        editableClaudeJsonFiles().length
+          ? `
+            <div class="settings-group-card">
+              <div class="settings-help-row">
+                <div>
+                  <div class="row-title">Save Location</div>
+                  <div class="muted">Choose which Claude settings file should own the plugin overrides from this popup.</div>
+                </div>
+              </div>
+              <div class="claude-settings-chip-row">
+                ${editableClaudeJsonFiles().map((file) => renderClaudeSettingsFileChip(file)).join("")}
+              </div>
+            </div>
+          `
+          : ""
+      }
+
+      ${
+        selectedFile && !canEditPlugins
+          ? `
+            <div class="settings-warning-card">
+              <div class="row-title">This file can’t hold plugin toggles yet</div>
+              <div class="row-subtitle">
+                ${
+                  parseError
+                    ? `Fix the JSON parse error first: ${escapeHtml(parseError)}`
+                    : `The root JSON value must be an object, and <span class="mono">enabledPlugins</span> must either be missing or an object.`
+                }
+              </div>
+              <div class="settings-meta-row">
+                <button type="button" data-action="settings-toggle-raw-json">Edit JSON</button>
+              </div>
+            </div>
+          `
+          : ""
+      }
+
+      ${selectedFile && showRawEditor ? renderJsonRawEditor() : ""}
+
+      ${
+        selectedFile && canEditPlugins
+          ? `
+            <div class="settings-add-card claude-plugin-add-card">
+              <div class="row-title">Add a Plugin ID</div>
+              <div class="row-subtitle">Enable a plugin directly in ${escapeHtml(friendlySettingsFileTitle(selectedFile))}.</div>
+              <div class="settings-add-grid">
+                <input id="plugins-new-id" type="text" placeholder="plugin-name@marketplace" />
+                <label class="settings-switch claude-plugin-add-toggle">
+                  <input id="plugins-new-enabled" type="checkbox" checked />
+                  <span>Enabled</span>
+                </label>
+                <button type="button" class="primary" data-action="plugins-add-entry">Add Plugin</button>
+              </div>
+            </div>
+          `
+          : ""
+      }
+
+      ${
+        showRawEditor
+          ? ""
+          : `
+            <div class="claude-plugin-grid">
+              ${
+                (context.plugins || []).length
+                  ? context.plugins
+                      .map((plugin) => renderClaudePluginCard(plugin, canEditPlugins ? selectedFile : null))
+                      .join("")
+                  : `
+                    <div class="settings-group-card">
+                      <div class="row-title">No plugins discovered</div>
+                      <div class="muted">Install or configure Claude plugins and they’ll appear here.</div>
+                    </div>
+                  `
+              }
+            </div>
+          `
+      }
+
+      ${renderSettingsSaveMessage()}
+    </div>
+  `;
+}
+
+function renderClaudeSettingsFileChip(file) {
+  return `
+    <button
+      type="button"
+      class="claude-settings-chip-button ${ui.settingsSelectedFilePath === file.path ? "active" : ""}"
+      data-action="settings-select-file"
+      data-file-path="${file.path}">
+      ${escapeHtml(friendlySettingsFileTitle(file))}
+    </button>
+  `;
+}
+
+function renderClaudePluginCard(plugin, selectedFile) {
+  const fileOverride = selectedFile ? selectedEnabledPluginOverride(plugin.id) : undefined;
+  const effectiveEnabled = typeof fileOverride === "boolean" ? fileOverride : plugin.enabled;
+  const fileStateLabel =
+    typeof fileOverride === "boolean"
+      ? fileOverride
+        ? "Enabled Here"
+        : "Disabled Here"
+      : "Inherited";
+  const sourceLabel =
+    typeof fileOverride === "boolean"
+      ? friendlySettingsFileTitle(selectedFile)
+      : plugin.sourceLabel
+        ? friendlySourceLabel(plugin.sourceLabel)
+        : "No explicit override";
+  const checkboxPath = encodeSettingPath(["enabledPlugins", plugin.id]);
+
+  return `
+    <div class="settings-group-card claude-plugin-card">
+      <div class="settings-group-header">
+        <div class="settings-field-copy">
+          <div class="settings-file-row-top">
+            <div class="row-title">${escapeHtml(plugin.name)}</div>
+            <span class="settings-chip">${effectiveEnabled ? "Enabled" : "Disabled"}</span>
+          </div>
+          <div class="row-subtitle mono">${escapeHtml(plugin.id)}</div>
+          <div class="row-meta">${escapeHtml(sourceLabel)}</div>
+        </div>
+        ${
+          selectedFile
+            ? `
+              <label class="settings-switch">
+                <input
+                  type="checkbox"
+                  data-setting-editor="boolean"
+                  data-setting-path="${checkboxPath}"
+                  ${effectiveEnabled ? "checked" : ""} />
+                <span>${escapeHtml(fileStateLabel)}</span>
+              </label>
+            `
+            : ""
+        }
+      </div>
+
+      <div class="claude-plugin-meta">
+        <span class="settings-meta-pill">${escapeHtml(plugin.marketplace || "local")}</span>
+        <span class="settings-meta-pill">${plugin.installed ? "Installed" : "Not Installed"}</span>
+        ${
+          plugin.version
+            ? `<span class="settings-meta-pill">v${escapeHtml(plugin.version)}</span>`
+            : ""
+        }
+        <span class="settings-meta-pill">${plugin.skillCount} ${pluralize(plugin.skillCount, "skill", "skills")}</span>
+      </div>
+
+      ${
+        plugin.skillNames?.length
+          ? `<div class="row-meta">${escapeHtml(plugin.skillNames.join(", "))}</div>`
+          : `<div class="row-meta">No plugin-provided skills were discovered for this plugin.</div>`
+      }
+
+      ${
+        selectedFile && typeof fileOverride === "boolean"
+          ? `
+            <div class="settings-meta-row">
+              <button
+                type="button"
+                class="ghost"
+                data-action="plugins-clear-entry"
+                data-plugin-id="${escapeAttribute(plugin.id)}">
+                Clear Override
+              </button>
+            </div>
+          `
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderClaudeSkillsPane(context) {
+  const skills = allClaudeSkills();
+  const selectedSkill = selectedClaudeSkill();
+  const projectSkills = skills.filter((skill) => skill.sourceType === "project");
+  const userSkills = skills.filter((skill) => skill.sourceType === "user");
+  const managedSkills = skills.filter((skill) => skill.sourceType === "managed");
+  const pluginSkills = skills.filter((skill) => skill.sourceType === "plugin");
+
+  return `
+    <div class="settings-shell claude-skills-shell">
+      <div class="settings-sidebar">
+        <div class="settings-sidebar-sections">
+          ${renderClaudeSkillCreationCard(context)}
+          ${projectSkills.length ? `<div class="section-label">Project Skills</div>${projectSkills.map((skill) => renderClaudeSkillRow(skill)).join("")}` : ""}
+          ${userSkills.length ? `<div class="section-label">User Skills</div>${userSkills.map((skill) => renderClaudeSkillRow(skill)).join("")}` : ""}
+          ${managedSkills.length ? `<div class="section-label">Managed Skills</div>${managedSkills.map((skill) => renderClaudeSkillRow(skill)).join("")}` : ""}
+          ${pluginSkills.length ? `<div class="section-label">Plugin Skills</div>${pluginSkills.map((skill) => renderClaudeSkillRow(skill)).join("")}` : ""}
+          ${!skills.length ? `<div class="settings-sidebar-empty">No skills were discovered for this project yet.</div>` : ""}
+        </div>
+      </div>
+
+      <div class="settings-detail-panel claude-skills-detail-panel">
+        ${
+          selectedSkill
+            ? renderClaudeSkillPanel(selectedSkill)
+            : `
+              <div class="empty-state claude-skills-empty-state">
+                Select a skill to inspect it. Project and user skills are editable here; plugin and managed skills are read-only.
+              </div>
+            `
+        }
+      </div>
+    </div>
+  `;
+}
+
+function renderClaudeSkillCreationCard(context) {
+  const canCreateProjectSkill = !!context.skillRoots?.project;
+
+  return `
+    <div class="settings-add-card claude-skill-add-card">
+      <div class="row-title">New Skill</div>
+      <div class="row-subtitle">Create a new custom Claude skill as a normal <span class="mono">SKILL.md</span> file.</div>
+      <div class="settings-add-grid">
+        <input id="skills-new-name" type="text" placeholder="skill-name" />
+        <select id="skills-new-scope">
+          ${canCreateProjectSkill ? `<option value="project">Project</option>` : ""}
+          <option value="user">User</option>
+        </select>
+        <button type="button" class="primary" data-action="skills-create-file">Create Skill</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderClaudeSkillRow(skill) {
+  return `
+    <button
+      type="button"
+      class="settings-nav-row ${ui.settingsSelectedFilePath === skill.path ? "active" : ""}"
+      data-action="settings-select-file"
+      data-file-path="${skill.path}">
+      <div class="settings-nav-row-top">
+        <span class="settings-nav-icon settings-nav-icon-skill" aria-hidden="true">SK</span>
+        <div class="settings-nav-copy">
+          <div class="row-title">${escapeHtml(skill.name)}</div>
+          <div class="row-subtitle">${escapeHtml(skill.description || skill.sourceLabel)}</div>
+        </div>
+      </div>
+      <div class="settings-nav-meta">
+        <span class="settings-chip">${escapeHtml(skillSourceLabel(skill))}</span>
+        <span class="row-meta">${skill.editable ? "Editable" : "Read Only"}</span>
+      </div>
+    </button>
+  `;
+}
+
+function renderClaudeSkillPanel(skill) {
+  return `
+    <div class="settings-surface claude-skill-panel">
+      ${renderClaudeSkillSummaryCard(skill)}
+      <div class="settings-editor-card claude-skill-editor-card">
+        <div class="settings-help-row">
+          <div>
+            <div class="row-title">${skill.editable ? "Skill Editor" : "Skill Preview"}</div>
+            <div class="muted">
+              ${
+                skill.editable
+                  ? "Edit the skill markdown directly. Saving writes back to the original SKILL.md file."
+                  : "This skill comes from Claude’s managed inventory or an installed plugin, so it is shown read-only here."
+              }
+            </div>
+          </div>
+          <span class="settings-chip">${skill.editable ? "Editable" : "Read Only"}</span>
+        </div>
+        <textarea
+          id="settings-text-editor"
+          class="claude-skill-editor"
+          ${skill.editable ? "" : "readonly"}>${escapeHtml(ui.settingsEditorText)}</textarea>
+      </div>
+
+      ${renderSettingsSaveMessage()}
+    </div>
+  `;
+}
+
+function renderClaudeSkillSummaryCard(skill) {
+  return `
+    <div class="settings-file-summary-card">
+      <div class="settings-file-summary-main">
+        <div class="settings-file-summary-title">
+          <span class="settings-nav-icon settings-nav-icon-skill" aria-hidden="true">SK</span>
+          <div class="settings-file-copy">
+            <div class="eyebrow">${escapeHtml(skill.sourceLabel)}</div>
+            <div class="row-title">${escapeHtml(skill.name)}</div>
+            <div class="row-subtitle">${escapeHtml(abbreviateHome(skill.path))}</div>
+          </div>
+        </div>
+        <div class="detail-actions settings-detail-actions">
+          <button type="button" data-action="settings-reload-file">Reload</button>
+          ${skill.editable ? `<button type="button" class="primary" data-action="settings-save-file">Save</button>` : ""}
+          <button type="button" data-action="settings-reveal-file">Reveal</button>
+        </div>
+      </div>
+      <div class="muted">${escapeHtml(skill.description || "Skill instructions loaded from disk.")}</div>
+      <div class="settings-meta-row">
+        ${renderSettingsMetaPill(skillSourceLabel(skill))}
+        ${renderSettingsMetaPill(skill.editable ? "Editable" : "Read Only")}
+        ${skill.pluginId ? renderSettingsMetaPill(skill.pluginId) : ""}
       </div>
     </div>
   `;
@@ -3688,7 +4198,9 @@ async function handleClick(event) {
       await selectStatus();
       break;
     case "open-settings":
-      await openSettings(target.dataset.settingsTab || "general");
+      await openSettings(target.dataset.settingsTab || "general", {
+        claudeView: (target.dataset.settingsClaudeView || undefined) as ClaudeSettingsView | undefined
+      });
       break;
     case "open-session-search":
       openSessionSearch(target.dataset.repoId || currentRepoId() || state.repos[0]?.id || null);
@@ -3765,6 +4277,9 @@ async function handleClick(event) {
     case "close-session":
       await closeSessionById(target.dataset.sessionId);
       break;
+    case "toggle-session-pin":
+      await toggleSessionPin(target.dataset.sessionId);
+      break;
     case "restart-session":
       setFocusSection("terminal");
       await api.reopenSession(target.dataset.sessionId);
@@ -3829,6 +4344,14 @@ async function handleClick(event) {
       break;
     case "settings-tab":
       ui.settingsTab = target.dataset.tab;
+      if (ui.settingsTab !== "claude") {
+        ui.settingsClaudeView = "files";
+      }
+      ui.keybindingRecordingAction = null;
+      await renderSettingsDialog();
+      break;
+    case "settings-claude-view":
+      ui.settingsClaudeView = (target.dataset.claudeView || "files") as ClaudeSettingsView;
       ui.keybindingRecordingAction = null;
       await renderSettingsDialog();
       break;
@@ -3935,6 +4458,20 @@ async function handleClick(event) {
       break;
     case "settings-add-root-field":
       addRootJsonSetting();
+      await renderSettingsDialog();
+      break;
+    case "plugins-add-entry":
+      addClaudePluginOverride();
+      await renderSettingsDialog();
+      break;
+    case "plugins-clear-entry":
+      if (target.dataset.pluginId) {
+        clearClaudePluginOverride(target.dataset.pluginId);
+        await renderSettingsDialog();
+      }
+      break;
+    case "skills-create-file":
+      await createClaudeSkillFile();
       await renderSettingsDialog();
       break;
     case "settings-reveal-file":
@@ -4524,6 +5061,14 @@ async function handleChange(event) {
 
   if (target.dataset.settingEditor) {
     handleSettingsFieldChange(target);
+    if (ui.settingsTab === "claude" && ui.settingsClaudeView === "plugins") {
+      await renderSettingsDialog();
+    }
+    return;
+  }
+
+  if (target.dataset.sessionTagSelect === "true") {
+    await setSessionTagColor(target.dataset.sessionId, target.value || null);
     return;
   }
 
@@ -4872,7 +5417,7 @@ function defaultSessionRepoId(explicitRepoId = null) {
     explicitRepoId ||
     currentRepoId() ||
     ui.sidebarExpandedRepoId ||
-    state.sessions[0]?.repoID ||
+    mostRecentlyUpdatedSession()?.repoID ||
     state.repos[0]?.id ||
     null
   );
@@ -4902,8 +5447,32 @@ async function closeSessionById(sessionId) {
   }
 }
 
-async function openSettings(initialTab = "general") {
+async function toggleSessionPin(sessionId) {
+  const session = sessionById(sessionId);
+  if (!session) {
+    return;
+  }
+
+  await api.updateSessionOrganization(sessionId, { isPinned: !session.isPinned });
+}
+
+async function setSessionTagColor(sessionId, tagColor) {
+  if (!sessionId) {
+    return;
+  }
+
+  await api.updateSessionOrganization(sessionId, {
+    tagColor: normalizeSessionTagColor(tagColor)
+  });
+}
+
+async function openSettings(
+  initialTab = "general",
+  options: { claudeView?: ClaudeSettingsView } = {}
+) {
   ui.settingsTab = initialTab;
+  ui.settingsClaudeView =
+    initialTab === "claude" ? options.claudeView || ui.settingsClaudeView || "files" : "files";
   ui.settingsContext = null;
   ui.settingsSelectedFilePath = null;
   ui.settingsJsonCategoryId = "";
@@ -5395,6 +5964,29 @@ function allSettingsFiles() {
   ];
 }
 
+function editableClaudeJsonFiles() {
+  return allSettingsFiles().filter((file) => isJsonSettingsFile(file));
+}
+
+function preferredClaudeJsonFile(files) {
+  return (
+    files.find((file) => file.scope === "project" && pathLabel(file.path) === "settings.local.json") ||
+    files.find((file) => file.scope === "project" && pathLabel(file.path) === "settings.json") ||
+    files.find((file) => file.scope === "global" && pathLabel(file.path) === "settings.local.json") ||
+    files.find((file) => file.scope === "global" && pathLabel(file.path) === "settings.json") ||
+    files[0] ||
+    null
+  );
+}
+
+function allClaudeSkills() {
+  return ui.settingsContext?.skills || [];
+}
+
+function selectedClaudeSkill() {
+  return allClaudeSkills().find((skill) => skill.path === ui.settingsSelectedFilePath) || null;
+}
+
 async function loadSelectedSettingsFile(filePath) {
   ui.settingsSelectedFilePath = filePath;
   ui.settingsJsonCategoryId = "";
@@ -5535,6 +6127,136 @@ function addRootJsonSetting() {
   ui.settingsSaveMessage = "";
 }
 
+function currentEnabledPluginsSettingsValue() {
+  const rootValue = currentJsonSettingsValue();
+  if (!isJsonObject(rootValue)) {
+    return null;
+  }
+
+  if (rootValue.enabledPlugins === undefined) {
+    return {};
+  }
+
+  return isJsonObject(rootValue.enabledPlugins) ? rootValue.enabledPlugins : null;
+}
+
+function selectedEnabledPluginOverride(pluginId: string) {
+  const enabledPluginsValue = currentEnabledPluginsSettingsValue();
+  if (!enabledPluginsValue) {
+    return undefined;
+  }
+
+  const value = enabledPluginsValue[pluginId];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function addClaudePluginOverride() {
+  const pluginIdInput = settingsDialog.querySelector("#plugins-new-id") as HTMLInputElement | null;
+  const enabledInput = settingsDialog.querySelector("#plugins-new-enabled") as HTMLInputElement | null;
+  const pluginId = pluginIdInput?.value.trim() || "";
+
+  if (!pluginId) {
+    ui.settingsSaveMessage = "Enter a plugin identifier first.";
+    return;
+  }
+
+  const enabledPluginsValue = currentEnabledPluginsSettingsValue();
+  if (enabledPluginsValue === null) {
+    ui.settingsSaveMessage = "This file needs an object root and an object enabledPlugins value before plugins can be added.";
+    return;
+  }
+
+  updateJsonSettingValue(["enabledPlugins", pluginId], enabledInput?.checked !== false);
+}
+
+function clearClaudePluginOverride(pluginId: string) {
+  removeJsonSettingAtPath(["enabledPlugins", pluginId]);
+
+  const enabledPluginsValue = currentEnabledPluginsSettingsValue();
+  if (enabledPluginsValue && !Object.keys(enabledPluginsValue).length) {
+    removeJsonSettingAtPath(["enabledPlugins"]);
+  }
+}
+
+async function createClaudeSkillFile() {
+  const nameInput = settingsDialog.querySelector("#skills-new-name") as HTMLInputElement | null;
+  const scopeInput = settingsDialog.querySelector("#skills-new-scope") as HTMLSelectElement | null;
+  const rawName = nameInput?.value.trim() || "";
+  const scope = scopeInput?.value || "project";
+  const skillName = slugifySkillName(rawName);
+  const skillRoots = ui.settingsContext?.skillRoots || {};
+  const rootPath = scope === "user" ? skillRoots.user : skillRoots.project;
+
+  if (!rawName) {
+    ui.settingsSaveMessage = "Enter a skill name first.";
+    return;
+  }
+
+  if (!skillName) {
+    ui.settingsSaveMessage = "Use letters, numbers, spaces, dashes, or underscores in the skill name.";
+    return;
+  }
+
+  if (!rootPath) {
+    ui.settingsSaveMessage = scope === "project"
+      ? "Open a project folder before creating a project skill."
+      : "No user skills directory is available.";
+    return;
+  }
+
+  const skillFilePath = `${rootPath.replace(/[\\/]+$/, "")}/${skillName}/SKILL.md`;
+  const existingSkill = allClaudeSkills().find(
+    (skill) => skill.name === skillName && skill.sourceType === scope
+  );
+  if (existingSkill) {
+    ui.settingsSaveMessage = `${skillName} already exists.`;
+    await loadSelectedSettingsFile(existingSkill.path);
+    return;
+  }
+
+  await api.saveSettingsFile(skillFilePath, defaultClaudeSkillTemplate(rawName));
+  ui.settingsContext = await api.getClaudeSettingsContext(currentRepoId());
+  ui.settingsSelectedFilePath = skillFilePath;
+  await loadSelectedSettingsFile(skillFilePath);
+  ui.settingsSaveMessage = `Created ${skillName}.`;
+}
+
+function defaultClaudeSkillTemplate(skillName: string) {
+  return `---
+description: Describe when Claude should load this skill and what it should help with.
+---
+
+# ${skillName.trim()}
+
+Explain the workflow, constraints, and expected output for this skill.
+`;
+}
+
+function slugifySkillName(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9 _-]+/g, "")
+    .replace(/[ _]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function skillSourceLabel(skill) {
+  switch (skill.sourceType) {
+    case "project":
+      return "Project";
+    case "user":
+      return "User";
+    case "managed":
+      return "Managed";
+    case "plugin":
+      return "Plugin";
+    default:
+      return skill.sourceLabel || "Skill";
+  }
+}
+
 function cloneJsonValue(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -5544,13 +6266,34 @@ function setJsonValueAtPath(rootValue, path, nextValue) {
     return nextValue;
   }
 
-  const parentValue = getJsonValueAtPath(rootValue, path.slice(0, -1));
-  parentValue[path[path.length - 1]] = nextValue;
+  let currentValue = rootValue;
+
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const segment = path[index];
+    const nextSegment = path[index + 1];
+    const nextContainerIsArray = typeof nextSegment === "number";
+    const existingValue = currentValue?.[segment];
+
+    if (existingValue === undefined || existingValue === null) {
+      currentValue[segment] = nextContainerIsArray ? [] : {};
+    } else if (nextContainerIsArray && !Array.isArray(existingValue)) {
+      currentValue[segment] = [];
+    } else if (!nextContainerIsArray && !isJsonObject(existingValue)) {
+      currentValue[segment] = {};
+    }
+
+    currentValue = currentValue[segment];
+  }
+
+  currentValue[path[path.length - 1]] = nextValue;
   return rootValue;
 }
 
 function getJsonValueAtPath(rootValue, path) {
-  return path.reduce((currentValue, segment) => currentValue[segment], rootValue);
+  return path.reduce(
+    (currentValue, segment) => (currentValue === undefined || currentValue === null ? undefined : currentValue[segment]),
+    rootValue
+  );
 }
 
 function deleteJsonValueAtPath(rootValue, path) {
@@ -5559,11 +6302,14 @@ function deleteJsonValueAtPath(rootValue, path) {
   }
 
   const parentValue = getJsonValueAtPath(rootValue, path.slice(0, -1));
+  if (parentValue === undefined || parentValue === null) {
+    return rootValue;
+  }
   const lastSegment = path[path.length - 1];
 
-  if (Array.isArray(parentValue)) {
+  if (Array.isArray(parentValue) && typeof lastSegment === "number") {
     parentValue.splice(lastSegment, 1);
-  } else {
+  } else if (typeof parentValue === "object") {
     delete parentValue[lastSegment];
   }
 
@@ -7049,19 +7795,99 @@ function scrollMainListSelectionIntoView() {
 function sessionsForRepo(repoId) {
   return [...state.sessions]
     .filter((session) => session.repoID === repoId)
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    .sort(compareSessions);
 }
 
 function inboxSessions() {
   return [...state.sessions]
     .filter((session) => session.blocker || session.unreadCount > 0)
-    .sort((left, right) => {
-      if (!!left.blocker !== !!right.blocker) {
-        return left.blocker ? -1 : 1;
-      }
+    .sort(compareInboxSessions);
+}
 
-      return right.updatedAt.localeCompare(left.updatedAt);
-    });
+function mostRecentlyUpdatedSession() {
+  return [...state.sessions].sort(compareSessionsByUpdatedAt)[0] || null;
+}
+
+function compareSessionPinning(left, right) {
+  if (!!left.isPinned === !!right.isPinned) {
+    return 0;
+  }
+
+  return left.isPinned ? -1 : 1;
+}
+
+function compareSessionsByUpdatedAt(left, right) {
+  return String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
+}
+
+function compareSessions(left, right) {
+  const pinOrder = compareSessionPinning(left, right);
+  if (pinOrder !== 0) {
+    return pinOrder;
+  }
+
+  return compareSessionsByUpdatedAt(left, right);
+}
+
+function compareInboxSessions(left, right) {
+  const pinOrder = compareSessionPinning(left, right);
+  if (pinOrder !== 0) {
+    return pinOrder;
+  }
+
+  if (!!left.blocker !== !!right.blocker) {
+    return left.blocker ? -1 : 1;
+  }
+
+  return compareSessionsByUpdatedAt(left, right);
+}
+
+function normalizeSessionTagColor(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return SESSION_TAG_VALUES.has(normalized) ? normalized : null;
+}
+
+function sessionTagLabel(tagColor) {
+  return SESSION_TAG_OPTIONS.find((option) => option.value === tagColor)?.label || "Tag";
+}
+
+function renderSessionTagDot(tagColor, extraClass = "") {
+  const normalized = normalizeSessionTagColor(tagColor);
+  if (!normalized) {
+    return "";
+  }
+
+  const className = extraClass ? ` ${extraClass}` : "";
+  return `<span class="session-tag-dot session-tag-${escapeAttribute(normalized)}${className}" title="${escapeAttribute(sessionTagLabel(normalized))} tag" aria-hidden="true"></span>`;
+}
+
+function renderSessionPinIndicator(label = "Pinned", extraClass = "") {
+  const className = extraClass ? ` ${extraClass}` : "";
+  return `
+    <span class="session-pin-indicator${className}" title="Pinned session">
+      ${renderPinIcon()}
+      ${label ? `<span>${escapeHtml(label)}</span>` : ""}
+    </span>
+  `;
+}
+
+function renderSessionTagSelect(session, extraClass = "") {
+  const className = extraClass ? ` ${extraClass}` : "";
+  const currentValue = normalizeSessionTagColor(session.tagColor) || "";
+
+  return `
+    <select class="session-tag-select${className}" data-session-tag-select="true" data-session-id="${session.id}" aria-label="Set session color tag">
+      ${SESSION_TAG_OPTIONS.map((option) => `<option value="${escapeAttribute(option.value)}" ${currentValue === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+    </select>
+  `;
+}
+
+function renderPinIcon() {
+  return `
+    <svg class="session-pin-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M5.2 2.4h5.6v1.6l-1.6 1.6v2.1l1.8 1.8v1H8.7v2.9l-.7.8-.7-.8v-2.9H5v-1l1.8-1.8V5.6L5.2 4z" fill="currentColor"/>
+    </svg>
+  `;
 }
 
 function selectionMatches(type, id = null) {

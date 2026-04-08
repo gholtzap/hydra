@@ -14,6 +14,15 @@ const DEFAULT_PREFERENCES = {
   themeActiveId: "workspace-default",
   themeCustomThemes: []
 };
+const SESSION_TAG_COLORS = new Set([
+  "red",
+  "orange",
+  "yellow",
+  "green",
+  "blue",
+  "purple",
+  "gray"
+]);
 
 function loadState() {
   const statePath = getStatePath();
@@ -59,6 +68,8 @@ function migrateSnapshot(snapshot) {
         unreadCount: 0,
         launchCount: 0,
         blocker: null,
+        isPinned: false,
+        tagColor: null,
         ...session
       }))
     : [];
@@ -75,6 +86,9 @@ function normalizeRestoredSessions(sessions) {
   const now = new Date().toISOString();
 
   for (const session of sessions) {
+    session.isPinned = !!session.isPinned;
+    session.tagColor = normalizeSessionTagColor(session.tagColor);
+
     if (session.runtimeState === "live") {
       session.runtimeState = "stopped";
       session.stoppedAt = now;
@@ -94,6 +108,11 @@ function normalizeRepos(repos) {
     wikiEnabled: false,
     ...repo
   }));
+}
+
+function normalizeSessionTagColor(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return SESSION_TAG_COLORS.has(normalized) ? normalized : null;
 }
 
 function getStatePath() {

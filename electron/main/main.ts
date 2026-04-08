@@ -46,6 +46,15 @@ const FILE_TREE_IGNORED = new Set([
   ".vercel", "out", ".output", ".nuxt", ".svelte-kit", "storybook-static",
   ".parcel-cache", "target", ".gradle", ".idea", ".vscode"
 ]);
+const SESSION_TAG_COLORS = new Set([
+  "red",
+  "orange",
+  "yellow",
+  "green",
+  "blue",
+  "purple",
+  "gray"
+]);
 
 function buildFileTree(rootPath: string, currentPath: string, depth: number): any[] {
   if (depth >= 5) return [];
@@ -158,6 +167,9 @@ class AppController {
     );
     ipcMain.handle("session:rename", (_event, payload) =>
       this.renameSession(payload.sessionId, payload.title)
+    );
+    ipcMain.handle("session:organize", (_event, payload) =>
+      this.updateSessionOrganization(payload.sessionId, payload.patch)
     );
     ipcMain.handle("session:reopen", (_event, sessionId) => this.reopenSession(sessionId));
     ipcMain.handle("session:close", (_event, sessionId) => this.closeSession(sessionId));
@@ -391,9 +403,7 @@ class AppController {
           wikiPath: wikiDirectoryPath(repo.path)
         }))
         .sort((left, right) => left.name.localeCompare(right.name)),
-      sessions: [...this.state.sessions].sort((left, right) =>
-        right.updatedAt.localeCompare(left.updatedAt)
-      )
+      sessions: [...this.state.sessions].sort(compareSessions)
     });
   }
 
@@ -579,6 +589,8 @@ class AppController {
       lastActivityAt: null,
       stoppedAt: null,
       launchCount: 1,
+      isPinned: false,
+      tagColor: null,
       transcript: "",
       rawTranscript: ""
     };
@@ -605,6 +617,40 @@ class AppController {
     session.title = nextTitle;
     session.updatedAt = now();
     this.scheduleSave();
+    this.broadcastState();
+    return true;
+  }
+
+  updateSessionOrganization(sessionId, patch) {
+    const session = this.sessionById(sessionId);
+    if (!session || !patch || typeof patch !== "object") {
+      return false;
+    }
+
+    let changed = false;
+
+    if (Object.prototype.hasOwnProperty.call(patch, "isPinned")) {
+      const nextPinned = !!patch.isPinned;
+      if (session.isPinned !== nextPinned) {
+        session.isPinned = nextPinned;
+        changed = true;
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, "tagColor")) {
+      const nextTagColor = normalizeSessionTagColor(patch.tagColor);
+      if (session.tagColor !== nextTagColor) {
+        session.tagColor = nextTagColor;
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      return false;
+    }
+
+    this.scheduleSave();
+    this.sendSessionUpdated(sessionId);
     this.broadcastState();
     return true;
   }
@@ -758,6 +804,8 @@ class AppController {
       lastActivityAt: null,
       stoppedAt: null,
       launchCount: 2,
+      isPinned: false,
+      tagColor: null,
       transcript: "",
       rawTranscript: ""
     };
@@ -1181,13 +1229,7 @@ class AppController {
   inboxSessions() {
     return [...this.state.sessions]
       .filter((session) => session.blocker || session.unreadCount > 0)
-      .sort((left, right) => {
-        if (!!left.blocker !== !!right.blocker) {
-          return left.blocker ? -1 : 1;
-        }
-
-        return right.updatedAt.localeCompare(left.updatedAt);
-      });
+      .sort(compareInboxSessions);
   }
 
   confirmQuit(event) {
@@ -1304,6 +1346,8 @@ function summarizeSession(session) {
     runtimeState: session.runtimeState,
     blocker: session.blocker,
     unreadCount: session.unreadCount,
+    isPinned: !!session.isPinned,
+    tagColor: normalizeSessionTagColor(session.tagColor),
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     lastActivityAt: session.lastActivityAt,
@@ -1316,6 +1360,32 @@ function summarizeSession(session) {
 function trimRawTranscript(value) {
   const maxLength = 250000;
   return value.length > maxLength ? value.slice(-maxLength) : value;
+}
+
+function compareSessions(left, right) {
+  if (!!left.isPinned !== !!right.isPinned) {
+    return left.isPinned ? -1 : 1;
+  }
+
+  return String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
+}
+
+function compareInboxSessions(left, right) {
+  const pinOrder = compareSessions(left, right);
+  if (pinOrder !== 0) {
+    return pinOrder;
+  }
+
+  if (!!left.blocker !== !!right.blocker) {
+    return left.blocker ? -1 : 1;
+  }
+
+  return String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
+}
+
+function normalizeSessionTagColor(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return SESSION_TAG_COLORS.has(normalized) ? normalized : null;
 }
 
 function trimTranscript(value) {

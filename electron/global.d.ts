@@ -13,6 +13,8 @@ interface ClaudeWorkspaceApi {
     sessionId: string,
     patch: { isPinned?: boolean; tagColor?: string | null }
   ) => Promise<any>;
+  importSessionIcon: (sessionId: string) => Promise<any>;
+  clearSessionIcon: (sessionId: string) => Promise<any>;
   sendInput: (sessionId: string, data: string) => Promise<any>;
   sendBinaryInput: (sessionId: string, data: string) => Promise<any>;
   resizeSession: (sessionId: string, cols: number, rows: number) => Promise<any>;
@@ -31,6 +33,8 @@ interface ClaudeWorkspaceApi {
   getClaudeSettingsContext: (repoId: string | null) => Promise<any>;
   loadSettingsFile: (filePath: string) => Promise<string>;
   saveSettingsFile: (filePath: string, contents: string) => Promise<any>;
+  importSkillIcon: (skillFilePath: string) => Promise<string | null>;
+  clearSkillIcon: (skillFilePath: string) => Promise<any>;
   getWikiContext: (repoId: string) => Promise<any>;
   readWikiFile: (repoId: string, relativePath: string) => Promise<any>;
   toggleWiki: (repoId: string, enabled: boolean) => Promise<any>;

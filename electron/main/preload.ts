@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
   renameSession: (sessionId, title) => ipcRenderer.invoke("session:rename", { sessionId, title }),
   updateSessionOrganization: (sessionId, patch) =>
     ipcRenderer.invoke("session:organize", { sessionId, patch }),
+  importSessionIcon: (sessionId) => ipcRenderer.invoke("session:importIcon", sessionId),
+  clearSessionIcon: (sessionId) => ipcRenderer.invoke("session:clearIcon", sessionId),
   sendInput: (sessionId, data) => ipcRenderer.invoke("session:input", { sessionId, data }),
   sendBinaryInput: (sessionId, data) =>
     ipcRenderer.invoke("session:binaryInput", { sessionId, data }),
@@ -53,6 +55,8 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
   loadSettingsFile: (filePath) => ipcRenderer.invoke("settings:loadFile", filePath),
   saveSettingsFile: (filePath, contents) =>
     ipcRenderer.invoke("settings:saveFile", { filePath, contents }),
+  importSkillIcon: (skillFilePath) => ipcRenderer.invoke("settings:importSkillIcon", skillFilePath),
+  clearSkillIcon: (skillFilePath) => ipcRenderer.invoke("settings:clearSkillIcon", skillFilePath),
   getWikiContext: (repoId) => ipcRenderer.invoke("wiki:getContext", repoId),
   readWikiFile: (repoId, relativePath) =>
     ipcRenderer.invoke("wiki:readFile", { repoId, relativePath }),

@@ -19,7 +19,9 @@ export type KeybindingAction =
   | "open-launcher"
   | "search-project-sessions"
   | "navigate-section-left"
-  | "navigate-section-right";
+  | "navigate-section-right"
+  | "navigate-section-up"
+  | "navigate-section-down";
 
 export type KeybindingMap = Record<KeybindingAction, string>;
 
@@ -37,7 +39,9 @@ export const DEFAULT_KEYBINDINGS: KeybindingMap = {
   "open-launcher": "CmdOrCtrl+C",
   "search-project-sessions": "CmdOrCtrl+F",
   "navigate-section-left": "CmdOrCtrl+ArrowLeft",
-  "navigate-section-right": "CmdOrCtrl+ArrowRight"
+  "navigate-section-right": "CmdOrCtrl+ArrowRight",
+  "navigate-section-up": "CmdOrCtrl+ArrowUp",
+  "navigate-section-down": "CmdOrCtrl+ArrowDown"
 };
 
 export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
@@ -54,7 +58,9 @@ export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   "open-launcher": "Open Launcher",
   "search-project-sessions": "Search Project Sessions",
   "navigate-section-left": "Navigate Section Left",
-  "navigate-section-right": "Navigate Section Right"
+  "navigate-section-right": "Navigate Section Right",
+  "navigate-section-up": "Navigate Session Up",
+  "navigate-section-down": "Navigate Session Down"
 };
 
 /** Merge defaults with user overrides. */

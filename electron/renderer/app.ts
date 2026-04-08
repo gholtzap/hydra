@@ -22,7 +22,9 @@ type KeybindingAction =
   | "open-launcher"
   | "search-project-sessions"
   | "navigate-section-left"
-  | "navigate-section-right";
+  | "navigate-section-right"
+  | "navigate-section-up"
+  | "navigate-section-down";
 
 type KeybindingMap = Record<KeybindingAction, string>;
 
@@ -40,7 +42,9 @@ const DEFAULT_KEYBINDINGS: KeybindingMap = {
   "open-launcher": "CmdOrCtrl+C",
   "search-project-sessions": "CmdOrCtrl+F",
   "navigate-section-left": "CmdOrCtrl+ArrowLeft",
-  "navigate-section-right": "CmdOrCtrl+ArrowRight"
+  "navigate-section-right": "CmdOrCtrl+ArrowRight",
+  "navigate-section-up": "CmdOrCtrl+ArrowUp",
+  "navigate-section-down": "CmdOrCtrl+ArrowDown"
 };
 
 const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
@@ -57,7 +61,9 @@ const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   "open-launcher": "Open Launcher",
   "search-project-sessions": "Search Project Sessions",
   "navigate-section-left": "Navigate Section Left",
-  "navigate-section-right": "Navigate Section Right"
+  "navigate-section-right": "Navigate Section Right",
+  "navigate-section-up": "Navigate Session Up",
+  "navigate-section-down": "Navigate Session Down"
 };
 
 const ALL_KEYBINDING_ACTIONS: KeybindingAction[] = Object.keys(DEFAULT_KEYBINDINGS) as KeybindingAction[];
@@ -188,6 +194,17 @@ type WorkspaceSplitNode = {
 };
 
 type WorkspaceLayoutNode = WorkspaceLeafNode | WorkspaceSplitNode;
+type WorkspaceNavigationDirection = "left" | "right" | "up" | "down";
+
+type VisibleSessionPane = {
+  sessionId: string;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  centerX: number;
+  centerY: number;
+};
 
 type TerminalMount = {
   terminal: any;
@@ -1243,7 +1260,7 @@ function renderSidebarDrawerSession(session, repo) {
     <button class="session-row ${session.isPinned ? "session-row-pinned" : ""} ${selectionMatches("session", session.id) ? "active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
       <div class="row-title">
         <span class="row-title-main">
-          ${renderSessionTagDot(session.tagColor, "session-tag-dot-list")}
+          ${renderSessionVisual(session, "session-visual-list")}
           <span class="row-title-text">${escapeHtml(session.title)}</span>
         </span>
         <span class="row-title-meta">
@@ -2067,7 +2084,7 @@ function updateSessionWorkspaceToolbar() {
   const repo = repoById(session.repoID);
   const visibleSessionCount = workspaceVisibleSessionIds().length;
 
-  const sig = `${session.id}|${session.title}|${session.runtimeState}|${visibleSessionCount}|${repo?.id}|${session.isPinned}|${session.tagColor || ""}`;
+  const sig = `${session.id}|${session.title}|${session.runtimeState}|${visibleSessionCount}|${repo?.id}|${session.isPinned}|${session.tagColor || ""}|${session.sessionIconUrl || ""}|${session.sessionIconUpdatedAt || ""}`;
   if (toolbar.dataset.sig === sig) {
     return;
   }
@@ -2076,7 +2093,12 @@ function updateSessionWorkspaceToolbar() {
   toolbar.innerHTML = `
     <div class="ws-toolbar">
       <div class="ws-toolbar-info">
-        ${renderSessionTagDot(session.tagColor, "session-tag-dot-toolbar")}
+        ${renderSessionVisualButton(
+          session,
+          "session-visual-toolbar",
+          "import-session-icon",
+          session.sessionIconUrl ? "Replace session icon" : "Upload session icon"
+        )}
         <span class="ws-toolbar-title">${escapeHtml(session.title)}</span>
         ${session.isPinned ? renderSessionPinIndicator("Pinned", "session-pin-indicator-toolbar") : ""}
         <span class="ws-toolbar-sep">/</span>
@@ -2091,6 +2113,7 @@ function updateSessionWorkspaceToolbar() {
         </div>
         <button class="ws-action-btn ${session.isPinned ? "ws-action-btn-active" : ""}" data-action="toggle-session-pin" data-session-id="${session.id}">${session.isPinned ? "Unpin" : "Pin"}</button>
         ${renderSessionTagSelect(session, "session-tag-select-toolbar")}
+        ${session.sessionIconUrl ? `<button class="ws-action-btn" data-action="clear-session-icon" data-session-id="${session.id}">Clear Icon</button>` : ""}
         <button class="ws-action-btn primary" data-action="open-launcher" data-repo-id="${repo?.id || ""}">+ Session</button>
         <button class="ws-action-btn" data-action="open-wiki" data-repo-id="${repo?.id || ""}">Wiki</button>
         <button class="ws-action-btn" data-action="open-tokscale" data-repo-id="${repo?.id || ""}">Tokens</button>
@@ -2138,14 +2161,14 @@ function updateSessionPane(session) {
   terminalWrap.classList.toggle("session-pane-terminal-wrap-paused", session.runtimeState !== "live");
 
   const isRenaming = ui.renamingSessionId === session.id;
-  const headerSig = `${session.title}|${session.status}|${session.runtimeState}|${isRenaming}|${session.isPinned}|${session.tagColor || ""}`;
+  const headerSig = `${session.title}|${session.status}|${session.runtimeState}|${isRenaming}|${session.isPinned}|${session.tagColor || ""}|${session.sessionIconUrl || ""}|${session.sessionIconUpdatedAt || ""}`;
   if (header.dataset.sig !== headerSig) {
     header.dataset.sig = headerSig;
     header.innerHTML = `
     <div class="pane-bar" ${isRenaming ? "" : `draggable="true" data-drag-session-id="${session.id}" data-drag-source="pane" title="Drag to reorder"`}>
       <div class="pane-bar-left">
         <span class="pane-grip" aria-hidden="true">\u2801\u2801\u2801</span>
-        ${renderSessionTagDot(session.tagColor, "session-tag-dot-pane")}
+        ${renderSessionVisual(session, "session-visual-pane")}
         ${
           isRenaming
             ? `<input
@@ -2450,7 +2473,7 @@ function renderInboxCard(session) {
     <button class="inbox-card ${session.isPinned ? "session-card-pinned" : ""} ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
       <div class="row-title">
         <span class="row-title-main">
-          ${renderSessionTagDot(session.tagColor, "session-tag-dot-list")}
+          ${renderSessionVisual(session, "session-visual-list")}
           <span class="row-title-text">${escapeHtml(session.title)}</span>
         </span>
         <span class="row-title-meta">
@@ -2469,7 +2492,7 @@ function renderRepoSession(session, repo) {
     <button class="session-row ${session.isPinned ? "session-row-pinned" : ""} ${selectionMatches("session", session.id) ? "active" : ""} ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
       <div class="row-title">
         <span class="row-title-main">
-          ${renderSessionTagDot(session.tagColor, "session-tag-dot-list")}
+          ${renderSessionVisual(session, "session-visual-list")}
           <span class="row-title-text">${escapeHtml(session.title)}</span>
         </span>
         <span class="row-title-meta">
@@ -2530,7 +2553,7 @@ function renderQuickSwitcherDialog() {
                 <button type="button" class="switcher-row ${session.isPinned ? "session-card-pinned" : ""}" data-action="switch-session" data-session-id="${session.id}">
                   <div class="row-title">
                     <span class="row-title-main">
-                      ${renderSessionTagDot(session.tagColor, "session-tag-dot-list")}
+                      ${renderSessionVisual(session, "session-visual-list")}
                       <span class="row-title-text">${escapeHtml(session.title)}</span>
                     </span>
                     <span class="row-title-meta">
@@ -3128,13 +3151,9 @@ function renderClaudeSettingsPane() {
 
 function renderClaudeSettingsModeBar() {
   return `
-    <div class="settings-group-card claude-settings-mode-bar">
-      <div>
-        <div class="row-title">Claude Workspace</div>
-        <div class="muted">Switch between raw Claude files, installed skills, and enabled plugins for this project.</div>
-      </div>
-      <div class="claude-settings-mode-buttons" role="tablist" aria-label="Claude settings views">
-        ${renderClaudeSettingsModeButton("files", "Agent Files")}
+    <div class="claude-settings-mode-bar" role="tablist" aria-label="Claude settings views">
+      <div class="claude-settings-mode-buttons">
+        ${renderClaudeSettingsModeButton("files", "Files")}
         ${renderClaudeSettingsModeButton("skills", "Skills")}
         ${renderClaudeSettingsModeButton("plugins", "Plugins")}
       </div>
@@ -3457,6 +3476,42 @@ function renderClaudeSkillCreationCard(context) {
   `;
 }
 
+function renderClaudeSkillAvatar(skill, size = "small") {
+  return skill.iconUrl
+    ? `
+      <span class="skill-avatar skill-avatar-${size}" aria-hidden="true">
+        <img class="skill-avatar-image" src="${escapeAttribute(skill.iconUrl)}" alt="" />
+      </span>
+    `
+    : `
+      <span class="skill-avatar skill-avatar-${size} skill-avatar-fallback" aria-hidden="true">SK</span>
+    `;
+}
+
+function renderClaudeSkillAvatarButton(skill, size = "large") {
+  const label = skill.iconUrl ? "Replace skill icon" : "Upload skill icon";
+
+  return skill.iconUrl
+    ? `
+      <button
+        type="button"
+        class="skill-avatar skill-avatar-${size} skill-avatar-button"
+        data-action="skills-upload-icon"
+        aria-label="${escapeAttribute(label)}"
+        title="${escapeAttribute(label)}">
+        <img class="skill-avatar-image" src="${escapeAttribute(skill.iconUrl)}" alt="" />
+      </button>
+    `
+    : `
+      <button
+        type="button"
+        class="skill-avatar skill-avatar-${size} skill-avatar-fallback skill-avatar-button"
+        data-action="skills-upload-icon"
+        aria-label="${escapeAttribute(label)}"
+        title="${escapeAttribute(label)}">SK</button>
+    `;
+}
+
 function renderClaudeSkillRow(skill) {
   return `
     <button
@@ -3465,7 +3520,7 @@ function renderClaudeSkillRow(skill) {
       data-action="settings-select-file"
       data-file-path="${skill.path}">
       <div class="settings-nav-row-top">
-        <span class="settings-nav-icon settings-nav-icon-skill" aria-hidden="true">SK</span>
+        ${renderClaudeSkillAvatar(skill)}
         <div class="settings-nav-copy">
           <div class="row-title">${escapeHtml(skill.name)}</div>
           <div class="row-subtitle">${escapeHtml(skill.description || skill.sourceLabel)}</div>
@@ -3513,7 +3568,7 @@ function renderClaudeSkillSummaryCard(skill) {
     <div class="settings-file-summary-card">
       <div class="settings-file-summary-main">
         <div class="settings-file-summary-title">
-          <span class="settings-nav-icon settings-nav-icon-skill" aria-hidden="true">SK</span>
+          ${skill.editable ? renderClaudeSkillAvatarButton(skill, "large") : renderClaudeSkillAvatar(skill, "large")}
           <div class="settings-file-copy">
             <div class="eyebrow">${escapeHtml(skill.sourceLabel)}</div>
             <div class="row-title">${escapeHtml(skill.name)}</div>
@@ -3530,6 +3585,7 @@ function renderClaudeSkillSummaryCard(skill) {
       <div class="settings-meta-row">
         ${renderSettingsMetaPill(skillSourceLabel(skill))}
         ${renderSettingsMetaPill(skill.editable ? "Editable" : "Read Only")}
+        ${renderSettingsMetaPill(skill.iconUrl ? "Custom Icon" : "Default Icon")}
         ${skill.pluginId ? renderSettingsMetaPill(skill.pluginId) : ""}
       </div>
     </div>
@@ -4280,6 +4336,12 @@ async function handleClick(event) {
     case "toggle-session-pin":
       await toggleSessionPin(target.dataset.sessionId);
       break;
+    case "import-session-icon":
+      await importSessionIcon(target.dataset.sessionId);
+      break;
+    case "clear-session-icon":
+      await clearSessionIcon(target.dataset.sessionId);
+      break;
     case "restart-session":
       setFocusSection("terminal");
       await api.reopenSession(target.dataset.sessionId);
@@ -4472,6 +4534,14 @@ async function handleClick(event) {
       break;
     case "skills-create-file":
       await createClaudeSkillFile();
+      await renderSettingsDialog();
+      break;
+    case "skills-upload-icon":
+      await importSelectedClaudeSkillIcon();
+      await renderSettingsDialog();
+      break;
+    case "skills-remove-icon":
+      await clearSelectedClaudeSkillIcon();
       await renderSettingsDialog();
       break;
     case "settings-reveal-file":
@@ -4850,7 +4920,9 @@ async function handleKeyDown(event) {
 
   if (matchesAccelerator(event, kb["navigate-section-left"]) || matchesAccelerator(event, kb["navigate-section-right"])) {
     const direction = matchesAccelerator(event, kb["navigate-section-left"]) ? -1 : 1;
-    const handledSessionNavigation = await handleSessionWorkspaceSectionNavigation(direction);
+    const handledSessionNavigation = await handleSessionWorkspaceDirectionalNavigation(
+      direction < 0 ? "left" : "right"
+    );
     if (handledSessionNavigation) {
       event.preventDefault();
       return;
@@ -4860,6 +4932,16 @@ async function handleKeyDown(event) {
     if (nextSection) {
       event.preventDefault();
       setFocusSection(nextSection);
+    }
+    return;
+  }
+
+  if (matchesAccelerator(event, kb["navigate-section-up"]) || matchesAccelerator(event, kb["navigate-section-down"])) {
+    const handledSessionNavigation = await handleSessionWorkspaceDirectionalNavigation(
+      matchesAccelerator(event, kb["navigate-section-up"]) ? "up" : "down"
+    );
+    if (handledSessionNavigation) {
+      event.preventDefault();
     }
     return;
   }
@@ -5454,6 +5536,30 @@ async function toggleSessionPin(sessionId) {
   }
 
   await api.updateSessionOrganization(sessionId, { isPinned: !session.isPinned });
+}
+
+async function importSessionIcon(sessionId) {
+  if (!sessionId) {
+    return;
+  }
+
+  try {
+    await api.importSessionIcon(sessionId);
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Failed to import session icon.");
+  }
+}
+
+async function clearSessionIcon(sessionId) {
+  if (!sessionId) {
+    return;
+  }
+
+  try {
+    await api.clearSessionIcon(sessionId);
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Failed to clear session icon.");
+  }
 }
 
 async function setSessionTagColor(sessionId, tagColor) {
@@ -6219,6 +6325,39 @@ async function createClaudeSkillFile() {
   ui.settingsSelectedFilePath = skillFilePath;
   await loadSelectedSettingsFile(skillFilePath);
   ui.settingsSaveMessage = `Created ${skillName}.`;
+}
+
+async function refreshSelectedClaudeSkill() {
+  ui.settingsContext = await api.getClaudeSettingsContext(currentRepoId());
+  if (ui.settingsSelectedFilePath) {
+    await loadSelectedSettingsFile(ui.settingsSelectedFilePath);
+  }
+}
+
+async function importSelectedClaudeSkillIcon() {
+  const skill = selectedClaudeSkill();
+  if (!skill || !skill.editable) {
+    return;
+  }
+
+  const importedPath = await api.importSkillIcon(skill.path);
+  if (!importedPath) {
+    return;
+  }
+
+  await refreshSelectedClaudeSkill();
+  ui.settingsSaveMessage = `Updated icon for ${skill.name}.`;
+}
+
+async function clearSelectedClaudeSkillIcon() {
+  const skill = selectedClaudeSkill();
+  if (!skill || !skill.editable || !skill.iconUrl) {
+    return;
+  }
+
+  await api.clearSkillIcon(skill.path);
+  await refreshSelectedClaudeSkill();
+  ui.settingsSaveMessage = `Removed icon for ${skill.name}.`;
 }
 
 function defaultClaudeSkillTemplate(skillName: string) {
@@ -7409,7 +7548,7 @@ function adjacentSection(direction: number) {
   return sections[nextIndex] || null;
 }
 
-async function handleSessionWorkspaceSectionNavigation(direction: number) {
+async function handleSessionWorkspaceDirectionalNavigation(direction: WorkspaceNavigationDirection) {
   if (ui.selection.type !== "session") {
     return false;
   }
@@ -7419,50 +7558,48 @@ async function handleSessionWorkspaceSectionNavigation(direction: number) {
     return false;
   }
 
-  if (ui.focusSection === "sidebar") {
-    if (direction < 0) {
-      return false;
-    }
+  if (direction === "left" || direction === "right") {
+    if (ui.focusSection === "sidebar") {
+      if (direction === "left") {
+        return false;
+      }
 
-    if (expandedSidebarRepo()) {
-      setFocusSection("sidebar-drawer");
+      if (expandedSidebarRepo()) {
+        setFocusSection("sidebar-drawer");
+        return true;
+      }
+
+      await focusOrderedSessionPane(paneOrder[0], sessionPaneFocusSectionForWorkspaceNavigation());
       return true;
     }
 
-    await focusOrderedSessionPane(paneOrder[0], sessionPaneFocusSectionForHorizontalNavigation());
-    return true;
-  }
+    if (ui.focusSection === "sidebar-drawer") {
+      if (direction === "left") {
+        setFocusSection("sidebar");
+        return true;
+      }
 
-  if (ui.focusSection === "sidebar-drawer") {
-    if (direction < 0) {
-      setFocusSection("sidebar");
+      await focusOrderedSessionPane(paneOrder[0], sessionPaneFocusSectionForWorkspaceNavigation());
       return true;
     }
-
-    await focusOrderedSessionPane(paneOrder[0], sessionPaneFocusSectionForHorizontalNavigation());
-    return true;
   }
 
   if (ui.focusSection !== "main" && ui.focusSection !== "terminal") {
     return false;
   }
 
-  const currentIndex = paneOrder.indexOf(ui.selection.id);
-  if (currentIndex < 0) {
-    await focusOrderedSessionPane(paneOrder[0], sessionPaneFocusSectionForHorizontalNavigation());
+  if (!paneOrder.includes(ui.selection.id)) {
+    await focusOrderedSessionPane(paneOrder[0], sessionPaneFocusSectionForWorkspaceNavigation());
     return true;
   }
 
-  const nextIndex = currentIndex + direction;
-  if (nextIndex >= 0 && nextIndex < paneOrder.length) {
-    await focusOrderedSessionPane(
-      paneOrder[nextIndex],
-      sessionPaneFocusSectionForHorizontalNavigation()
-    );
+  const nextSessionId = adjacentVisibleSessionPaneId(ui.selection.id, direction);
+  if (nextSessionId) {
+    await focusOrderedSessionPane(nextSessionId, sessionPaneFocusSectionForWorkspaceNavigation());
     return true;
   }
 
-  if (direction < 0) {
+  if (direction === "left") {
     if (expandedSidebarRepo()) {
       setFocusSection("sidebar-drawer");
       return true;
@@ -7475,26 +7612,165 @@ async function handleSessionWorkspaceSectionNavigation(direction: number) {
   return true;
 }
 
-function orderedVisibleSessionPaneIds() {
-  const paneElements = Array.from(
-    detailElement.querySelectorAll(".session-pane")
-  ) as HTMLElement[];
-
-  const panes = paneElements
+function visibleSessionPanes() {
+  return Array.from(detailElement.querySelectorAll(".session-pane"))
     .map((pane) => {
-      const sessionId = pane.dataset.sessionId;
+      const element = pane as HTMLElement;
+      const sessionId = element.dataset.sessionId;
       if (!sessionId) {
         return null;
       }
 
-      const rect = pane.getBoundingClientRect();
+      const rect = element.getBoundingClientRect();
       return {
         sessionId,
         left: rect.left,
-        top: rect.top
-      };
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        centerX: rect.left + rect.width / 2,
+        centerY: rect.top + rect.height / 2
+      } satisfies VisibleSessionPane;
     })
-    .filter(Boolean) as Array<{ sessionId: string; left: number; top: number }>;
+    .filter(Boolean) as VisibleSessionPane[];
+}
+
+function intervalGap(startA: number, endA: number, startB: number, endB: number) {
+  return Math.max(0, Math.max(startA, startB) - Math.min(endA, endB));
+}
+
+function directionalPaneScore(
+  currentPane: VisibleSessionPane,
+  candidatePane: VisibleSessionPane,
+  direction: WorkspaceNavigationDirection
+) {
+  switch (direction) {
+    case "left":
+      if (candidatePane.centerX >= currentPane.centerX - 1) {
+        return null;
+      }
+      return {
+        primaryGap: Math.max(0, currentPane.left - candidatePane.right),
+        orthogonalGap: intervalGap(
+          currentPane.top,
+          currentPane.bottom,
+          candidatePane.top,
+          candidatePane.bottom
+        ),
+        orthogonalCenterDelta: Math.abs(currentPane.centerY - candidatePane.centerY),
+        primaryCenterDelta: currentPane.centerX - candidatePane.centerX
+      };
+    case "right":
+      if (candidatePane.centerX <= currentPane.centerX + 1) {
+        return null;
+      }
+      return {
+        primaryGap: Math.max(0, candidatePane.left - currentPane.right),
+        orthogonalGap: intervalGap(
+          currentPane.top,
+          currentPane.bottom,
+          candidatePane.top,
+          candidatePane.bottom
+        ),
+        orthogonalCenterDelta: Math.abs(currentPane.centerY - candidatePane.centerY),
+        primaryCenterDelta: candidatePane.centerX - currentPane.centerX
+      };
+    case "up":
+      if (candidatePane.centerY >= currentPane.centerY - 1) {
+        return null;
+      }
+      return {
+        primaryGap: Math.max(0, currentPane.top - candidatePane.bottom),
+        orthogonalGap: intervalGap(
+          currentPane.left,
+          currentPane.right,
+          candidatePane.left,
+          candidatePane.right
+        ),
+        orthogonalCenterDelta: Math.abs(currentPane.centerX - candidatePane.centerX),
+        primaryCenterDelta: currentPane.centerY - candidatePane.centerY
+      };
+    case "down":
+      if (candidatePane.centerY <= currentPane.centerY + 1) {
+        return null;
+      }
+      return {
+        primaryGap: Math.max(0, candidatePane.top - currentPane.bottom),
+        orthogonalGap: intervalGap(
+          currentPane.left,
+          currentPane.right,
+          candidatePane.left,
+          candidatePane.right
+        ),
+        orthogonalCenterDelta: Math.abs(currentPane.centerX - candidatePane.centerX),
+        primaryCenterDelta: candidatePane.centerY - currentPane.centerY
+      };
+    default:
+      return null;
+  }
+}
+
+function adjacentVisibleSessionPaneId(
+  currentSessionId: string,
+  direction: WorkspaceNavigationDirection
+) {
+  const panes = visibleSessionPanes();
+  const currentPane = panes.find((pane) => pane.sessionId === currentSessionId);
+  if (!currentPane) {
+    return null;
+  }
+
+  const rankedCandidates = panes
+    .filter((pane) => pane.sessionId !== currentSessionId)
+    .map((pane) => ({
+      pane,
+      score: directionalPaneScore(currentPane, pane, direction)
+    }))
+    .filter((entry) => !!entry.score) as Array<{
+    pane: VisibleSessionPane;
+    score: {
+      primaryGap: number;
+      orthogonalGap: number;
+      orthogonalCenterDelta: number;
+      primaryCenterDelta: number;
+    };
+  }>;
+
+  rankedCandidates.sort((left, right) => {
+    const leftOverlapPriority = left.score.orthogonalGap === 0 ? 0 : 1;
+    const rightOverlapPriority = right.score.orthogonalGap === 0 ? 0 : 1;
+    if (leftOverlapPriority !== rightOverlapPriority) {
+      return leftOverlapPriority - rightOverlapPriority;
+    }
+
+    if (left.score.primaryGap !== right.score.primaryGap) {
+      return left.score.primaryGap - right.score.primaryGap;
+    }
+
+    if (left.score.orthogonalGap !== right.score.orthogonalGap) {
+      return left.score.orthogonalGap - right.score.orthogonalGap;
+    }
+
+    if (left.score.orthogonalCenterDelta !== right.score.orthogonalCenterDelta) {
+      return left.score.orthogonalCenterDelta - right.score.orthogonalCenterDelta;
+    }
+
+    if (left.score.primaryCenterDelta !== right.score.primaryCenterDelta) {
+      return left.score.primaryCenterDelta - right.score.primaryCenterDelta;
+    }
+
+    return left.pane.sessionId.localeCompare(right.pane.sessionId);
+  });
+
+  return rankedCandidates[0]?.pane.sessionId || null;
+}
+
+function orderedVisibleSessionPaneIds() {
+  const panes = visibleSessionPanes().map((pane) => ({
+    sessionId: pane.sessionId,
+    left: pane.left,
+    top: pane.top
+  }));
 
   if (!panes.length) {
     return [];
@@ -7532,7 +7808,7 @@ function orderedVisibleSessionPaneIds() {
   );
 }
 
-function sessionPaneFocusSectionForHorizontalNavigation(): SectionId {
+function sessionPaneFocusSectionForWorkspaceNavigation(): SectionId {
   if (ui.focusSection === "main" || ui.focusSection === "terminal") {
     return ui.focusSection;
   }
@@ -7859,6 +8135,62 @@ function renderSessionTagDot(tagColor, extraClass = "") {
 
   const className = extraClass ? ` ${extraClass}` : "";
   return `<span class="session-tag-dot session-tag-${escapeAttribute(normalized)}${className}" title="${escapeAttribute(sessionTagLabel(normalized))} tag" aria-hidden="true"></span>`;
+}
+
+function renderSessionVisualButton(session, extraClass = "", action = "", label = "Upload session icon") {
+  const className = extraClass ? ` ${extraClass}` : "";
+  const actionAttribute = action ? ` data-action="${escapeAttribute(action)}"` : "";
+  return `
+    <button
+      type="button"
+      class="session-visual-button${className}"
+      ${actionAttribute}
+      data-session-id="${session.id}"
+      aria-label="${escapeAttribute(label)}"
+      title="${escapeAttribute(label)}">
+      ${renderSessionVisual(session, "session-visual-button-content", { includePlaceholder: true })}
+    </button>
+  `;
+}
+
+function renderSessionVisual(
+  session,
+  extraClass = "",
+  options: { includePlaceholder?: boolean } = {}
+) {
+  const className = extraClass ? ` ${extraClass}` : "";
+  const hasIcon = !!session?.sessionIconUrl;
+  const normalizedTag = normalizeSessionTagColor(session?.tagColor);
+  const includePlaceholder = !!options.includePlaceholder;
+
+  if (!hasIcon && !includePlaceholder) {
+    return renderSessionTagDot(normalizedTag, extraClass);
+  }
+
+  return `
+    <span class="session-visual${className}" aria-hidden="true">
+      <span class="session-icon-frame">
+        ${
+          hasIcon
+            ? `<img class="session-icon-image" src="${escapeAttribute(session.sessionIconUrl)}" alt="" />`
+            : renderSessionPlaceholderIcon()
+        }
+        ${normalizedTag ? renderSessionTagDot(normalizedTag, "session-icon-tag") : ""}
+      </span>
+    </span>
+  `;
+}
+
+function renderSessionPlaceholderIcon() {
+  return `
+    <span class="session-icon-placeholder" aria-hidden="true">
+      <svg class="session-icon-placeholder-glyph" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M3.5 4.25A1.75 1.75 0 0 1 5.25 2.5h5.5A1.75 1.75 0 0 1 12.5 4.25v7.5a1.75 1.75 0 0 1-1.75 1.75h-5.5A1.75 1.75 0 0 1 3.5 11.75z" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <circle cx="6.1" cy="6" r="1.1" fill="currentColor"/>
+        <path d="M5 10.7 7.2 8.6l1.5 1.5 2.3-2.4 1 1.1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </span>
+  `;
 }
 
 function renderSessionPinIndicator(label = "Pinned", extraClass = "") {

@@ -70,6 +70,8 @@ function migrateSnapshot(snapshot) {
         blocker: null,
         isPinned: false,
         tagColor: null,
+        sessionIconPath: null,
+        sessionIconUpdatedAt: null,
         ...session
       }))
     : [];
@@ -88,6 +90,11 @@ function normalizeRestoredSessions(sessions) {
   for (const session of sessions) {
     session.isPinned = !!session.isPinned;
     session.tagColor = normalizeSessionTagColor(session.tagColor);
+    session.sessionIconPath = normalizeSessionIconPath(session.sessionIconPath);
+    session.sessionIconUpdatedAt =
+      typeof session.sessionIconUpdatedAt === "string" && session.sessionIconUpdatedAt
+        ? session.sessionIconUpdatedAt
+        : null;
 
     if (session.runtimeState === "live") {
       session.runtimeState = "stopped";
@@ -113,6 +120,14 @@ function normalizeRepos(repos) {
 function normalizeSessionTagColor(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   return SESSION_TAG_COLORS.has(normalized) ? normalized : null;
+}
+
+function normalizeSessionIconPath(value) {
+  if (typeof value !== "string" || !value) {
+    return null;
+  }
+
+  return fs.existsSync(value) ? value : null;
 }
 
 function getStatePath() {

@@ -4,6 +4,7 @@ const { execSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
+const { pathToFileURL } = require("node:url");
 const {
   app,
   BrowserWindow,
@@ -21,6 +22,8 @@ const { detectSignal, sanitizeVisibleText } = require("./session-signals");
 const { TerminalTranscriptBuffer } = require("./terminal-transcript-buffer");
 const {
   buildClaudeSettingsContext,
+  clearSkillIcon,
+  importSkillIcon,
   loadSettingsFile,
   saveSettingsFile
 } = require("./claude-settings");
@@ -55,6 +58,7 @@ const SESSION_TAG_COLORS = new Set([
   "purple",
   "gray"
 ]);
+const SESSION_ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
 
 function buildFileTree(rootPath: string, currentPath: string, depth: number): any[] {
   if (depth >= 5) return [];
@@ -171,6 +175,12 @@ class AppController {
     ipcMain.handle("session:organize", (_event, payload) =>
       this.updateSessionOrganization(payload.sessionId, payload.patch)
     );
+    ipcMain.handle("session:importIcon", async (_event, sessionId) =>
+      this.importSessionIcon(sessionId)
+    );
+    ipcMain.handle("session:clearIcon", (_event, sessionId) =>
+      this.clearSessionIcon(sessionId)
+    );
     ipcMain.handle("session:reopen", (_event, sessionId) => this.reopenSession(sessionId));
     ipcMain.handle("session:close", (_event, sessionId) => this.closeSession(sessionId));
     ipcMain.handle("session:input", (_event, payload) => {
@@ -204,6 +214,32 @@ class AppController {
       saveSettingsFile(payload.filePath, payload.contents);
       return true;
     });
+    ipcMain.handle("settings:importSkillIcon", async (_event, skillFilePath) => {
+      if (!skillFilePath) {
+        return null;
+      }
+
+      const result = await dialog.showOpenDialog(this.window, {
+        title: "Choose Skill Icon",
+        buttonLabel: "Use Icon",
+        properties: ["openFile"],
+        filters: [
+          {
+            name: "Images",
+            extensions: ["png", "jpg", "jpeg", "gif", "svg", "webp"]
+          }
+        ]
+      });
+
+      if (result.canceled || !result.filePaths.length) {
+        return null;
+      }
+
+      return importSkillIcon(skillFilePath, result.filePaths[0]);
+    });
+    ipcMain.handle("settings:clearSkillIcon", (_event, skillFilePath) =>
+      clearSkillIcon(skillFilePath)
+    );
     ipcMain.handle("wiki:getContext", (_event, repoId) => this.projectWikiContext(repoId));
     ipcMain.handle("wiki:readFile", (_event, payload) =>
       this.projectWikiFile(payload.repoId, payload.relativePath)
@@ -403,7 +439,15 @@ class AppController {
           wikiPath: wikiDirectoryPath(repo.path)
         }))
         .sort((left, right) => left.name.localeCompare(right.name)),
-      sessions: [...this.state.sessions].sort(compareSessions)
+      sessions: [...this.state.sessions]
+        .sort(compareSessions)
+        .map((session) => ({
+          ...session,
+          isPinned: !!session.isPinned,
+          tagColor: normalizeSessionTagColor(session.tagColor),
+          sessionIconUrl: sessionIconUrl(session),
+          sessionIconUpdatedAt: session.sessionIconUpdatedAt || null
+        }))
     });
   }
 
@@ -591,6 +635,8 @@ class AppController {
       launchCount: 1,
       isPinned: false,
       tagColor: null,
+      sessionIconPath: null,
+      sessionIconUpdatedAt: null,
       transcript: "",
       rawTranscript: ""
     };
@@ -655,6 +701,63 @@ class AppController {
     return true;
   }
 
+  async importSessionIcon(sessionId) {
+    const session = this.sessionById(sessionId);
+    if (!session || !this.window || this.window.isDestroyed()) {
+      return null;
+    }
+
+    const result = await dialog.showOpenDialog(this.window, {
+      title: "Choose Session Icon",
+      buttonLabel: "Use Icon",
+      properties: ["openFile"],
+      filters: [
+        {
+          name: "Images",
+          extensions: ["png", "jpg", "jpeg", "gif", "svg", "webp"]
+        }
+      ]
+    });
+
+    if (result.canceled || !result.filePaths.length) {
+      return null;
+    }
+
+    const sourceFilePath = result.filePaths[0];
+    const extension = path.extname(sourceFilePath).toLowerCase();
+    if (!SESSION_ICON_EXTENSIONS.has(extension)) {
+      throw new Error("Choose a PNG, JPG, GIF, SVG, or WebP image.");
+    }
+
+    const targetDirectoryPath = sessionIconDirectoryPath();
+    const targetFilePath = path.join(targetDirectoryPath, `${session.id}${extension}`);
+    fs.mkdirSync(targetDirectoryPath, { recursive: true });
+    removeStoredSessionIconFiles(session.id, targetFilePath);
+    fs.copyFileSync(sourceFilePath, targetFilePath);
+
+    session.sessionIconPath = targetFilePath;
+    session.sessionIconUpdatedAt = now();
+    this.scheduleSave();
+    this.sendSessionUpdated(sessionId);
+    this.broadcastState();
+    return summarizeSession(session);
+  }
+
+  clearSessionIcon(sessionId) {
+    const session = this.sessionById(sessionId);
+    if (!session || !session.sessionIconPath) {
+      return false;
+    }
+
+    removeStoredSessionIconFiles(session.id, null);
+    session.sessionIconPath = null;
+    session.sessionIconUpdatedAt = null;
+    this.scheduleSave();
+    this.sendSessionUpdated(sessionId);
+    this.broadcastState();
+    return true;
+  }
+
   reopenSession(sessionId) {
     const session = this.sessionById(sessionId);
     const repo = session ? this.repoById(session.repoID) : null;
@@ -681,6 +784,7 @@ class AppController {
   }
 
   closeSession(sessionId) {
+    const session = this.sessionById(sessionId);
     this.cancelPendingClaudeLaunch(sessionId);
     this.sessionSizes.delete(sessionId);
     this.terminalBuffers.delete(sessionId);
@@ -688,6 +792,9 @@ class AppController {
     this.ptyHost.killSession(sessionId);
     this.focusedSessionId = this.focusedSessionId === sessionId ? null : this.focusedSessionId;
     this.state.sessions = this.state.sessions.filter((session) => session.id !== sessionId);
+    if (session?.sessionIconPath) {
+      removeStoredSessionIconFiles(session.id, null);
+    }
     this.scheduleSave();
     this.broadcastState();
   }
@@ -806,6 +913,8 @@ class AppController {
       launchCount: 2,
       isPinned: false,
       tagColor: null,
+      sessionIconPath: null,
+      sessionIconUpdatedAt: null,
       transcript: "",
       rawTranscript: ""
     };
@@ -1348,6 +1457,8 @@ function summarizeSession(session) {
     unreadCount: session.unreadCount,
     isPinned: !!session.isPinned,
     tagColor: normalizeSessionTagColor(session.tagColor),
+    sessionIconUrl: sessionIconUrl(session),
+    sessionIconUpdatedAt: session.sessionIconUpdatedAt || null,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     lastActivityAt: session.lastActivityAt,
@@ -1386,6 +1497,42 @@ function compareInboxSessions(left, right) {
 function normalizeSessionTagColor(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   return SESSION_TAG_COLORS.has(normalized) ? normalized : null;
+}
+
+function sessionIconDirectoryPath() {
+  return path.join(app.getPath("userData"), "session-icons");
+}
+
+function removeStoredSessionIconFiles(sessionId, keepPath) {
+  const directoryPath = sessionIconDirectoryPath();
+  if (!fs.existsSync(directoryPath)) {
+    return;
+  }
+
+  for (const fileName of fs.readdirSync(directoryPath)) {
+    if (!fileName.startsWith(`${sessionId}.`)) {
+      continue;
+    }
+
+    const filePath = path.join(directoryPath, fileName);
+    if (keepPath && path.resolve(filePath) === path.resolve(keepPath)) {
+      continue;
+    }
+
+    try {
+      fs.unlinkSync(filePath);
+    } catch {}
+  }
+}
+
+function sessionIconUrl(session) {
+  if (!session?.sessionIconPath || !fs.existsSync(session.sessionIconPath)) {
+    return "";
+  }
+
+  const url = pathToFileURL(session.sessionIconPath).href;
+  const version = encodeURIComponent(String(session.sessionIconUpdatedAt || ""));
+  return version ? `${url}?v=${version}` : url;
 }
 
 function trimTranscript(value) {

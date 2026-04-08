@@ -1718,6 +1718,121 @@ textarea {
     0 0 0 1px color-mix(in oklab, var(--border-strong) 55%, transparent);
 }
 
+.session-visual {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.session-visual-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  flex: none;
+  cursor: pointer;
+}
+
+.session-visual-button:focus-visible {
+  outline: none;
+}
+
+.session-visual-button .session-icon-frame::after {
+  content: "+";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: color-mix(in oklab, var(--surface-soft) 42%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0;
+  transition:
+    opacity 140ms ease,
+    background 140ms ease;
+  pointer-events: none;
+}
+
+.session-visual-button:hover .session-icon-frame::after,
+.session-visual-button:focus-visible .session-icon-frame::after {
+  opacity: 1;
+}
+
+.session-visual-button:focus-visible .session-icon-frame {
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.session-icon-frame {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  overflow: visible;
+  flex: none;
+}
+
+.session-icon-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: inherit;
+  border: 1px solid color-mix(in oklab, var(--border-strong) 55%, transparent);
+  background: var(--surface-muted);
+}
+
+.session-icon-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  border: 1px solid color-mix(in oklab, var(--border-strong) 55%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--surface-soft) 94%, white 6%),
+    color-mix(in oklab, var(--surface-muted) 92%, var(--border) 8%)
+  );
+  color: color-mix(in oklab, var(--text-muted) 84%, var(--text) 16%);
+}
+
+.session-icon-placeholder-glyph {
+  width: 12px;
+  height: 12px;
+}
+
+.session-visual-list .session-icon-frame {
+  width: 18px;
+  height: 18px;
+}
+
+.session-visual-toolbar .session-icon-frame,
+.session-visual-pane .session-icon-frame,
+.session-visual-toolbar.session-visual-button .session-icon-frame {
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+}
+
+.session-icon-tag {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 8px;
+  height: 8px;
+  box-shadow:
+    0 0 0 2px var(--surface-soft),
+    0 0 0 3px color-mix(in oklab, var(--border-strong) 35%, transparent);
+}
+
 .session-tag-dot-list {
   width: 12px;
   height: 12px;
@@ -2867,6 +2982,83 @@ textarea {
   color: oklch(0.9 0.02 230);
 }
 
+.skill-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  overflow: hidden;
+  flex: none;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+}
+
+.skill-avatar-button {
+  position: relative;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+}
+
+.skill-avatar-button::after {
+  content: "+";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: color-mix(in oklab, var(--surface-soft) 40%, transparent);
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 140ms ease;
+  pointer-events: none;
+}
+
+.skill-avatar-button:hover::after,
+.skill-avatar-button:focus-visible::after {
+  opacity: 1;
+}
+
+.skill-avatar-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.skill-avatar-small {
+  width: 34px;
+  height: 34px;
+}
+
+.skill-avatar-large {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+}
+
+.skill-avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.skill-avatar-fallback {
+  background: oklch(0.84 0.055 230 / 0.95);
+  border-color: transparent;
+  color: oklch(0.31 0.06 235);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.dark .skill-avatar-fallback {
+  background: oklch(0.38 0.045 230 / 0.95);
+  color: oklch(0.9 0.02 230);
+}
+
 .settings-file-summary-card,
 .settings-editor-card,
 .settings-effective-panel,
@@ -2894,10 +3086,15 @@ textarea {
 
 .claude-settings-mode-bar {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 12px;
   align-items: center;
+  justify-content: flex-start;
+}
+
+.claude-settings-mode-buttons {
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-soft);
 }
 
 .claude-settings-mode-buttons,
@@ -2927,6 +3124,18 @@ textarea {
 .claude-settings-mode-button:hover,
 .claude-settings-chip-button:hover {
   background: var(--surface-soft);
+}
+
+.claude-settings-mode-buttons .claude-settings-mode-button {
+  border-color: transparent;
+}
+
+.claude-settings-mode-buttons .claude-settings-mode-button:hover {
+  background: var(--surface-muted);
+}
+
+.claude-settings-mode-buttons .claude-settings-mode-button.active:hover {
+  background: var(--surface-active);
 }
 
 .claude-plugin-grid {

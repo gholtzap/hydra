@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 
 const FILE_LAYOUTS = [
   ["AGENTS.md", "AGENTS.md"],
@@ -9,6 +10,7 @@ const FILE_LAYOUTS = [
   [path.join(".claude", "settings.local.json"), "settings.local.json"]
 ];
 const SKILL_FILE_NAMES = ["SKILL.md", "skill.md"];
+const SKILL_ICON_BASENAME = "icon";
 const MANAGED_SKILLS_ROOT =
   process.platform === "darwin"
     ? path.join(
@@ -51,6 +53,37 @@ function loadSettingsFile(filePath) {
 function saveSettingsFile(filePath, contents) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, contents, "utf8");
+}
+
+function importSkillIcon(skillFilePath, sourceFilePath) {
+  if (!skillFilePath || !sourceFilePath) {
+    return null;
+  }
+
+  const skillDirectoryPath = path.dirname(skillFilePath);
+  const extension = path.extname(sourceFilePath).toLowerCase();
+  if (!isSupportedSkillIconExtension(extension)) {
+    throw new Error("Choose a PNG, JPG, GIF, SVG, or WebP image.");
+  }
+
+  const targetFileName = `${SKILL_ICON_BASENAME}${extension}`;
+  const targetFilePath = path.join(skillDirectoryPath, targetFileName);
+  fs.mkdirSync(skillDirectoryPath, { recursive: true });
+  fs.copyFileSync(sourceFilePath, targetFilePath);
+
+  const relativeIconPath = `./${targetFileName}`;
+  saveSettingsFile(skillFilePath, setFrontmatterValue(loadSettingsFile(skillFilePath), "icon", relativeIconPath));
+
+  return targetFilePath;
+}
+
+function clearSkillIcon(skillFilePath) {
+  if (!skillFilePath) {
+    return false;
+  }
+
+  saveSettingsFile(skillFilePath, setFrontmatterValue(loadSettingsFile(skillFilePath), "icon", null));
+  return true;
 }
 
 function filesFor(rootPath, scope, prefix) {
@@ -281,6 +314,8 @@ function listSkillEntries(
       sourceLabel,
       editable,
       description: metadata.description,
+      iconPath: metadata.iconPath,
+      iconUrl: metadata.iconUrl,
       pluginId: extra.pluginId || null
     };
   });
@@ -322,40 +357,116 @@ function findSkillFile(skillDirectoryPath) {
 
 function readSkillMetadata(filePath) {
   const contents = loadSettingsFile(filePath);
-  const description = extractFrontmatterValue(contents, "description");
+  const frontmatter = parseFrontmatter(contents);
+  const description = frontmatter.values.description || "";
+  const iconReference = frontmatter.values.icon || "";
+  const iconPath = resolveSkillIconPath(filePath, iconReference);
 
   return {
-    description: description || ""
+    description,
+    iconPath,
+    iconUrl: iconPath ? pathToFileURL(iconPath).href : ""
   };
 }
 
-function extractFrontmatterValue(contents, key) {
+function parseFrontmatter(contents) {
   if (!contents.startsWith("---")) {
-    return "";
+    return {
+      hasFrontmatter: false,
+      lines: [],
+      values: {} as Record<string, string>,
+      body: contents
+    };
   }
 
   const lines = contents.split(/\r?\n/);
-  let insideFrontmatter = false;
+  if (lines[0].trim() !== "---") {
+    return {
+      hasFrontmatter: false,
+      lines: [],
+      values: {} as Record<string, string>,
+      body: contents
+    };
+  }
 
-  for (const line of lines) {
-    if (line.trim() === "---") {
-      if (!insideFrontmatter) {
-        insideFrontmatter = true;
-        continue;
-      }
-      break;
-    }
+  const closingIndex = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+  if (closingIndex === -1) {
+    return {
+      hasFrontmatter: false,
+      lines: [],
+      values: {} as Record<string, string>,
+      body: contents
+    };
+  }
 
-    if (!insideFrontmatter) {
+  const frontmatterLines = lines.slice(1, closingIndex);
+  const values: Record<string, string> = {};
+
+  for (const line of frontmatterLines) {
+    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (!match) {
       continue;
     }
 
-    if (line.startsWith(`${key}:`)) {
-      return line.slice(key.length + 1).trim().replace(/^["']|["']$/g, "");
-    }
+    values[match[1]] = stripYamlScalarQuotes(match[2].trim());
   }
 
-  return "";
+  return {
+    hasFrontmatter: true,
+    lines: frontmatterLines,
+    values,
+    body: lines.slice(closingIndex + 1).join("\n")
+  };
+}
+
+function resolveSkillIconPath(skillFilePath, iconReference) {
+  if (!iconReference) {
+    return "";
+  }
+
+  const iconPath = path.isAbsolute(iconReference)
+    ? iconReference
+    : path.resolve(path.dirname(skillFilePath), iconReference);
+
+  return fs.existsSync(iconPath) ? iconPath : "";
+}
+
+function setFrontmatterValue(contents, key, nextValue) {
+  const parsed = parseFrontmatter(contents);
+  const nextLine = nextValue === null ? null : `${key}: ${JSON.stringify(String(nextValue))}`;
+  const nextLines = [...parsed.lines];
+  const existingIndex = nextLines.findIndex((line) => line.startsWith(`${key}:`));
+
+  if (existingIndex >= 0) {
+    if (nextLine === null) {
+      nextLines.splice(existingIndex, 1);
+    } else {
+      nextLines[existingIndex] = nextLine;
+    }
+  } else if (nextLine !== null) {
+    nextLines.push(nextLine);
+  }
+
+  if (!parsed.hasFrontmatter && nextLine === null) {
+    return contents;
+  }
+
+  const body = parsed.body.replace(/^\n+/, "");
+  const frontmatterBlock = `---\n${nextLines.join("\n")}\n---`;
+
+  if (!body) {
+    return `${frontmatterBlock}\n`;
+  }
+
+  return `${frontmatterBlock}\n\n${body}`;
+}
+
+function stripYamlScalarQuotes(value) {
+  return value.replace(/^["']|["']$/g, "");
+}
+
+function isSupportedSkillIconExtension(extension) {
+  return new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]).has(extension);
 }
 
 function skillNameFromFile(filePath) {
@@ -422,6 +533,8 @@ function isPlainObject(value) {
 
 module.exports = {
   buildClaudeSettingsContext,
+  clearSkillIcon,
+  importSkillIcon,
   loadSettingsFile,
   saveSettingsFile
 };

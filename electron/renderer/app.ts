@@ -899,6 +899,7 @@ lazygitDialog.addEventListener("cancel", (e) => {
 api.onStateChanged((nextState) => {
   replaceState(nextState);
   ensureValidSelection();
+  syncViewedSessionReadState();
   renderSidebar();
   renderDetail();
   renderDialogs();
@@ -906,6 +907,7 @@ api.onStateChanged((nextState) => {
 
 api.onSessionOutput((payload) => {
   const session = appendSessionOutput(payload.sessionId, payload.data, payload.session);
+  syncViewedSessionReadState(payload.sessionId);
   renderSidebar();
 
   if (!session) {
@@ -933,6 +935,7 @@ api.onSessionOutput((payload) => {
 
 api.onSessionUpdated((payload) => {
   const session = mergeSessionSummary(payload.session);
+  syncViewedSessionReadState(payload.session?.id);
   renderSidebar();
 
   if (!session) {
@@ -1120,6 +1123,19 @@ function ensureValidSelection() {
   syncSidebarNavSelection();
   syncMainListSelection();
   normalizeFocusSection();
+}
+
+function syncViewedSessionReadState(sessionId = ui.selection.type === "session" ? ui.selection.id : null) {
+  if (ui.selection.type !== "session" || !sessionId || ui.selection.id !== sessionId) {
+    return;
+  }
+
+  const session = sessionById(sessionId);
+  if (!session || session.unreadCount < 1) {
+    return;
+  }
+
+  void api.setFocusedSession(sessionId);
 }
 
 function sidebarSignature() {

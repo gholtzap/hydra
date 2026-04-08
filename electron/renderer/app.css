@@ -3362,6 +3362,86 @@ textarea {
   resize: vertical;
 }
 
+.claude-marketplace-shell {
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  height: min(72vh, 860px);
+  min-height: 660px;
+  align-items: stretch;
+}
+
+.claude-marketplace-shell .settings-sidebar,
+.claude-marketplace-shell .settings-detail-panel {
+  min-height: 0;
+  height: 100%;
+}
+
+.claude-marketplace-shell .settings-sidebar {
+  overflow: hidden;
+}
+
+.claude-marketplace-shell .settings-sidebar-sections {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.claude-marketplace-detail-panel {
+  overflow: hidden;
+}
+
+.claude-marketplace-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.claude-marketplace-search-card,
+.marketplace-install-card,
+.marketplace-files-card,
+.marketplace-markdown-card {
+  margin-bottom: 4px;
+}
+
+.marketplace-install-grid {
+  grid-template-columns: minmax(160px, 220px) minmax(140px, 220px);
+  align-items: center;
+}
+
+.marketplace-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.marketplace-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.marketplace-markdown-preview {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.settings-chip-success {
+  color: var(--success-text, #0f5132);
+  background: color-mix(in srgb, var(--success-bg, #d1fae5) 82%, transparent);
+  border-color: color-mix(in srgb, var(--success-border, #6ee7b7) 72%, transparent);
+}
+
 .claude-skills-empty-state {
   height: 100%;
   min-height: 0;
@@ -3813,6 +3893,7 @@ textarea {
 
   .settings-shell,
   .claude-skills-shell,
+  .claude-marketplace-shell,
   .settings-guided-layout,
   .themes-toolbar-header,
   .themes-toolbar-controls,
@@ -3848,13 +3929,25 @@ textarea {
     min-height: 0;
   }
 
+  .claude-marketplace-shell {
+    height: auto;
+    min-height: 0;
+  }
+
   .claude-skills-shell .settings-sidebar,
   .claude-skills-shell .settings-detail-panel,
+  .claude-marketplace-shell .settings-sidebar,
+  .claude-marketplace-shell .settings-detail-panel,
   .claude-skill-panel,
+  .claude-marketplace-panel,
   .claude-skill-editor-card {
     height: auto;
     min-height: 0;
     overflow: visible;
+  }
+
+  .marketplace-install-grid {
+    grid-template-columns: 1fr;
   }
 
   .claude-skill-editor {

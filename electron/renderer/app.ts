@@ -306,6 +306,16 @@ const ui = {
   settingsJsonDraft: null,
   settingsJsonError: "",
   settingsShowRawJson: false,
+  marketplaceResults: [] as MarketplaceSkillSummary[],
+  marketplaceSelectedId: null as string | null,
+  marketplaceSelectedDetail: null as MarketplaceSkillDetails | null,
+  marketplaceLoading: false,
+  marketplaceDetailLoading: false,
+  marketplaceError: "",
+  marketplaceInstallMessage: "",
+  marketplaceInspectUrl: "",
+  marketplaceInspectMessage: "",
+  marketplacePreferredScope: "project" as "user" | "project",
   portStatusData: null,
   portStatusLoading: false,
   portStatusShowAll: false,
@@ -381,7 +391,45 @@ type JsonRenderOptions = {
   forceRawEditor?: boolean;
 };
 
-type ClaudeSettingsView = "files" | "skills" | "plugins";
+type ClaudeSettingsView = "files" | "skills" | "marketplace" | "plugins";
+
+type MarketplaceSkillSource = {
+  owner: string;
+  repo: string;
+  ref?: string;
+  path: string;
+  reviewState?: string;
+  tags?: string[];
+};
+
+type MarketplaceSkillSummary = {
+  id: string;
+  title: string;
+  description: string;
+  reviewState: "reviewed" | "unreviewed";
+  sourceUrl: string;
+  repoUrl: string;
+  repoFullName: string;
+  stars: number;
+  updatedAt: string;
+  tags: string[];
+  compatibility: string[];
+  fileCount: number;
+  source: MarketplaceSkillSource;
+};
+
+type MarketplaceSkillDetails = MarketplaceSkillSummary & {
+  markdown: string;
+  files: Array<{
+    path: string;
+    relativePath: string;
+    size: number;
+  }>;
+  installTargets?: {
+    user?: string | null;
+    project?: string | null;
+  };
+};
 
 type SimplifiedJsonCategory = {
   id: string;
@@ -2053,6 +2101,61 @@ function pluralize(count, singular, plural) {
   return count === 1 ? singular : plural;
 }
 
+function formatBytes(value) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) {
+    return "0 B";
+  }
+
+  if (size < 1024) {
+    return `${size} B`;
+  }
+
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(size >= 10 * 1024 ? 0 : 1)} KB`;
+  }
+
+  return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+function formatRelativeDate(value) {
+  if (!value) {
+    return "Updated recently";
+  }
+
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return "Updated recently";
+  }
+
+  const delta = Date.now() - timestamp.getTime();
+  const absDelta = Math.abs(delta);
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+
+  if (absDelta < hour) {
+    const minutes = Math.max(1, Math.round(absDelta / minute));
+    return `${minutes} ${pluralize(minutes, "minute", "minutes")} ago`;
+  }
+
+  if (absDelta < day) {
+    const hours = Math.max(1, Math.round(absDelta / hour));
+    return `${hours} ${pluralize(hours, "hour", "hours")} ago`;
+  }
+
+  const days = Math.max(1, Math.round(absDelta / day));
+  if (days < 30) {
+    return `${days} ${pluralize(days, "day", "days")} ago`;
+  }
+
+  return timestamp.toLocaleDateString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric"
+  });
+}
+
 function renderSessionDetail(session) {
   if (!session) {
     detailElement.innerHTML = `<div class="empty-state">This session is no longer available.</div>`;
@@ -2889,6 +2992,11 @@ async function ensureSettingsSelection() {
     return;
   }
 
+  if (ui.settingsClaudeView === "marketplace") {
+    await ensureClaudeMarketplaceSelection();
+    return;
+  }
+
   if (ui.settingsClaudeView === "plugins") {
     await ensureClaudePluginSelection();
     return;
@@ -2944,6 +3052,32 @@ async function ensureClaudeSkillSelection() {
 
   if (!availableSkills.length) {
     clearSelectedSettingsFile();
+  }
+}
+
+async function ensureClaudeMarketplaceSelection() {
+  const canInstallProject = !!repoById(currentRepoId())?.path;
+  ui.marketplacePreferredScope = resolvedMarketplaceScope(canInstallProject);
+
+  const selectedExists = ui.marketplaceResults.some((result) => result.id === ui.marketplaceSelectedId);
+  if (!selectedExists) {
+    ui.marketplaceSelectedId =
+      ui.marketplaceResults.find((result) => result.reviewState === "reviewed")?.id ||
+      ui.marketplaceResults[0]?.id ||
+      null;
+  }
+
+  if (!ui.marketplaceResults.length) {
+    ui.marketplaceSelectedId = null;
+    ui.marketplaceSelectedDetail = null;
+    return;
+  }
+
+  if (
+    ui.marketplaceSelectedDetail &&
+    ui.marketplaceSelectedDetail.id !== ui.marketplaceSelectedId
+  ) {
+    ui.marketplaceSelectedDetail = null;
   }
 }
 
@@ -3253,6 +3387,8 @@ function renderClaudeSettingsPane() {
       ${
         ui.settingsClaudeView === "plugins"
           ? renderClaudePluginsPane(context)
+          : ui.settingsClaudeView === "marketplace"
+            ? renderClaudeMarketplacePane(context)
           : ui.settingsClaudeView === "skills"
             ? renderClaudeSkillsPane(context)
             : renderClaudeFilesPane(context)
@@ -3267,6 +3403,7 @@ function renderClaudeSettingsModeBar() {
       <div class="claude-settings-mode-buttons">
         ${renderClaudeSettingsModeButton("files", "Files")}
         ${renderClaudeSettingsModeButton("skills", "Skills")}
+        ${renderClaudeSettingsModeButton("marketplace", "Marketplace")}
         ${renderClaudeSettingsModeButton("plugins", "Plugins")}
       </div>
     </div>
@@ -3566,6 +3703,183 @@ function renderClaudeSkillsPane(context) {
         }
       </div>
     </div>
+  `;
+}
+
+function renderClaudeMarketplacePane(context) {
+  const results = ui.marketplaceResults || [];
+  const selectedResult = selectedMarketplaceResult();
+  const selectedDetail = ui.marketplaceSelectedDetail;
+  const repo = repoById(currentRepoId());
+  const canInstallProject = !!repo?.path;
+  const preferredScope = resolvedMarketplaceScope(canInstallProject);
+
+  return `
+    <div class="settings-shell claude-marketplace-shell">
+      <div class="settings-sidebar">
+        <div class="settings-sidebar-sections">
+          ${renderClaudeMarketplaceSearchCard()}
+          ${
+            ui.marketplaceLoading
+              ? `<div class="settings-sidebar-empty">Searching GitHub for matching skills…</div>`
+              : ""
+          }
+          ${
+            ui.marketplaceError
+              ? `<div class="settings-warning-card"><div class="row-title">Marketplace error</div><div class="row-subtitle">${escapeHtml(ui.marketplaceError)}</div></div>`
+              : ""
+          }
+          ${
+            results.length
+              ? `<div class="section-label">Loaded Skills</div>${results.map((result) => renderMarketplaceResultRow(result)).join("")}`
+              : ""
+          }
+          ${
+            !ui.marketplaceLoading && !results.length && !ui.marketplaceError
+              ? `<div class="settings-sidebar-empty">Paste a GitHub repo or skill URL to load installable skills.</div>`
+              : ""
+          }
+        </div>
+      </div>
+
+      <div class="settings-detail-panel claude-marketplace-detail-panel">
+        ${
+          ui.marketplaceDetailLoading
+            ? `<div class="empty-state claude-skills-empty-state">Loading skill preview…</div>`
+            : selectedResult && selectedDetail && selectedDetail.id === selectedResult.id
+              ? `
+                <div class="settings-surface claude-marketplace-panel">
+                  <div class="settings-file-summary-card marketplace-summary-card">
+                    <div class="settings-file-summary-main">
+                      <div class="settings-file-summary-title">
+                        <div class="settings-file-copy">
+                          <div class="eyebrow">${escapeHtml(selectedDetail.repoFullName)}</div>
+                          <div class="row-title">${escapeHtml(selectedDetail.title)}</div>
+                          <div class="row-subtitle">${escapeHtml(selectedDetail.description || "No description provided.")}</div>
+                        </div>
+                        <span class="settings-chip ${selectedDetail.reviewState === "reviewed" ? "settings-chip-success" : ""}">
+                          ${selectedDetail.reviewState === "reviewed" ? "Reviewed" : "Unreviewed"}
+                        </span>
+                      </div>
+                      <div class="claude-plugin-meta">
+                        <span class="settings-meta-pill">${selectedDetail.stars} stars</span>
+                        <span class="settings-meta-pill">${formatRelativeDate(selectedDetail.updatedAt)}</span>
+                        <span class="settings-meta-pill">${selectedDetail.fileCount} ${pluralize(selectedDetail.fileCount, "file", "files")}</span>
+                        ${
+                          selectedDetail.compatibility?.length
+                            ? selectedDetail.compatibility.map((value) => `<span class="settings-meta-pill">${escapeHtml(value)}</span>`).join("")
+                            : ""
+                        }
+                      </div>
+                      ${
+                        selectedDetail.tags?.length
+                          ? `<div class="claude-plugin-meta">${selectedDetail.tags.map((tag) => `<span class="settings-meta-pill">${escapeHtml(tag)}</span>`).join("")}</div>`
+                          : ""
+                      }
+                      <div class="settings-meta-row">
+                        <button type="button" class="ghost" data-action="marketplace-open-source">Open on GitHub</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="settings-group-card marketplace-install-card">
+                    <div class="settings-help-row">
+                      <div>
+                        <div class="row-title">Install</div>
+                        <div class="muted">Choose where Claude should store this skill. The first choice becomes the default for later installs.</div>
+                      </div>
+                    </div>
+                    <div class="settings-add-grid marketplace-install-grid">
+                      <select id="marketplace-install-scope">
+                        ${canInstallProject ? `<option value="project" ${preferredScope === "project" ? "selected" : ""}>Project (${escapeHtml(repo.name)})</option>` : ""}
+                        <option value="user" ${preferredScope === "user" ? "selected" : ""}>User</option>
+                      </select>
+                      <button type="button" class="primary" data-action="marketplace-install-skill">Install Skill</button>
+                    </div>
+                    ${
+                      ui.marketplaceInstallMessage
+                        ? `<div class="row-meta">${escapeHtml(ui.marketplaceInstallMessage)}</div>`
+                        : ""
+                    }
+                  </div>
+
+                  <div class="settings-group-card marketplace-files-card">
+                    <div class="settings-help-row">
+                      <div>
+                        <div class="row-title">Files</div>
+                        <div class="muted">Preview the folder contents before installing.</div>
+                      </div>
+                    </div>
+                    <div class="marketplace-file-list">
+                      ${selectedDetail.files.slice(0, 24).map((file) => `<div class="marketplace-file-row"><span class="mono">${escapeHtml(file.relativePath)}</span><span class="row-meta">${formatBytes(file.size)}</span></div>`).join("")}
+                      ${
+                        selectedDetail.files.length > 24
+                          ? `<div class="row-meta">Showing 24 of ${selectedDetail.files.length} files.</div>`
+                          : ""
+                      }
+                    </div>
+                  </div>
+
+                  <div class="settings-editor-card claude-skill-editor-card marketplace-markdown-card">
+                    <div class="settings-help-row">
+                      <div>
+                        <div class="row-title">SKILL.md Preview</div>
+                        <div class="muted">Rendered from the GitHub source.</div>
+                      </div>
+                    </div>
+                    <div class="wiki-preview-markdown markdown-body marketplace-markdown-preview">
+                      ${renderMarkdownDocument(selectedDetail.markdown)}
+                    </div>
+                  </div>
+                </div>
+              `
+              : `
+                <div class="empty-state claude-skills-empty-state">
+                  Paste a GitHub URL, then select a loaded skill to preview and install it.
+                </div>
+              `
+        }
+      </div>
+    </div>
+  `;
+}
+
+function renderClaudeMarketplaceSearchCard() {
+  return `
+    <div class="settings-add-card claude-marketplace-search-card">
+      <div class="row-title">Load Skills From GitHub</div>
+      <div class="row-subtitle">Paste a GitHub repo URL or a direct skill folder URL.</div>
+      <div class="settings-add-grid">
+        <input id="marketplace-inspect-url" type="text" placeholder="https://github.com/owner/repo/tree/main/skills/skill-name" value="${escapeAttribute(ui.marketplaceInspectUrl)}" />
+        <button type="button" class="primary" data-action="marketplace-load-url">Load GitHub URL</button>
+      </div>
+      ${
+        ui.marketplaceInspectMessage
+          ? `<div class="row-meta">${escapeHtml(ui.marketplaceInspectMessage)}</div>`
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderMarketplaceResultRow(result: MarketplaceSkillSummary) {
+  return `
+    <button
+      type="button"
+      class="settings-nav-row ${ui.marketplaceSelectedId === result.id ? "active" : ""}"
+      data-action="marketplace-select-result"
+      data-marketplace-id="${escapeAttribute(result.id)}">
+      <div class="settings-nav-row-top">
+        <div class="settings-nav-copy">
+          <div class="row-title">${escapeHtml(result.title)}</div>
+          <div class="row-subtitle">${escapeHtml(result.description || result.repoFullName)}</div>
+        </div>
+      </div>
+      <div class="settings-nav-meta">
+        <span class="settings-chip">${result.reviewState === "reviewed" ? "Reviewed" : "GitHub"}</span>
+        <span class="row-meta">${escapeHtml(result.repoFullName)}</span>
+      </div>
+    </button>
   `;
 }
 
@@ -4537,6 +4851,20 @@ async function handleClick(event) {
       ui.keybindingRecordingAction = null;
       await renderSettingsDialog();
       break;
+    case "marketplace-load-url":
+      await inspectMarketplaceGitHubUrl();
+      break;
+    case "marketplace-select-result":
+      await selectMarketplaceResult(target.dataset.marketplaceId || null);
+      break;
+    case "marketplace-open-source":
+      if (ui.marketplaceSelectedDetail?.sourceUrl) {
+        await api.openExternalUrl(ui.marketplaceSelectedDetail.sourceUrl);
+      }
+      break;
+    case "marketplace-install-skill":
+      await installSelectedMarketplaceSkill();
+      break;
     case "select-theme": {
       const themePreferences = themePreferencesFromState();
       const themeId = target.dataset.themeId;
@@ -5232,6 +5560,15 @@ async function handleKeyDown(event) {
     return;
   }
 
+  const keydownTarget = event.target as HTMLElement | null;
+  if (keydownTarget instanceof HTMLInputElement && settingsDialog.open) {
+    if (keydownTarget.id === "marketplace-inspect-url" && event.key === "Enter") {
+      event.preventDefault();
+      await inspectMarketplaceGitHubUrl();
+      return;
+    }
+  }
+
   if (sessionSearchDialog.open) {
     if (await handleSessionSearchKeyDown(event)) {
       return;
@@ -5399,6 +5736,9 @@ async function handleInput(event) {
       ui.commandPaletteQuery = target.value;
       rerenderDialogInput(renderCommandPaletteDialog, "command-palette-query", target);
       break;
+    case "marketplace-inspect-url":
+      ui.marketplaceInspectUrl = target.value;
+      break;
     default:
       if (target.dataset.sessionRenameInput === "true") {
         ui.renamingSessionTitle = target.value;
@@ -5494,6 +5834,9 @@ async function handleChange(event) {
   }
 
   switch (target.id) {
+    case "marketplace-install-scope":
+      ui.marketplacePreferredScope = target.value === "user" ? "user" : "project";
+      break;
     case "pref-notifications-enabled":
       await api.updatePreferences({ notificationsEnabled: (target as HTMLInputElement).checked });
       break;
@@ -6458,6 +6801,144 @@ function allClaudeSkills() {
 
 function selectedClaudeSkill() {
   return allClaudeSkills().find((skill) => skill.path === ui.settingsSelectedFilePath) || null;
+}
+
+function marketplacePreferredScopeKey() {
+  return "claudeMarketplacePreferredScope";
+}
+
+function resolvedMarketplaceScope(canInstallProject: boolean) {
+  if (ui.marketplacePreferredScope === "user") {
+    return "user";
+  }
+  if (ui.marketplacePreferredScope === "project" && canInstallProject) {
+    return "project";
+  }
+
+  const savedScope = state.preferences?.[marketplacePreferredScopeKey()];
+  if (savedScope === "user") {
+    return "user";
+  }
+  if (savedScope === "project" && canInstallProject) {
+    return "project";
+  }
+
+  return canInstallProject ? "project" : "user";
+}
+
+function selectedMarketplaceResult() {
+  return ui.marketplaceResults.find((result) => result.id === ui.marketplaceSelectedId) || null;
+}
+
+function currentMarketplaceInspectUrl() {
+  const input = settingsDialog.querySelector("#marketplace-inspect-url") as HTMLInputElement | null;
+  return (input?.value ?? ui.marketplaceInspectUrl ?? "").trim();
+}
+
+async function loadMarketplaceDetailById(resultId: string | null) {
+  const result = ui.marketplaceResults.find((entry) => entry.id === resultId) || null;
+  if (!result) {
+    ui.marketplaceSelectedDetail = null;
+    return;
+  }
+
+  ui.marketplaceSelectedId = result.id;
+  ui.marketplaceDetailLoading = true;
+  ui.marketplaceInstallMessage = "";
+  await renderSettingsDialog();
+
+  try {
+    ui.marketplaceSelectedDetail = await api.getMarketplaceSkillDetails({
+      source: {
+        ...result.source,
+        reviewState: result.reviewState,
+        tags: result.tags
+      }
+    });
+  } catch (error) {
+    ui.marketplaceError =
+      error instanceof Error ? error.message : "Failed to load the selected skill preview.";
+    ui.marketplaceSelectedDetail = null;
+  } finally {
+    ui.marketplaceDetailLoading = false;
+    await renderSettingsDialog();
+  }
+}
+
+async function selectMarketplaceResult(resultId: string | null) {
+  if (!resultId) {
+    return;
+  }
+
+  if (resultId === ui.marketplaceSelectedId && ui.marketplaceSelectedDetail?.id === resultId) {
+    return;
+  }
+
+  await loadMarketplaceDetailById(resultId);
+}
+
+async function inspectMarketplaceGitHubUrl(options: { rawUrl?: string } = {}) {
+  const rawUrl = String(options.rawUrl || currentMarketplaceInspectUrl() || "").trim();
+  ui.marketplaceInspectUrl = rawUrl;
+  if (!rawUrl) {
+    ui.marketplaceInspectMessage = "Paste a GitHub URL first.";
+    await renderSettingsDialog();
+    return;
+  }
+
+  ui.marketplaceInspectMessage = "Loading GitHub URL…";
+  ui.marketplaceError = "";
+  await renderSettingsDialog();
+
+  try {
+    const payload = await api.inspectMarketplaceUrl({ url: rawUrl });
+    ui.marketplaceResults = Array.isArray(payload?.results) ? payload.results : [];
+    ui.marketplaceSelectedId = ui.marketplaceResults[0]?.id || null;
+    ui.marketplaceInspectMessage = ui.marketplaceResults.length
+      ? `Loaded ${ui.marketplaceResults.length} ${pluralize(ui.marketplaceResults.length, "skill", "skills")} from GitHub.`
+      : "No skills were found at that URL.";
+    if (ui.marketplaceSelectedId) {
+      await loadMarketplaceDetailById(ui.marketplaceSelectedId);
+      return;
+    }
+    ui.marketplaceSelectedDetail = null;
+  } catch (error) {
+    ui.marketplaceInspectMessage =
+      error instanceof Error ? error.message : "Failed to inspect that GitHub URL.";
+  }
+
+  await renderSettingsDialog();
+}
+
+async function installSelectedMarketplaceSkill() {
+  const detail = ui.marketplaceSelectedDetail;
+  if (!detail) {
+    return;
+  }
+
+  const scopeInput = settingsDialog.querySelector("#marketplace-install-scope") as HTMLSelectElement | null;
+  const scope = (scopeInput?.value || resolvedMarketplaceScope(!!repoById(currentRepoId())?.path)) as "user" | "project";
+  const repo = repoById(currentRepoId());
+  ui.marketplaceInstallMessage = "Installing skill…";
+  await renderSettingsDialog();
+
+  try {
+    const payload = await api.installMarketplaceSkill({
+      source: detail.source,
+      scope,
+      repoPath: repo?.path || null
+    });
+    ui.marketplaceInstallMessage = `Installed ${payload.skillName} to ${payload.scope === "project" ? ".claude/skills" : abbreviateHome(payload.installPath)}.`;
+    await api.updatePreferences({
+      [marketplacePreferredScopeKey()]: scope
+    });
+    ui.settingsContext = await api.getClaudeSettingsContext(currentRepoId());
+  } catch (error) {
+    ui.marketplaceInstallMessage =
+      error instanceof Error ? error.message : "Failed to install the selected skill.";
+  }
+
+  await renderSettingsDialog();
 }
 
 async function loadSelectedSettingsFile(filePath) {

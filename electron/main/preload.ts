@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
   readClipboardText: () => ipcRenderer.invoke("clipboard:readText"),
   writeClipboardText: (text) => ipcRenderer.invoke("clipboard:writeText", text),
   revealPath: (filePath) => ipcRenderer.invoke("path:reveal", filePath),
+  openExternalUrl: (url) => ipcRenderer.invoke("path:openExternal", url),
   nextUnreadSession: () => ipcRenderer.invoke("session:nextUnread"),
   updatePreferences: (patch) => ipcRenderer.invoke("preferences:update", patch),
   getTrackedPortStatus,
@@ -57,6 +58,9 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     ipcRenderer.invoke("settings:saveFile", { filePath, contents }),
   importSkillIcon: (skillFilePath) => ipcRenderer.invoke("settings:importSkillIcon", skillFilePath),
   clearSkillIcon: (skillFilePath) => ipcRenderer.invoke("settings:clearSkillIcon", skillFilePath),
+  getMarketplaceSkillDetails: (payload) => ipcRenderer.invoke("skillsMarketplace:details", payload),
+  inspectMarketplaceUrl: (payload) => ipcRenderer.invoke("skillsMarketplace:inspectUrl", payload),
+  installMarketplaceSkill: (payload) => ipcRenderer.invoke("skillsMarketplace:install", payload),
   getWikiContext: (repoId) => ipcRenderer.invoke("wiki:getContext", repoId),
   readWikiFile: (repoId, relativePath) =>
     ipcRenderer.invoke("wiki:readFile", { repoId, relativePath }),

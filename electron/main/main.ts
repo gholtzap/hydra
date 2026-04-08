@@ -27,6 +27,11 @@ const {
   loadSettingsFile,
   saveSettingsFile
 } = require("./claude-settings");
+const {
+  getMarketplaceSkillDetails,
+  inspectMarketplaceGitHubUrl,
+  installMarketplaceSkill
+} = require("./skills-marketplace");
 const { inspectTrackedPorts } = require("./port-inspector");
 const { queryProjectSessions } = require("./session-search");
 const {
@@ -212,6 +217,7 @@ class AppController {
       return true;
     });
     ipcMain.handle("path:reveal", (_event, filePath) => shell.showItemInFolder(filePath));
+    ipcMain.handle("path:openExternal", (_event, url) => shell.openExternal(String(url || "")));
     ipcMain.handle("session:nextUnread", () => this.nextUnreadSession());
     ipcMain.handle("preferences:update", (_event, patch) => this.updatePreferences(patch));
     ipcMain.handle("status:ports", () => inspectTrackedPorts());
@@ -248,6 +254,15 @@ class AppController {
     });
     ipcMain.handle("settings:clearSkillIcon", (_event, skillFilePath) =>
       clearSkillIcon(skillFilePath)
+    );
+    ipcMain.handle("skillsMarketplace:details", (_event, payload) =>
+      getMarketplaceSkillDetails(payload || {})
+    );
+    ipcMain.handle("skillsMarketplace:inspectUrl", (_event, payload) =>
+      inspectMarketplaceGitHubUrl(payload || {})
+    );
+    ipcMain.handle("skillsMarketplace:install", (_event, payload) =>
+      installMarketplaceSkill(payload || {})
     );
     ipcMain.handle("wiki:getContext", (_event, repoId) => this.projectWikiContext(repoId));
     ipcMain.handle("wiki:readFile", (_event, payload) =>

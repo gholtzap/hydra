@@ -27,6 +27,7 @@ interface ClaudeWorkspaceApi {
   readClipboardText: () => Promise<string>;
   writeClipboardText: (text: string) => Promise<any>;
   revealPath: (filePath: string) => Promise<any>;
+  openExternalUrl: (url: string) => Promise<any>;
   nextUnreadSession: () => Promise<string | null>;
   updatePreferences: (patch: Record<string, unknown>) => Promise<any>;
   getTrackedPortStatus: () => Promise<any>;
@@ -35,6 +36,15 @@ interface ClaudeWorkspaceApi {
   saveSettingsFile: (filePath: string, contents: string) => Promise<any>;
   importSkillIcon: (skillFilePath: string) => Promise<string | null>;
   clearSkillIcon: (skillFilePath: string) => Promise<any>;
+  getMarketplaceSkillDetails: (payload: {
+    source: { owner: string; repo: string; ref?: string; path: string; reviewState?: string; tags?: string[] };
+  }) => Promise<any>;
+  inspectMarketplaceUrl: (payload: { url: string }) => Promise<any>;
+  installMarketplaceSkill: (payload: {
+    source: { owner: string; repo: string; ref?: string; path: string };
+    scope: "user" | "project";
+    repoPath?: string | null;
+  }) => Promise<any>;
   getWikiContext: (repoId: string) => Promise<any>;
   readWikiFile: (repoId: string, relativePath: string) => Promise<any>;
   toggleWiki: (repoId: string, enabled: boolean) => Promise<any>;

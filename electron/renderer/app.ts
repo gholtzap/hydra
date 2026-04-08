@@ -3,9 +3,13 @@ import type {
   AppPreferences,
   AppStateSnapshot,
   ClaudeSettingsContext,
+  EphemeralToolId,
+  EphemeralToolOutputPayload,
   FileTreeNode as SharedFileTreeNode,
   JsonObject,
   JsonValue,
+  KeybindingAction,
+  KeybindingMap,
   RepoSnapshot,
   SessionSearchResult as SharedSessionSearchResult,
   SessionSummary,
@@ -25,26 +29,6 @@ const MAX_VISIBLE_SESSION_PANES = 4;
 // ---------------------------------------------------------------------------
 // Keybinding configuration
 // ---------------------------------------------------------------------------
-
-type KeybindingAction =
-  | "open-folder"
-  | "create-folder"
-  | "new-session"
-  | "new-session-alt"
-  | "open-wiki"
-  | "quick-switcher"
-  | "command-palette"
-  | "next-unread"
-  | "open-lazygit"
-  | "open-tokscale"
-  | "open-launcher"
-  | "search-project-sessions"
-  | "navigate-section-left"
-  | "navigate-section-right"
-  | "navigate-section-up"
-  | "navigate-section-down";
-
-type KeybindingMap = Record<KeybindingAction, string>;
 
 const DEFAULT_KEYBINDINGS: KeybindingMap = {
   "open-folder": "CmdOrCtrl+O",
@@ -237,12 +221,28 @@ type TerminalMount = {
   resizeObserver: ResizeObserver;
 };
 
+type EphemeralToolOverlayState = {
+  sessionId: string | null;
+  terminalMount: TerminalMount | null;
+  unsubOutput: (() => void) | null;
+  unsubExit: (() => void) | null;
+};
+
 type WikiTreeNode = SharedWikiTreeNode;
 type FileTreeNode = SharedFileTreeNode;
 
 type SessionSearchResult = SharedSessionSearchResult & {
   hydraSessionId?: string | null;
 };
+
+function createEphemeralToolOverlayState(): EphemeralToolOverlayState {
+  return {
+    sessionId: null,
+    terminalMount: null,
+    unsubOutput: null,
+    unsubExit: null
+  };
+}
 
 const SESSION_TAG_OPTIONS = [
   { value: "", label: "No Tag" },
@@ -362,6 +362,7 @@ type UiState = {
   fileBrowserLoadId: number;
   fileBrowserLoading: boolean;
   fileBrowserExpandedDirs: Set<string>;
+  ephemeralToolOverlays: Record<EphemeralToolId, EphemeralToolOverlayState>;
   resizeDragState: {
     splitPath: string;
     handleIndex: number;
@@ -371,14 +372,6 @@ type UiState = {
     containerSize: number;
     splitContainer: HTMLElement | null;
   } | null;
-  tokscaleSessionId: string | null;
-  tokscaleTerminalMount: TerminalMount | null;
-  tokscaleUnsubOutput: (() => void) | null;
-  tokscaleUnsubExit: (() => void) | null;
-  lazygitSessionId: string | null;
-  lazygitTerminalMount: TerminalMount | null;
-  lazygitUnsubOutput: (() => void) | null;
-  lazygitUnsubExit: (() => void) | null;
   keybindingRecordingAction: KeybindingAction | null;
   lassoActive: boolean;
   lassoPending: boolean;
@@ -454,6 +447,10 @@ const ui: UiState = {
   fileBrowserLoadId: 0,
   fileBrowserLoading: false,
   fileBrowserExpandedDirs: new Set<string>(),
+  ephemeralToolOverlays: {
+    lazygit: createEphemeralToolOverlayState(),
+    tokscale: createEphemeralToolOverlayState()
+  },
   resizeDragState: null as {
     splitPath: string;
     handleIndex: number;
@@ -463,14 +460,6 @@ const ui: UiState = {
     containerSize: number;
     splitContainer: HTMLElement | null;
   } | null,
-  tokscaleSessionId: null as string | null,
-  tokscaleTerminalMount: null as TerminalMount | null,
-  tokscaleUnsubOutput: null as (() => void) | null,
-  tokscaleUnsubExit: null as (() => void) | null,
-  lazygitSessionId: null as string | null,
-  lazygitTerminalMount: null as TerminalMount | null,
-  lazygitUnsubOutput: null as (() => void) | null,
-  lazygitUnsubExit: null as (() => void) | null,
   keybindingRecordingAction: null as KeybindingAction | null,
   lassoActive: false,
   lassoPending: false,
@@ -494,6 +483,14 @@ const commandPaletteDialog = document.getElementById("command-palette-dialog") a
 const tokscaleDialog = document.getElementById("tokscale-dialog") as HTMLDialogElement;
 const lazygitDialog = document.getElementById("lazygit-dialog") as HTMLDialogElement;
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+const EPHEMERAL_TOOL_DIALOGS: Record<
+  EphemeralToolId,
+  { dialog: HTMLDialogElement; hostId: string }
+> = {
+  lazygit: { dialog: lazygitDialog, hostId: "lazygit-terminal-host" },
+  tokscale: { dialog: tokscaleDialog, hostId: "tokscale-terminal-host" }
+};
 
 sidebarElement.tabIndex = -1;
 detailElement.tabIndex = -1;
@@ -1082,12 +1079,10 @@ function refreshTerminalThemes() {
     mount.terminal.options.theme = buildTerminalTheme();
   }
 
-  if (ui.lazygitTerminalMount) {
-    ui.lazygitTerminalMount.terminal.options.theme = buildTerminalTheme();
-  }
-
-  if (ui.tokscaleTerminalMount) {
-    ui.tokscaleTerminalMount.terminal.options.theme = buildTerminalTheme();
+  for (const overlay of Object.values(ui.ephemeralToolOverlays)) {
+    if (overlay.terminalMount) {
+      overlay.terminalMount.terminal.options.theme = buildTerminalTheme();
+    }
   }
 }
 
@@ -1155,15 +1150,14 @@ document.addEventListener("drop", handleDrop, true);
 document.addEventListener("pointermove", handlePointerMove);
 document.addEventListener("pointerup", handlePointerUp);
 
-tokscaleDialog.addEventListener("cancel", (e) => {
-  e.preventDefault();
-  closeTokscaleOverlay();
-});
-
-lazygitDialog.addEventListener("cancel", (e) => {
-  e.preventDefault();
-  closeLazygitOverlay();
-});
+for (const [toolId, definition] of Object.entries(EPHEMERAL_TOOL_DIALOGS) as Array<
+  [EphemeralToolId, (typeof EPHEMERAL_TOOL_DIALOGS)[EphemeralToolId]]
+>) {
+  definition.dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeEphemeralToolOverlay(toolId);
+  });
+}
 
 api.onStateChanged((nextState) => {
   replaceState(nextState);
@@ -7092,239 +7086,197 @@ function openCommandPalette() {
   }
 }
 
-async function openTokscaleOverlay(repoId: string | null) {
-  if (!repoId) return;
-  if (tokscaleDialog.open) return;
+function overlayState(toolId: EphemeralToolId): EphemeralToolOverlayState {
+  return ui.ephemeralToolOverlays[toolId];
+}
 
-  const sessionId = await api.launchTokscale(repoId);
-  if (!sessionId) return;
+function overlayDialog(toolId: EphemeralToolId): HTMLDialogElement {
+  return EPHEMERAL_TOOL_DIALOGS[toolId].dialog;
+}
 
-  ui.tokscaleSessionId = sessionId;
+function overlayHost(toolId: EphemeralToolId): HTMLElement {
+  return document.getElementById(EPHEMERAL_TOOL_DIALOGS[toolId].hostId) as HTMLElement;
+}
 
-  const outputBuffer: string[] = [];
-  let terminalReady = false;
+function unavailableEphemeralToolMarkup(toolId: EphemeralToolId): string | null {
+  if (toolId !== "lazygit" || state.lazygitInstalled) {
+    return null;
+  }
 
-  ui.tokscaleUnsubOutput = api.onTokscaleOutput(({ sessionId: sid, data }) => {
-    if (sid !== sessionId) return;
-    if (terminalReady && ui.tokscaleTerminalMount) {
-      ui.tokscaleTerminalMount.terminal.write(data);
-    } else {
-      outputBuffer.push(data);
+  return `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-family:var(--font-mono);font-size:14px;flex-direction:column;gap:8px;">
+    <span>lazygit is not installed. Install lazygit and launch app again.</span>
+    <code style="color:var(--text);background:var(--surface);padding:4px 10px;border-radius:6px;font-size:13px;">brew install lazygit</code>
+  </div>`;
+}
+
+function mountEphemeralToolTerminal(
+  toolId: EphemeralToolId,
+  sessionId: string,
+  host: HTMLElement
+): TerminalMount {
+  const terminal = new Terminal({
+    allowTransparency: false,
+    convertEol: false,
+    cursorBlink: true,
+    cursorInactiveStyle: "outline",
+    disableStdin: false,
+    drawBoldTextInBrightColors: true,
+    fontFamily: terminalFontFamily(),
+    fontSize: 13,
+    macOptionIsMeta: true,
+    rightClickSelectsWord: true,
+    scrollback: 5000,
+    theme: buildTerminalTheme()
+  });
+
+  const fitAddon = new FitAddon.FitAddon();
+  terminal.loadAddon(fitAddon);
+  terminal.open(host);
+
+  terminal.attachCustomKeyEventHandler((event) => {
+    if (event.key === "Escape" && event.type === "keydown") {
+      closeEphemeralToolOverlay(toolId);
+      return false;
     }
+
+    return true;
   });
 
-  ui.tokscaleUnsubExit = api.onTokscaleExit(({ sessionId: sid }) => {
-    if (sid === sessionId) closeTokscaleOverlay();
+  terminal.onData((data) => {
+    api.sendEphemeralToolInput(toolId, sessionId, data);
+  });
+  terminal.onBinary((data) => {
+    api.sendEphemeralToolBinaryInput(toolId, sessionId, data);
+  });
+  terminal.onResize((size) => {
+    api.resizeEphemeralTool(toolId, sessionId, size.cols, size.rows);
   });
 
-  tokscaleDialog.showModal();
-
-  const host = document.getElementById("tokscale-terminal-host") as HTMLElement;
-  host.innerHTML = "";
-
-  requestAnimationFrame(() => {
-    if (ui.tokscaleSessionId !== sessionId) return;
-
-    const terminal = new Terminal({
-      allowTransparency: false,
-      convertEol: false,
-      cursorBlink: true,
-      cursorInactiveStyle: "outline",
-      disableStdin: false,
-      drawBoldTextInBrightColors: true,
-      fontFamily: terminalFontFamily(),
-      fontSize: 13,
-      macOptionIsMeta: true,
-      rightClickSelectsWord: true,
-      scrollback: 5000,
-      theme: buildTerminalTheme()
-    });
-
-    const fitAddon = new FitAddon.FitAddon();
-    terminal.loadAddon(fitAddon);
-    terminal.open(host);
-
-    terminal.attachCustomKeyEventHandler((event) => {
-      if (event.key === "Escape" && event.type === "keydown") {
-        closeTokscaleOverlay();
-        return false;
-      }
-      return true;
-    });
-
-    terminal.onData((data) => {
-      api.sendTokscaleInput(sessionId, data);
-    });
-    terminal.onBinary((data) => {
-      api.sendTokscaleBinaryInput(sessionId, data);
-    });
-    terminal.onResize((size) => {
-      api.resizeTokscale(sessionId, size.cols, size.rows);
-    });
-
-    const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
-    });
-    resizeObserver.observe(host);
-
-    ui.tokscaleTerminalMount = { terminal, fitAddon, resizeObserver };
-
-    for (const chunk of outputBuffer) terminal.write(chunk);
-    outputBuffer.length = 0;
-    terminalReady = true;
-
+  const resizeObserver = new ResizeObserver(() => {
     fitAddon.fit();
-    api.resizeTokscale(sessionId, terminal.cols, terminal.rows);
-    terminal.focus();
   });
+  resizeObserver.observe(host);
+
+  return { terminal, fitAddon, resizeObserver };
 }
 
-function closeTokscaleOverlay() {
-  ui.tokscaleUnsubOutput?.();
-  ui.tokscaleUnsubExit?.();
-  ui.tokscaleUnsubOutput = null;
-  ui.tokscaleUnsubExit = null;
-
-  if (ui.tokscaleTerminalMount) {
-    ui.tokscaleTerminalMount.resizeObserver.disconnect();
-    ui.tokscaleTerminalMount.terminal.dispose();
-    ui.tokscaleTerminalMount = null;
-  }
-
-  if (ui.tokscaleSessionId) {
-    api.closeTokscale(ui.tokscaleSessionId);
-    ui.tokscaleSessionId = null;
-  }
-
-  if (tokscaleDialog.open) {
-    tokscaleDialog.close();
-  }
-}
-
-async function openLazygitOverlay(repoId: string | null) {
-  if (!repoId) return;
-  if (lazygitDialog.open) return;
-
-  if (!state.lazygitInstalled) {
-    const host = document.getElementById("lazygit-terminal-host") as HTMLElement;
-    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-family:var(--font-mono);font-size:14px;flex-direction:column;gap:8px;">
-      <span>lazygit is not installed. Install lazygit and launch app again. </span>
-      <code style="color:var(--text);background:var(--surface);padding:4px 10px;border-radius:6px;font-size:13px;">brew install lazygit</code>
-    </div>`;
-    lazygitDialog.showModal();
+function handleEphemeralToolOutput(
+  payload: EphemeralToolOutputPayload,
+  expectedToolId: EphemeralToolId,
+  expectedSessionId: string,
+  outputBuffer: string[],
+  terminalReady: { current: boolean }
+) {
+  if (payload.toolId !== expectedToolId || payload.sessionId !== expectedSessionId) {
     return;
   }
 
-  const sessionId = await api.launchLazygit(repoId);
-  if (!sessionId) return;
+  const overlay = overlayState(expectedToolId);
+  if (terminalReady.current && overlay.terminalMount) {
+    overlay.terminalMount.terminal.write(payload.data);
+  } else {
+    outputBuffer.push(payload.data);
+  }
+}
 
-  ui.lazygitSessionId = sessionId;
+async function openEphemeralToolOverlay(toolId: EphemeralToolId, repoId: string | null) {
+  if (!repoId || overlayDialog(toolId).open) {
+    return;
+  }
 
-  // Buffer output that arrives before the terminal is mounted.
+  const unavailableMarkup = unavailableEphemeralToolMarkup(toolId);
+  if (unavailableMarkup) {
+    overlayHost(toolId).innerHTML = unavailableMarkup;
+    overlayDialog(toolId).showModal();
+    return;
+  }
+
+  const sessionId = await api.launchEphemeralTool(toolId, repoId);
+  if (!sessionId) {
+    return;
+  }
+
+  const overlay = overlayState(toolId);
+  overlay.sessionId = sessionId;
+
   const outputBuffer: string[] = [];
-  let terminalReady = false;
+  const terminalReady = { current: false };
 
-  ui.lazygitUnsubOutput = api.onLazygitOutput(({ sessionId: sid, data }) => {
-    if (sid !== sessionId) return;
-    if (terminalReady && ui.lazygitTerminalMount) {
-      ui.lazygitTerminalMount.terminal.write(data);
-    } else {
-      outputBuffer.push(data);
+  overlay.unsubOutput = api.onEphemeralToolOutput((payload) => {
+    handleEphemeralToolOutput(payload, toolId, sessionId, outputBuffer, terminalReady);
+  });
+  overlay.unsubExit = api.onEphemeralToolExit((payload) => {
+    if (payload.toolId === toolId && payload.sessionId === sessionId) {
+      closeEphemeralToolOverlay(toolId);
     }
   });
 
-  ui.lazygitUnsubExit = api.onLazygitExit(({ sessionId: sid }) => {
-    if (sid === sessionId) closeLazygitOverlay();
-  });
+  const dialog = overlayDialog(toolId);
+  const host = overlayHost(toolId);
 
-  lazygitDialog.showModal();
-
-  const host = document.getElementById("lazygit-terminal-host") as HTMLElement;
+  dialog.showModal();
   host.innerHTML = "";
 
-  // Defer terminal creation to after the dialog has fully laid out.
-  // showModal() makes the dialog visible but layout isn't computed until the
-  // browser paints — calling terminal.open() with a 0-size host causes
-  // fitAddon to compute 0 cols/rows, which corrupts the lazygit session.
+  // Defer terminal creation until layout has settled. Opening xterm against
+  // a zero-size host produces a broken cols/rows handshake for TUI sessions.
   requestAnimationFrame(() => {
-    // Guard: overlay may have been closed before this frame fires.
-    if (ui.lazygitSessionId !== sessionId) return;
+    if (overlayState(toolId).sessionId !== sessionId) {
+      return;
+    }
 
-    const terminal = new Terminal({
-      allowTransparency: false,
-      convertEol: false,
-      cursorBlink: true,
-      cursorInactiveStyle: "outline",
-      disableStdin: false,
-      drawBoldTextInBrightColors: true,
-      fontFamily: terminalFontFamily(),
-      fontSize: 13,
-      macOptionIsMeta: true,
-      rightClickSelectsWord: true,
-      scrollback: 5000,
-      theme: buildTerminalTheme()
-    });
+    const mount = mountEphemeralToolTerminal(toolId, sessionId, host);
+    overlayState(toolId).terminalMount = mount;
 
-    const fitAddon = new FitAddon.FitAddon();
-    terminal.loadAddon(fitAddon);
-    terminal.open(host);
-
-    terminal.attachCustomKeyEventHandler((event) => {
-      if (event.key === "Escape" && event.type === "keydown") {
-        closeLazygitOverlay();
-        return false;
-      }
-      return true;
-    });
-
-    terminal.onData((data) => {
-      api.sendLazygitInput(sessionId, data);
-    });
-    terminal.onBinary((data) => {
-      api.sendLazygitBinaryInput(sessionId, data);
-    });
-    terminal.onResize((size) => {
-      api.resizeLazygit(sessionId, size.cols, size.rows);
-    });
-
-    const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
-    });
-    resizeObserver.observe(host);
-
-    ui.lazygitTerminalMount = { terminal, fitAddon, resizeObserver };
-
-    // Flush buffered output, then mark ready for live writes.
-    for (const chunk of outputBuffer) terminal.write(chunk);
+    for (const chunk of outputBuffer) {
+      mount.terminal.write(chunk);
+    }
     outputBuffer.length = 0;
-    terminalReady = true;
+    terminalReady.current = true;
 
-    fitAddon.fit();
-    api.resizeLazygit(sessionId, terminal.cols, terminal.rows);
-    terminal.focus();
+    mount.fitAddon.fit();
+    api.resizeEphemeralTool(toolId, sessionId, mount.terminal.cols, mount.terminal.rows);
+    mount.terminal.focus();
   });
 }
 
+function closeEphemeralToolOverlay(toolId: EphemeralToolId) {
+  const overlay = overlayState(toolId);
+  overlay.unsubOutput?.();
+  overlay.unsubExit?.();
+  overlay.unsubOutput = null;
+  overlay.unsubExit = null;
+
+  if (overlay.terminalMount) {
+    overlay.terminalMount.resizeObserver.disconnect();
+    overlay.terminalMount.terminal.dispose();
+    overlay.terminalMount = null;
+  }
+
+  if (overlay.sessionId) {
+    void api.closeEphemeralTool(toolId, overlay.sessionId);
+    overlay.sessionId = null;
+  }
+
+  const dialog = overlayDialog(toolId);
+  if (dialog.open) {
+    dialog.close();
+  }
+}
+
+async function openTokscaleOverlay(repoId: string | null) {
+  await openEphemeralToolOverlay("tokscale", repoId);
+}
+
+function closeTokscaleOverlay() {
+  closeEphemeralToolOverlay("tokscale");
+}
+
+async function openLazygitOverlay(repoId: string | null) {
+  await openEphemeralToolOverlay("lazygit", repoId);
+}
+
 function closeLazygitOverlay() {
-  ui.lazygitUnsubOutput?.();
-  ui.lazygitUnsubExit?.();
-  ui.lazygitUnsubOutput = null;
-  ui.lazygitUnsubExit = null;
-
-  if (ui.lazygitTerminalMount) {
-    ui.lazygitTerminalMount.resizeObserver.disconnect();
-    ui.lazygitTerminalMount.terminal.dispose();
-    ui.lazygitTerminalMount = null;
-  }
-
-  if (ui.lazygitSessionId) {
-    api.closeLazygit(ui.lazygitSessionId);
-    ui.lazygitSessionId = null;
-  }
-
-  if (lazygitDialog.open) {
-    lazygitDialog.close();
-  }
+  closeEphemeralToolOverlay("lazygit");
 }
 
 async function startSessionForRepo(
@@ -10009,8 +9961,7 @@ function isAnyDialogOpen() {
     quickSwitcherDialog.open ||
     sessionSearchDialog.open ||
     commandPaletteDialog.open ||
-    tokscaleDialog.open ||
-    lazygitDialog.open
+    Object.values(EPHEMERAL_TOOL_DIALOGS).some((definition) => definition.dialog.open)
   );
 }
 

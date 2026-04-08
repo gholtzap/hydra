@@ -12,6 +12,9 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path");
 const { app } = require("electron");
+const { isExecutableFile } = require("./command-path") as {
+  isExecutableFile: (filePath: string) => boolean;
+};
 
 const AGENT_DEFINITIONS: AgentDefinition[] = [
   { id: "claude", label: "Claude Code", defaultCommand: "claude" },
@@ -207,15 +210,6 @@ function normalizeAgentCommand(value: unknown, agentId: AgentId): string {
   }
 
   return normalized;
-}
-
-function isExecutableFile(filePath: string): boolean {
-  try {
-    fs.accessSync(filePath, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function normalizeSessionTagColor(value: unknown): SessionTagColor | null {

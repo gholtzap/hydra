@@ -4,6 +4,9 @@ import type {
   AppStateSnapshot,
   ClaudeSettingsContext,
   DirectoryReadResult,
+  EphemeralToolExitPayload,
+  EphemeralToolId,
+  EphemeralToolOutputPayload,
   MarketplaceInspectResponse,
   MarketplaceInstallResponse,
   MarketplaceInstallScope,
@@ -53,6 +56,12 @@ type ClaudeRepoFileRequest = {
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args) as Promise<T>;
+}
+
+function subscribe<T>(channel: string, callback: (payload: T) => void): () => void {
+  const listener = (_event: unknown, payload: T) => callback(payload);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
 }
 
 async function getTrackedPortStatus(): Promise<TrackedPortStatus> {
@@ -144,60 +153,26 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     invoke<string | null>("session:resumeFromClaude", { repoId, claudeSessionId }),
   readDirectory: (repoId: string) => invoke<DirectoryReadResult>("fs:readDir", repoId),
   readFile: (payload: ClaudeRepoFileRequest) => invoke<ReadFileResult>("fs:readFile", payload),
-  onStateChanged: (callback: (payload: AppStateSnapshot) => void) => {
-    const listener = (_event: unknown, payload: AppStateSnapshot) => callback(payload);
-    ipcRenderer.on("state:changed", listener);
-    return () => ipcRenderer.removeListener("state:changed", listener);
-  },
-  onSessionOutput: (callback: (payload: SessionOutputPayload) => void) => {
-    const listener = (_event: unknown, payload: SessionOutputPayload) => callback(payload);
-    ipcRenderer.on("session:output", listener);
-    return () => ipcRenderer.removeListener("session:output", listener);
-  },
-  onSessionUpdated: (callback: (payload: SessionUpdatedPayload) => void) => {
-    const listener = (_event: unknown, payload: SessionUpdatedPayload) => callback(payload);
-    ipcRenderer.on("session:updated", listener);
-    return () => ipcRenderer.removeListener("session:updated", listener);
-  },
-  onCommand: (callback: (payload: AppCommandPayload) => void) => {
-    const listener = (_event: unknown, payload: AppCommandPayload) => callback(payload);
-    ipcRenderer.on("app:command", listener);
-    return () => ipcRenderer.removeListener("app:command", listener);
-  },
-  launchLazygit: (repoId: string) => invoke<string | null>("lazygit:launch", { repoId }),
-  closeLazygit: (sessionId: string) => invoke<void>("lazygit:close", { sessionId }),
-  sendLazygitInput: (sessionId: string, data: string) =>
-    invoke<void>("lazygit:input", { sessionId, data }),
-  sendLazygitBinaryInput: (sessionId: string, data: string) =>
-    invoke<void>("lazygit:binaryInput", { sessionId, data }),
-  resizeLazygit: (sessionId: string, cols: number, rows: number) =>
-    invoke<void>("lazygit:resize", { sessionId, cols, rows }),
-  onLazygitOutput: (callback: (payload: { sessionId: string; data: string }) => void) => {
-    const listener = (_event: unknown, payload: { sessionId: string; data: string }) => callback(payload);
-    ipcRenderer.on("lazygit:output", listener);
-    return () => ipcRenderer.removeListener("lazygit:output", listener);
-  },
-  onLazygitExit: (callback: (payload: { sessionId: string }) => void) => {
-    const listener = (_event: unknown, payload: { sessionId: string }) => callback(payload);
-    ipcRenderer.on("lazygit:exit", listener);
-    return () => ipcRenderer.removeListener("lazygit:exit", listener);
-  },
-  launchTokscale: (repoId: string) => invoke<string | null>("tokscale:launch", { repoId }),
-  closeTokscale: (sessionId: string) => invoke<void>("tokscale:close", { sessionId }),
-  sendTokscaleInput: (sessionId: string, data: string) =>
-    invoke<void>("tokscale:input", { sessionId, data }),
-  sendTokscaleBinaryInput: (sessionId: string, data: string) =>
-    invoke<void>("tokscale:binaryInput", { sessionId, data }),
-  resizeTokscale: (sessionId: string, cols: number, rows: number) =>
-    invoke<void>("tokscale:resize", { sessionId, cols, rows }),
-  onTokscaleOutput: (callback: (payload: { sessionId: string; data: string }) => void) => {
-    const listener = (_event: unknown, payload: { sessionId: string; data: string }) => callback(payload);
-    ipcRenderer.on("tokscale:output", listener);
-    return () => ipcRenderer.removeListener("tokscale:output", listener);
-  },
-  onTokscaleExit: (callback: (payload: { sessionId: string }) => void) => {
-    const listener = (_event: unknown, payload: { sessionId: string }) => callback(payload);
-    ipcRenderer.on("tokscale:exit", listener);
-    return () => ipcRenderer.removeListener("tokscale:exit", listener);
-  }
+  onStateChanged: (callback: (payload: AppStateSnapshot) => void) =>
+    subscribe<AppStateSnapshot>("state:changed", callback),
+  onSessionOutput: (callback: (payload: SessionOutputPayload) => void) =>
+    subscribe<SessionOutputPayload>("session:output", callback),
+  onSessionUpdated: (callback: (payload: SessionUpdatedPayload) => void) =>
+    subscribe<SessionUpdatedPayload>("session:updated", callback),
+  onCommand: (callback: (payload: AppCommandPayload) => void) =>
+    subscribe<AppCommandPayload>("app:command", callback),
+  launchEphemeralTool: (toolId: EphemeralToolId, repoId: string) =>
+    invoke<string | null>("ephemeralTool:launch", { toolId, repoId }),
+  closeEphemeralTool: (toolId: EphemeralToolId, sessionId: string) =>
+    invoke<void>("ephemeralTool:close", { toolId, sessionId }),
+  sendEphemeralToolInput: (toolId: EphemeralToolId, sessionId: string, data: string) =>
+    invoke<void>("ephemeralTool:input", { toolId, sessionId, data }),
+  sendEphemeralToolBinaryInput: (toolId: EphemeralToolId, sessionId: string, data: string) =>
+    invoke<void>("ephemeralTool:binaryInput", { toolId, sessionId, data }),
+  resizeEphemeralTool: (toolId: EphemeralToolId, sessionId: string, cols: number, rows: number) =>
+    invoke<void>("ephemeralTool:resize", { toolId, sessionId, cols, rows }),
+  onEphemeralToolOutput: (callback: (payload: EphemeralToolOutputPayload) => void) =>
+    subscribe<EphemeralToolOutputPayload>("ephemeralTool:output", callback),
+  onEphemeralToolExit: (callback: (payload: EphemeralToolExitPayload) => void) =>
+    subscribe<EphemeralToolExitPayload>("ephemeralTool:exit", callback)
 });

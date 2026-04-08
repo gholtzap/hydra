@@ -1,5 +1,4 @@
 const fs = require("node:fs");
-const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -18,12 +17,12 @@ async function resolveCommandPath(command: string): Promise<string | null> {
   }
 
   if (path.isAbsolute(normalizedCommand)) {
-    return (await isExecutableFile(normalizedCommand)) ? normalizedCommand : null;
+    return isExecutableFile(normalizedCommand) ? normalizedCommand : null;
   }
 
   for (const directoryPath of commandSearchPaths()) {
     const candidatePath = path.join(directoryPath, normalizedCommand);
-    if (await isExecutableFile(candidatePath)) {
+    if (isExecutableFile(candidatePath)) {
       return candidatePath;
     }
   }
@@ -43,9 +42,9 @@ function commandSearchPaths(): string[] {
   return Array.from(new Set(directories));
 }
 
-async function isExecutableFile(filePath: string): Promise<boolean> {
+function isExecutableFile(filePath: string): boolean {
   try {
-    await fsp.access(filePath, fs.constants.X_OK);
+    fs.accessSync(filePath, fs.constants.X_OK);
     return true;
   } catch {
     return false;
@@ -53,5 +52,6 @@ async function isExecutableFile(filePath: string): Promise<boolean> {
 }
 
 module.exports = {
+  isExecutableFile,
   resolveCommandPath
 };

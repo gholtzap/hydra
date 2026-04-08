@@ -293,22 +293,38 @@ async function rankMatches(
     candidates.join("\n")
   );
 
-  const ordered: SessionSearchResult[] = [];
-  for (const line of rankedLines.slice(0, MAX_RESULTS)) {
-    const tabIndex = line.indexOf("\t");
-    if (tabIndex === -1) {
-      continue;
-    }
+  return indexedMatchesFromRankedLines(matches, rankedLines, MAX_RESULTS);
+}
 
-    const matchIndex = Number(line.slice(0, tabIndex));
-    if (!Number.isFinite(matchIndex) || !matches[matchIndex]) {
-      continue;
-    }
+function indexedMatchesFromRankedLines<T>(
+  matches: T[],
+  rankedLines: string[],
+  limit: number
+): T[] {
+  const ordered: T[] = [];
 
-    ordered.push(matches[matchIndex] as SessionSearchResult);
+  for (const line of rankedLines.slice(0, limit)) {
+    const match = indexedValueFromRankedLine(matches, line);
+    if (match !== null) {
+      ordered.push(match);
+    }
   }
 
   return ordered;
+}
+
+function indexedValueFromRankedLine<T>(matches: T[], line: string): T | null {
+  const tabIndex = line.indexOf("\t");
+  if (tabIndex === -1) {
+    return null;
+  }
+
+  const matchIndex = Number(line.slice(0, tabIndex));
+  if (!Number.isFinite(matchIndex)) {
+    return null;
+  }
+
+  return matches[matchIndex] ?? null;
 }
 
 async function runListCommand(

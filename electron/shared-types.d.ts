@@ -55,7 +55,8 @@ export type KeybindingAction =
   | "navigate-section-up"
   | "navigate-section-down";
 
-export type KeybindingMap = Partial<Record<KeybindingAction, string>>;
+export type KeybindingMap = Record<KeybindingAction, string>;
+export type KeybindingOverrides = Partial<KeybindingMap>;
 
 export type ThemeAppearance = "system" | "light" | "dark";
 
@@ -173,7 +174,7 @@ export type AppPreferences = {
   showInAppBadges: boolean;
   showNativeNotifications: boolean;
   sessionWorkspaceLayout: WorkspaceLayoutNode | null;
-  keybindings: KeybindingMap;
+  keybindings: KeybindingOverrides;
   themeAppearance: ThemeAppearance;
   themeActiveId: string;
   themeCustomThemes: ThemeDefinition[];
@@ -194,6 +195,33 @@ export type AppStateSnapshot = {
   preferences: AppPreferences;
   lazygitInstalled: boolean;
 };
+
+export type EphemeralToolId = "lazygit" | "tokscale";
+
+export type EphemeralToolLaunchRequest = {
+  toolId: EphemeralToolId;
+  repoId: string;
+};
+
+export type EphemeralToolSessionRequest = {
+  toolId: EphemeralToolId;
+  sessionId: string;
+};
+
+export type EphemeralToolInputRequest = EphemeralToolSessionRequest & {
+  data: string;
+};
+
+export type EphemeralToolResizeRequest = EphemeralToolSessionRequest & {
+  cols: number;
+  rows: number;
+};
+
+export type EphemeralToolOutputPayload = EphemeralToolSessionRequest & {
+  data: string;
+};
+
+export type EphemeralToolExitPayload = EphemeralToolSessionRequest;
 
 export type SessionUpdatedPayload = {
   session: SessionSummary;

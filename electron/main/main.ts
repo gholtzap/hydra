@@ -7,6 +7,13 @@ import type {
   AppStateSnapshot,
   ClaudeSettingsContext,
   DirectoryReadResult,
+  EphemeralToolExitPayload,
+  EphemeralToolId,
+  EphemeralToolInputRequest,
+  EphemeralToolLaunchRequest,
+  EphemeralToolOutputPayload,
+  EphemeralToolResizeRequest,
+  EphemeralToolSessionRequest,
   FileTreeNode,
   MarketplaceInspectResponse,
   MarketplaceInstallResponse,
@@ -64,6 +71,10 @@ type PtyHostClientInstance = {
 };
 type PtyHostClientConstructor = {
   new (): PtyHostClientInstance;
+};
+type EphemeralSessionRecord = {
+  repoId: string;
+  toolId: EphemeralToolId;
 };
 
 const { scanWorkspace } = require("./workspace-scanner") as {
@@ -279,7 +290,7 @@ class AppController {
   signalBuffers: Map<string, string>;
   blockerClearStreaks: Map<string, number>;
   ptyHost: PtyHostClientInstance;
-  ephemeralSessions: Map<string, { repoId: string; kind: "lazygit" | "tokscale" }>;
+  ephemeralSessions: Map<string, EphemeralSessionRecord>;
   lazygitPath: string | null;
   npxPath: string | null;
   saveChain: Promise<void>;
@@ -466,30 +477,26 @@ class AppController {
 
       return { path: repo.path, tree: await buildFileTree(repo.path, repo.path, 0) };
     });
-    ipcMain.handle("lazygit:launch", (_event, p) => this.createLazygitSession(p.repoId));
-    ipcMain.handle("lazygit:close", (_event, p) => this.closeLazygitSession(p.sessionId));
-    ipcMain.handle("lazygit:input", (_event, p) => {
-      if (this.ephemeralSessions.has(p.sessionId)) this.ptyHost.sendInput(p.sessionId, p.data);
-    });
-    ipcMain.handle("lazygit:binaryInput", (_event, p) => {
-      if (this.ephemeralSessions.has(p.sessionId)) this.ptyHost.sendInput(p.sessionId, p.data);
-    });
-    ipcMain.handle("lazygit:resize", (_event, p) => {
-      if (this.ephemeralSessions.has(p.sessionId))
-        this.ptyHost.resizeSession(p.sessionId, p.cols, p.rows);
-    });
-    ipcMain.handle("tokscale:launch", (_event, p) => this.createTokscaleSession(p.repoId));
-    ipcMain.handle("tokscale:close", (_event, p) => this.closeTokscaleSession(p.sessionId));
-    ipcMain.handle("tokscale:input", (_event, p) => {
-      if (this.ephemeralSessions.has(p.sessionId)) this.ptyHost.sendInput(p.sessionId, p.data);
-    });
-    ipcMain.handle("tokscale:binaryInput", (_event, p) => {
-      if (this.ephemeralSessions.has(p.sessionId)) this.ptyHost.sendInput(p.sessionId, p.data);
-    });
-    ipcMain.handle("tokscale:resize", (_event, p) => {
-      if (this.ephemeralSessions.has(p.sessionId))
-        this.ptyHost.resizeSession(p.sessionId, p.cols, p.rows);
-    });
+    ipcMain.handle("ephemeralTool:launch", (_event, payload: EphemeralToolLaunchRequest) =>
+      this.createEphemeralToolSession(payload.toolId, payload.repoId)
+    );
+    ipcMain.handle("ephemeralTool:close", (_event, payload: EphemeralToolSessionRequest) =>
+      this.closeEphemeralToolSession(payload.toolId, payload.sessionId)
+    );
+    ipcMain.handle("ephemeralTool:input", (_event, payload: EphemeralToolInputRequest) =>
+      this.handleEphemeralToolInput(payload.toolId, payload.sessionId, payload.data)
+    );
+    ipcMain.handle("ephemeralTool:binaryInput", (_event, payload: EphemeralToolInputRequest) =>
+      this.handleEphemeralToolInput(payload.toolId, payload.sessionId, payload.data)
+    );
+    ipcMain.handle("ephemeralTool:resize", (_event, payload: EphemeralToolResizeRequest) =>
+      this.handleEphemeralToolResize(
+        payload.toolId,
+        payload.sessionId,
+        payload.cols,
+        payload.rows
+      )
+    );
     ipcMain.handle("fs:readFile", async (_event, payload) => {
       try {
         const filePath = this.assertRepoFilePath(payload?.repoId, payload?.filePath);
@@ -759,24 +766,14 @@ class AppController {
     this.window.webContents.send("app:command", { command, ...payload });
   }
 
-  sendLazygitOutput(sessionId, data) {
+  sendEphemeralToolOutput(payload: EphemeralToolOutputPayload) {
     if (!this.window || this.window.isDestroyed()) return;
-    this.window.webContents.send("lazygit:output", { sessionId, data });
+    this.window.webContents.send("ephemeralTool:output", payload);
   }
 
-  sendLazygitExit(sessionId) {
+  sendEphemeralToolExit(payload: EphemeralToolExitPayload) {
     if (!this.window || this.window.isDestroyed()) return;
-    this.window.webContents.send("lazygit:exit", { sessionId });
-  }
-
-  sendTokscaleOutput(sessionId, data) {
-    if (!this.window || this.window.isDestroyed()) return;
-    this.window.webContents.send("tokscale:output", { sessionId, data });
-  }
-
-  sendTokscaleExit(sessionId) {
-    if (!this.window || this.window.isDestroyed()) return;
-    this.window.webContents.send("tokscale:exit", { sessionId });
+    this.window.webContents.send("ephemeralTool:exit", payload);
   }
 
   scheduleSave() {
@@ -1324,42 +1321,57 @@ class AppController {
     });
   }
 
-  createLazygitSession(repoId) {
+  ephemeralToolCommand(toolId: EphemeralToolId): string[] | null {
+    if (toolId === "lazygit") {
+      return this.lazygitPath ? [this.lazygitPath] : null;
+    }
+
+    if (toolId === "tokscale") {
+      return this.npxPath ? [this.npxPath, "--yes", "tokscale@latest"] : null;
+    }
+
+    return null;
+  }
+
+  createEphemeralToolSession(toolId: EphemeralToolId, repoId: string) {
     const repo = this.repoById(repoId);
-    if (!repo || !this.lazygitPath) return null;
+    const command = this.ephemeralToolCommand(toolId);
+    if (!repo || !command) return null;
     const sessionId = randomUUID();
-    this.ephemeralSessions.set(sessionId, { repoId, kind: "lazygit" });
+    this.ephemeralSessions.set(sessionId, { repoId, toolId });
     this.ptyHost.createSession({
       sessionId,
       cwd: repo.path,
-      command: [this.lazygitPath]
+      command
     });
     return sessionId;
   }
 
-  closeLazygitSession(sessionId) {
-    if (!this.ephemeralSessions.has(sessionId)) return;
+  isEphemeralToolSession(sessionId: string, toolId: EphemeralToolId): boolean {
+    return this.ephemeralSessions.get(sessionId)?.toolId === toolId;
+  }
+
+  closeEphemeralToolSession(toolId: EphemeralToolId, sessionId: string) {
+    if (!this.isEphemeralToolSession(sessionId, toolId)) return;
     this.ephemeralSessions.delete(sessionId);
     this.ptyHost.killSession(sessionId);
   }
 
-  createTokscaleSession(repoId) {
-    const repo = this.repoById(repoId);
-    if (!repo || !this.npxPath) return null;
-    const sessionId = randomUUID();
-    this.ephemeralSessions.set(sessionId, { repoId, kind: "tokscale" });
-    this.ptyHost.createSession({
-      sessionId,
-      cwd: repo.path,
-      command: [this.npxPath, "--yes", "tokscale@latest"]
-    });
-    return sessionId;
+  handleEphemeralToolInput(toolId: EphemeralToolId, sessionId: string, data: string) {
+    if (this.isEphemeralToolSession(sessionId, toolId)) {
+      this.ptyHost.sendInput(sessionId, data);
+    }
   }
 
-  closeTokscaleSession(sessionId) {
-    if (!this.ephemeralSessions.has(sessionId)) return;
-    this.ephemeralSessions.delete(sessionId);
-    this.ptyHost.killSession(sessionId);
+  handleEphemeralToolResize(
+    toolId: EphemeralToolId,
+    sessionId: string,
+    cols: number,
+    rows: number
+  ) {
+    if (this.isEphemeralToolSession(sessionId, toolId)) {
+      this.ptyHost.resizeSession(sessionId, cols, rows);
+    }
   }
 
   handleSessionInput(sessionId, data) {
@@ -1371,18 +1383,17 @@ class AppController {
     const ephemeralSession = this.ephemeralSessions.get(message.sessionId);
     if (ephemeralSession) {
       if (message.type === "data") {
-        if (ephemeralSession.kind === "lazygit") {
-          this.sendLazygitOutput(message.sessionId, message.data);
-        } else {
-          this.sendTokscaleOutput(message.sessionId, message.data);
-        }
+        this.sendEphemeralToolOutput({
+          toolId: ephemeralSession.toolId,
+          sessionId: message.sessionId,
+          data: message.data
+        });
       } else if (message.type === "exit") {
         this.ephemeralSessions.delete(message.sessionId);
-        if (ephemeralSession.kind === "lazygit") {
-          this.sendLazygitExit(message.sessionId);
-        } else {
-          this.sendTokscaleExit(message.sessionId);
-        }
+        this.sendEphemeralToolExit({
+          toolId: ephemeralSession.toolId,
+          sessionId: message.sessionId
+        });
       }
       return;
     }

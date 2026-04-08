@@ -4,6 +4,9 @@ import type {
   AppStateSnapshot,
   ClaudeSettingsContext,
   DirectoryReadResult,
+  EphemeralToolExitPayload,
+  EphemeralToolId,
+  EphemeralToolOutputPayload,
   MarketplaceInspectResponse,
   MarketplaceInstallResponse,
   MarketplaceSkillDetails,
@@ -114,20 +117,30 @@ interface ClaudeWorkspaceApi {
   onSessionOutput: (callback: (payload: SessionOutputPayload) => void) => Unsubscribe;
   onSessionUpdated: (callback: (payload: SessionUpdatedPayload) => void) => Unsubscribe;
   onCommand: (callback: (payload: AppCommandPayload) => void) => Unsubscribe;
-  launchLazygit: (repoId: string) => Promise<string | null>;
-  closeLazygit: (sessionId: string) => Promise<void>;
-  sendLazygitInput: (sessionId: string, data: string) => Promise<void>;
-  sendLazygitBinaryInput: (sessionId: string, data: string) => Promise<void>;
-  resizeLazygit: (sessionId: string, cols: number, rows: number) => Promise<void>;
-  onLazygitOutput: (callback: (payload: { sessionId: string; data: string }) => void) => Unsubscribe;
-  onLazygitExit: (callback: (payload: { sessionId: string }) => void) => Unsubscribe;
-  launchTokscale: (repoId: string) => Promise<string | null>;
-  closeTokscale: (sessionId: string) => Promise<void>;
-  sendTokscaleInput: (sessionId: string, data: string) => Promise<void>;
-  sendTokscaleBinaryInput: (sessionId: string, data: string) => Promise<void>;
-  resizeTokscale: (sessionId: string, cols: number, rows: number) => Promise<void>;
-  onTokscaleOutput: (callback: (payload: { sessionId: string; data: string }) => void) => Unsubscribe;
-  onTokscaleExit: (callback: (payload: { sessionId: string }) => void) => Unsubscribe;
+  launchEphemeralTool: (toolId: EphemeralToolId, repoId: string) => Promise<string | null>;
+  closeEphemeralTool: (toolId: EphemeralToolId, sessionId: string) => Promise<void>;
+  sendEphemeralToolInput: (
+    toolId: EphemeralToolId,
+    sessionId: string,
+    data: string
+  ) => Promise<void>;
+  sendEphemeralToolBinaryInput: (
+    toolId: EphemeralToolId,
+    sessionId: string,
+    data: string
+  ) => Promise<void>;
+  resizeEphemeralTool: (
+    toolId: EphemeralToolId,
+    sessionId: string,
+    cols: number,
+    rows: number
+  ) => Promise<void>;
+  onEphemeralToolOutput: (
+    callback: (payload: EphemeralToolOutputPayload) => void
+  ) => Unsubscribe;
+  onEphemeralToolExit: (
+    callback: (payload: EphemeralToolExitPayload) => void
+  ) => Unsubscribe;
 }
 
 interface ClaudeTerminalOptions {

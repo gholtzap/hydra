@@ -4,26 +4,7 @@
  * Each entry maps an action ID to an Electron accelerator string.
  * Users override individual bindings via preferences.keybindings.
  */
-
-export type KeybindingAction =
-  | "open-folder"
-  | "create-folder"
-  | "new-session"
-  | "new-session-alt"
-  | "open-wiki"
-  | "quick-switcher"
-  | "command-palette"
-  | "next-unread"
-  | "open-lazygit"
-  | "open-tokscale"
-  | "open-launcher"
-  | "search-project-sessions"
-  | "navigate-section-left"
-  | "navigate-section-right"
-  | "navigate-section-up"
-  | "navigate-section-down";
-
-export type KeybindingMap = Record<KeybindingAction, string>;
+import type { KeybindingAction, KeybindingMap } from "../shared-types";
 
 export const DEFAULT_KEYBINDINGS: KeybindingMap = {
   "open-folder": "CmdOrCtrl+O",

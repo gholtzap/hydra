@@ -317,6 +317,7 @@ type UiState = {
   sessionSearchLoading: boolean;
   sessionSearchSelectedIndex: number;
   sessionSearchLoadId: number;
+  sessionSearchFilter: "all" | "claude" | "codex";
   commandPaletteQuery: string;
   settingsTab: string;
   settingsClaudeView: ClaudeSettingsView;
@@ -402,6 +403,7 @@ const ui: UiState = {
   sessionSearchLoading: false,
   sessionSearchSelectedIndex: 0,
   sessionSearchLoadId: 0,
+  sessionSearchFilter: "all" as "all" | "claude" | "codex",
   commandPaletteQuery: "",
   settingsTab: "general",
   settingsClaudeView: "files" as ClaudeSettingsView,
@@ -3518,6 +3520,11 @@ function renderSessionSearchDialog() {
       }),
       dom(
         "div",
+        { className: "session-search-filter-bar" },
+        ...renderSessionSearchFilterButtons()
+      ),
+      dom(
+        "div",
         { className: "dialog-panel" },
         sectionLabel,
         dom(
@@ -3561,6 +3568,46 @@ function renderSessionSearchDialog() {
   );
 }
 
+function renderSessionSearchFilterButtons() {
+  const claudeCount = ui.sessionSearchResults.filter((r) => r.source === "claude").length;
+  const codexCount = ui.sessionSearchResults.filter((r) => r.source === "codex").length;
+  const totalCount = ui.sessionSearchResults.length;
+  const hasResults = totalCount > 0;
+
+  const makeButton = (
+    filter: "all" | "claude" | "codex",
+    label: string,
+    count: number
+  ) => {
+    const isActive = ui.sessionSearchFilter === filter;
+    return dom(
+      "button",
+      {
+        className: classNames(
+          "session-search-filter-button",
+          `session-search-filter-button-${filter}`,
+          isActive ? "active" : undefined
+        ),
+        attrs: {
+          type: "button",
+          "data-action": "session-search-filter",
+          "data-filter-value": filter
+        }
+      },
+      label,
+      hasResults
+        ? dom("span", { className: "session-search-filter-count" }, String(count))
+        : null
+    );
+  };
+
+  return [
+    makeButton("all", "All", totalCount),
+    makeButton("claude", "Claude", claudeCount),
+    makeButton("codex", "Codex", codexCount),
+  ];
+}
+
 function renderSessionSearchBody() {
   if (!ui.sessionSearchRepoId) {
     return [emptyStateElement("Open or select a project first.")];
@@ -3589,8 +3636,17 @@ function renderSessionSearchBody() {
     return [emptyStateElement("No matching session content found for this project.")];
   }
 
-  return ui.sessionSearchResults
-    .map((result, index) => {
+  const indexedResults = ui.sessionSearchResults
+    .map((result, originalIndex) => ({ result, originalIndex }))
+    .filter(({ result }) => ui.sessionSearchFilter === "all" || result.source === ui.sessionSearchFilter);
+
+  if (!indexedResults.length) {
+    const label = ui.sessionSearchFilter === "claude" ? "Claude" : "Codex";
+    return [emptyStateElement(`No ${label} sessions matched. Try a different filter.`)];
+  }
+
+  return indexedResults
+    .map(({ result, originalIndex: index }) => {
       const sourceLabel = result.source === "claude" ? "Claude" : "Codex";
       const normalizedPreview = normalizeJsonlPreview(result.preview);
       const canResume = canResumeSessionSearchResult(result);
@@ -3669,6 +3725,8 @@ async function renderSettingsDialog() {
 
   await ensureSettingsSelection();
 
+  const savedScrollTop = (settingsDialog.querySelector(".settings-dialog-body") as HTMLElement | null)?.scrollTop ?? 0;
+
   settingsDialog.innerHTML = `
     <form method="dialog" class="dialog-body settings-dialog-body ${ui.settingsTab === "themes" ? "settings-dialog-body-sticky-header" : ""}">
       <div class="settings-dialog-header-shell">
@@ -3702,6 +3760,11 @@ async function renderSettingsDialog() {
       </div>
     </form>
   `;
+
+  if (savedScrollTop > 0) {
+    const body = settingsDialog.querySelector(".settings-dialog-body") as HTMLElement | null;
+    if (body) body.scrollTop = savedScrollTop;
+  }
 }
 
 async function ensureSettingsSelection() {
@@ -4952,6 +5015,18 @@ function renderSimplifiedPrimitiveControl(entry: SimplifiedJsonEntry, encodedPat
     `;
   }
 
+  const pathKey = entry.path.join(".");
+  const knownOptions = KNOWN_SETTINGS[pathKey]?.options;
+  if (typeof value === "string" && knownOptions) {
+    const hasCustomValue = value !== "" && !knownOptions.some((opt) => opt.value === value);
+    return `
+      <select data-setting-editor="string" data-setting-path="${encodedPath}">
+        ${knownOptions.map((opt) => `<option value="${escapeAttribute(opt.value)}"${value === opt.value ? " selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}
+        ${hasCustomValue ? `<option value="${escapeAttribute(value)}" selected>${escapeHtml(value)} (custom)</option>` : ""}
+      </select>
+    `;
+  }
+
   return `
     <input
       type="text"
@@ -5010,6 +5085,26 @@ function renderResolvedSettingsPanel(resolvedValues) {
   `;
 }
 
+const KNOWN_SETTINGS: Record<string, { description: string; options?: Array<{ value: string; label: string }> }> = {
+  model: {
+    description: "The Claude model used for all agent sessions in this scope.",
+    options: [
+      { value: "claude-opus-4-6", label: "Claude Opus 4.6 — Most capable" },
+      { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 — Balanced" },
+      { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 — Fastest" },
+    ],
+  },
+  maxTokens: {
+    description: "Maximum number of tokens Claude can generate in a single response.",
+  },
+  cleanupPeriodDays: {
+    description: "Number of days before old session data is automatically removed.",
+  },
+  apiKeyHelper: {
+    description: "Shell command used to retrieve the API key dynamically at runtime.",
+  },
+};
+
 function buildSimplifiedJsonCategories(rootValue): SimplifiedJsonCategory[] {
   if (!isJsonObject(rootValue)) {
     return [];
@@ -5020,7 +5115,7 @@ function buildSimplifiedJsonCategories(rootValue): SimplifiedJsonCategory[] {
     .filter(([, value]) => isEditablePrimitiveValue(value))
     .map(([key, value]) => buildSimplifiedJsonEntry([key], value, {
       label: humanizeSettingSegment(key),
-      description: "Edit this setting directly without opening raw JSON."
+      description: KNOWN_SETTINGS[key]?.description ?? "Edit this setting directly without opening raw JSON."
     }))
     .filter(Boolean) as SimplifiedJsonEntry[];
 
@@ -5539,6 +5634,11 @@ async function handleClick(event) {
       break;
     case "reveal-session-search-result":
       await revealSessionSearchResult(Number(target.dataset.resultIndex));
+      break;
+    case "session-search-filter":
+      ui.sessionSearchFilter = (target.dataset.filterValue || "all") as "all" | "claude" | "codex";
+      ui.sessionSearchSelectedIndex = 0;
+      renderSessionSearchDialogKeepFocus();
       break;
     case "refresh-port-status":
       await refreshPortStatus();
@@ -7069,6 +7169,7 @@ function openSessionSearch(repoId: string | null) {
   ui.sessionSearchLoading = false;
   ui.sessionSearchSelectedIndex = 0;
   ui.sessionSearchLoadId += 1;
+  ui.sessionSearchFilter = "all";
   renderSessionSearchDialog();
   if (!sessionSearchDialog.open) {
     sessionSearchDialog.showModal();

@@ -1,5 +1,6 @@
 import type { WikiContext, WikiFileContents, WikiTreeNode } from "../shared-types";
 
+const fs = require("node:fs");
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path");
 
@@ -16,6 +17,14 @@ function wikiDirectoryPath(rootPath: string): string {
 async function wikiExists(rootPath: string): Promise<boolean> {
   try {
     return (await fsp.stat(wikiDirectoryPath(rootPath))).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function wikiExistsSync(rootPath: string): boolean {
+  try {
+    return fs.statSync(wikiDirectoryPath(rootPath)).isDirectory();
   } catch {
     return false;
   }
@@ -262,5 +271,6 @@ module.exports = {
   getWikiContext,
   readWikiFile,
   wikiDirectoryPath,
-  wikiExists
+  wikiExists,
+  wikiExistsSync
 };

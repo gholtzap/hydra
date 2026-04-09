@@ -155,7 +155,8 @@ const {
   getWikiContext,
   readWikiFile,
   wikiDirectoryPath,
-  wikiExists
+  wikiExists,
+  wikiExistsSync
 } = require("./wiki") as {
   disableWiki: (rootPath: string) => Promise<unknown>;
   enableWiki: (rootPath: string) => Promise<unknown>;
@@ -163,6 +164,7 @@ const {
   readWikiFile: (rootPath: string, relativePath: string) => Promise<WikiFileContents>;
   wikiDirectoryPath: (rootPath: string) => string;
   wikiExists: (rootPath: string) => Promise<boolean>;
+  wikiExistsSync: (rootPath: string) => boolean;
 };
 const { resolveCommandPath } = require("./command-path") as {
   resolveCommandPath: (command: string) => Promise<string | null>;
@@ -710,7 +712,7 @@ class AppController {
       repos: [...this.state.repos]
         .map((repo) => ({
           ...repo,
-          wikiExists: wikiExists(repo.path),
+          wikiExists: wikiExistsSync(repo.path),
           wikiPath: wikiDirectoryPath(repo.path)
         }))
         .sort((left, right) => left.name.localeCompare(right.name)),

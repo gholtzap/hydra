@@ -144,6 +144,7 @@ export type SessionRecord = {
   launchesClaudeOnStart: boolean;
   startupAgentId: AgentId | null;
   claudeSessionId: string | null;
+  agentSessionId: string | null;
   status: SessionStatus;
   runtimeState: SessionRuntimeState;
   blocker: SessionBlocker | null;

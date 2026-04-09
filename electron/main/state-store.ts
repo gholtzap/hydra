@@ -103,6 +103,7 @@ function migrateSnapshot(snapshot: unknown): StoredAppState {
         launchesClaudeOnStart: true,
         startupAgentId: null,
         claudeSessionId: null,
+        agentSessionId: null,
         rawTranscript: "",
         transcript: "",
         unreadCount: 0,
@@ -165,6 +166,10 @@ function normalizeRestoredSessions(sessions: SessionRecord[]): void {
       session.startupAgentId === DEFAULT_AGENT_ID && typeof session.claudeSessionId === "string"
         ? session.claudeSessionId
         : null;
+    session.agentSessionId =
+      typeof session.agentSessionId === "string" && session.agentSessionId
+        ? session.agentSessionId
+        : session.claudeSessionId;
     session.isPinned = !!session.isPinned;
     session.tagColor = normalizeSessionTagColor(session.tagColor);
     session.sessionIconPath = normalizeSessionIconPath(session.sessionIconPath);

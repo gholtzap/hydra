@@ -687,6 +687,12 @@ textarea {
   padding: 0 4px;
 }
 
+.settings-sidebar-sections .settings-nav-row + .section-label {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
 .sidebar-list {
   display: flex;
   flex-direction: column;
@@ -721,8 +727,7 @@ textarea {
 .session-row,
 .inbox-card,
 .switcher-row,
-.command-row,
-.session-search-row {
+.command-row {
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -741,8 +746,7 @@ textarea {
 .repo-item.active,
 .session-row.active,
 .switcher-row.active,
-.command-row.active,
-.session-search-row.active {
+.command-row.active {
   background: var(--surface-active);
   border-color: var(--surface-active-border);
 }
@@ -752,8 +756,7 @@ textarea {
 .session-row:hover,
 .inbox-card:hover,
 .switcher-row:hover,
-.command-row:hover,
-.session-search-row:hover {
+.command-row:hover {
   background: var(--surface-muted);
   border-color: var(--border);
   box-shadow: none;
@@ -763,8 +766,7 @@ textarea {
 .repo-item.active:hover,
 .session-row.active:hover,
 .switcher-row.active:hover,
-.command-row.active:hover,
-.session-search-row.active:hover {
+.command-row.active:hover {
   background: var(--surface-active);
   border-color: var(--surface-active-border);
 }
@@ -2529,11 +2531,90 @@ textarea {
   gap: 8px;
 }
 
+/* ── Session Search Result Rows ─────────────────────────────── */
+
 .session-search-list {
   min-height: 360px;
   max-height: 600px;
   overflow-y: auto;
   scroll-padding: 4px;
+  gap: 6px;
+}
+
+.session-search-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  width: 100%;
+  text-align: left;
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid transparent;
+  border-radius: 10px;
+  background: var(--surface-soft);
+  box-shadow: none;
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease, box-shadow 0.1s ease;
+}
+
+.session-search-row:hover {
+  background: var(--surface-muted);
+  border-color: var(--border);
+  border-left-color: var(--border-strong);
+  box-shadow: none;
+}
+
+.session-search-row.active {
+  background: var(--surface-active);
+  border-color: var(--surface-active-border);
+  border-left-color: var(--accent, oklch(0.55 0.18 250));
+}
+
+.session-search-row.active:hover {
+  background: var(--surface-active);
+  border-color: var(--surface-active-border);
+  border-left-color: var(--accent, oklch(0.55 0.18 250));
+}
+
+.session-search-row .row-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.session-search-row .row-title > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+
+.session-search-row .row-subtitle {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.session-search-row .row-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 .session-search-source {
@@ -2568,8 +2649,10 @@ textarea {
 .session-search-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 8px;
+  gap: 6px;
+  margin-top: 3px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
 }
 
 .session-search-loading-state {
@@ -2669,7 +2752,7 @@ textarea {
 .settings-sidebar-sections {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   overflow: auto;
   min-height: 0;
   padding-right: 4px;
@@ -2996,9 +3079,9 @@ textarea {
 .settings-nav-row {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
   width: 100%;
-  padding: 12px;
+  padding: 9px 12px;
   text-align: left;
   box-shadow: none;
 }
@@ -3597,6 +3680,10 @@ textarea {
   letter-spacing: 0.05em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.settings-nav-copy .settings-chip {
+  flex: none;
 }
 
 .settings-meta-pill {

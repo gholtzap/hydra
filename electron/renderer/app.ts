@@ -3541,7 +3541,7 @@ function renderSessionSearchDialog() {
               },
               "Reveal File"
             ),
-            selectedResult.source === "claude" && selectedResult.sessionId
+            canResumeSessionSearchResult(selectedResult)
               ? dom(
                   "button",
                   {
@@ -3593,7 +3593,7 @@ function renderSessionSearchBody() {
     .map((result, index) => {
       const sourceLabel = result.source === "claude" ? "Claude" : "Codex";
       const normalizedPreview = normalizeJsonlPreview(result.preview);
-      const canResume = result.source === "claude" && result.sessionId;
+      const canResume = canResumeSessionSearchResult(result);
       const shortId = result.sessionId ? result.sessionId.slice(0, 8) : null;
       return dom(
         "div",
@@ -5338,6 +5338,7 @@ function renderSettingsSaveMessage() {
 }
 
 function renderSettingsFileRow(file) {
+  const statusText = file.exists ? "Ready" : "Create on Save";
   return `
     <button
       type="button"
@@ -5347,13 +5348,12 @@ function renderSettingsFileRow(file) {
       <div class="settings-nav-row-top">
         <span class="settings-nav-icon settings-nav-icon-${escapeAttribute(settingsFileVisualKind(file))}" aria-hidden="true">${escapeHtml(settingsFileIconLabel(file))}</span>
         <div class="settings-nav-copy">
-          <div class="row-title">${escapeHtml(friendlySettingsFileTitle(file))}</div>
-          <div class="row-subtitle">${escapeHtml(friendlySettingsFileListSubtitle(file))}</div>
+          <div class="row-title">
+            <span>${escapeHtml(friendlySettingsFileTitle(file))}</span>
+            <span class="settings-chip">${isJsonSettingsFile(file) ? "JSON" : "MD"}</span>
+          </div>
+          <div class="row-subtitle">${escapeHtml(friendlySettingsFileListSubtitle(file))} · ${escapeHtml(statusText)}</div>
         </div>
-      </div>
-      <div class="settings-nav-meta">
-        <span class="settings-chip">${isJsonSettingsFile(file) ? "JSON" : "MD"}</span>
-        <span class="row-meta">${file.exists ? "Ready" : "Create on Save"}</span>
       </div>
     </button>
   `;
@@ -10222,7 +10222,7 @@ async function activateSessionSearchResult(index: number) {
     return;
   }
 
-  if (result.source === "claude" && result.sessionId) {
+  if (canResumeSessionSearchResult(result)) {
     await resumeFromSessionSearchResult(index);
     return;
   }
@@ -10246,9 +10246,13 @@ async function resumeFromSessionSearchResult(index: number) {
     return;
   }
 
-  if (result.source === "claude" && result.sessionId) {
+  if (canResumeSessionSearchResult(result)) {
     sessionSearchDialog.close();
-    const newSessionId = await api.resumeFromClaudeSession(ui.sessionSearchRepoId, result.sessionId);
+    const newSessionId = await api.resumeFromSessionSearchResult(
+      ui.sessionSearchRepoId,
+      result.source,
+      result.sessionId
+    );
     if (newSessionId) {
       await selectSession(newSessionId, "terminal");
     }
@@ -10279,6 +10283,12 @@ function pathLeafLabel(filePath: string) {
   const normalized = filePath.replace(/\\/g, "/");
   const parts = normalized.split("/");
   return parts.slice(-2).join("/");
+}
+
+function canResumeSessionSearchResult(
+  result: SessionSearchResult | null | undefined
+): result is SessionSearchResult & { sessionId: string } {
+  return !!result && (result.source === "claude" || result.source === "codex") && !!result.sessionId;
 }
 
 function normalizeJsonlPreview(raw: string): string {

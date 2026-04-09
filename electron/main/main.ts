@@ -26,6 +26,7 @@ import type {
   SessionBlocker,
   SessionOrganizationPatch,
   SessionRecord,
+  SessionSearchSource,
   SessionSearchResponse,
   SessionStatus,
   SessionSummary,
@@ -471,6 +472,9 @@ class AppController {
     ipcMain.handle("session:resumeFromClaude", (_event, payload) =>
       this.resumeFromClaudeSession(payload.repoId, payload.claudeSessionId)
     );
+    ipcMain.handle("session:resumeFromSearchResult", (_event, payload) =>
+      this.resumeFromSearchResult(payload.repoId, payload.source, payload.sessionId)
+    );
     ipcMain.handle("fs:readDir", async (_event, repoId) => {
       const repo = this.repoById(repoId);
       if (!repo) {
@@ -906,6 +910,7 @@ class AppController {
       launchesClaudeOnStart: !!startupAgentId,
       startupAgentId,
       claudeSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
+      agentSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
       status: "running",
       runtimeState: "live",
       blocker: null,
@@ -1177,14 +1182,27 @@ class AppController {
       ...response,
       results: response.results.map((result) => ({
         ...result,
-        hydraSessionId: this.findHydraSessionIdForSearchResult(repo.id, result.sessionId)
+        hydraSessionId: this.findHydraSessionIdForSearchResult(
+          repo.id,
+          result.source,
+          result.sessionId
+        )
       }))
     };
   }
 
   resumeFromClaudeSession(repoId, claudeSessionId) {
+    return this.resumeFromSearchResult(repoId, "claude", claudeSessionId);
+  }
+
+  resumeFromSearchResult(
+    repoId: string,
+    source: SessionSearchSource,
+    externalSessionId: string | null
+  ) {
     const repo = this.repoById(repoId);
-    if (!repo || !claudeSessionId) {
+    const startupAgentId = normalizeAgentId(source, null);
+    if (!repo || !startupAgentId || !externalSessionId) {
       return null;
     }
 
@@ -1195,8 +1213,9 @@ class AppController {
       title: repo.name,
       initialPrompt: "",
       launchesClaudeOnStart: true,
-      startupAgentId: DEFAULT_AGENT_ID,
-      claudeSessionId,
+      startupAgentId,
+      claudeSessionId: startupAgentId === DEFAULT_AGENT_ID ? externalSessionId : null,
+      agentSessionId: externalSessionId,
       status: "running",
       runtimeState: "live",
       blocker: null,
@@ -1299,16 +1318,27 @@ class AppController {
     this.broadcastState();
   }
 
-  findHydraSessionIdForSearchResult(repoId, externalSessionId) {
+  findHydraSessionIdForSearchResult(
+    repoId: string,
+    source: SessionSearchSource,
+    externalSessionId: string | null
+  ) {
     if (!externalSessionId) {
+      return null;
+    }
+
+    const startupAgentId = normalizeAgentId(source, null);
+    if (!startupAgentId) {
       return null;
     }
 
     const match = this.state.sessions.find((session) =>
       session.repoID === repoId &&
       (session.id === externalSessionId ||
-        (session.startupAgentId === DEFAULT_AGENT_ID &&
-          session.claudeSessionId === externalSessionId))
+        (session.startupAgentId === startupAgentId &&
+          (session.agentSessionId === externalSessionId ||
+            (startupAgentId === DEFAULT_AGENT_ID &&
+              session.claudeSessionId === externalSessionId))))
     );
 
     return match ? match.id : null;
@@ -1776,6 +1806,7 @@ function summarizeSession(session) {
     launchesClaudeOnStart: session.launchesClaudeOnStart,
     startupAgentId: session.startupAgentId,
     claudeSessionId: session.claudeSessionId,
+    agentSessionId: session.agentSessionId,
     status: session.status,
     runtimeState: session.runtimeState,
     blocker: session.blocker,
@@ -1889,6 +1920,10 @@ function resolvedSessionLaunchCommand(preferences, session) {
   }
 
   const command = resolvedAgentCommand(preferences, startupAgentId);
+  if (startupAgentId === "codex" && session.agentSessionId) {
+    return `${command} resume ${shellEscape(session.agentSessionId)}`;
+  }
+
   if (startupAgentId !== DEFAULT_AGENT_ID) {
     return command;
   }

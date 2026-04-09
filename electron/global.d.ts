@@ -111,6 +111,11 @@ interface ClaudeWorkspaceApi {
   revealWiki: (repoId: string) => Promise<void>;
   querySessionSearch: (repoId: string | null, query: string) => Promise<SessionSearchResponse>;
   resumeFromClaudeSession: (repoId: string, claudeSessionId: string) => Promise<string | null>;
+  resumeFromSessionSearchResult: (
+    repoId: string,
+    source: "claude" | "codex",
+    sessionId: string
+  ) => Promise<string | null>;
   readDirectory: (repoId: string) => Promise<DirectoryReadResult>;
   readFile: (payload: ClaudeRepoFileRequest) => Promise<ReadFileResult>;
   onStateChanged: (callback: (payload: AppStateSnapshot) => void) => Unsubscribe;

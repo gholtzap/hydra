@@ -151,6 +151,8 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     invoke<SessionSearchResponse>("sessionSearch:query", { repoId, query }),
   resumeFromClaudeSession: (repoId: string, claudeSessionId: string) =>
     invoke<string | null>("session:resumeFromClaude", { repoId, claudeSessionId }),
+  resumeFromSessionSearchResult: (repoId: string, source: "claude" | "codex", sessionId: string) =>
+    invoke<string | null>("session:resumeFromSearchResult", { repoId, source, sessionId }),
   readDirectory: (repoId: string) => invoke<DirectoryReadResult>("fs:readDir", repoId),
   readFile: (payload: ClaudeRepoFileRequest) => invoke<ReadFileResult>("fs:readFile", payload),
   onStateChanged: (callback: (payload: AppStateSnapshot) => void) =>

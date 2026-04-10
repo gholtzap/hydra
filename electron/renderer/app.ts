@@ -1821,7 +1821,7 @@ function renderRepoDetail(repo) {
       ${
         sessions.length
           ? `<div class="repo-session-list">
-              ${sessions.map((session) => renderRepoSession(session, repo)).join("")}
+              ${sessions.map((session) => renderRepoSession(session)).join("")}
             </div>
             ${renderBulkActionBar(repo.id)}`
           : `<div class="empty-state">Start a shell session for this folder.</div>`
@@ -3240,7 +3240,11 @@ function renderInboxCard(session) {
   `;
 }
 
-function renderRepoSession(session, repo) {
+function projectSessionStateLabel(session) {
+  return session.runtimeState === "live" ? "Running" : "Idle";
+}
+
+function renderRepoSession(session) {
   const multiSelected = ui.selectedSessionIds.has(session.id);
   return `
     <button class="session-row ${session.isPinned ? "session-row-pinned" : ""} ${selectionMatches("session", session.id) ? "active" : ""} ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""} ${multiSelected ? "session-row-selected" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
@@ -3251,11 +3255,9 @@ function renderRepoSession(session, repo) {
         </span>
         <span class="row-title-meta">
           ${session.isPinned ? renderSessionPinIndicator("Pin") : ""}
-          <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
+          <span class="status-badge ${session.runtimeState === "live" ? "status-running" : "status-idle"}">${projectSessionStateLabel(session)}</span>
         </span>
       </div>
-      <div class="row-subtitle">${escapeHtml(repo.name)}</div>
-      <div class="row-meta">${escapeHtml(previewTranscript(session.transcript))}</div>
     </button>
   `;
 }

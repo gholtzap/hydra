@@ -363,6 +363,9 @@ type UiState = {
   fileBrowserLoadId: number;
   fileBrowserLoading: boolean;
   fileBrowserExpandedDirs: Set<string>;
+  sessionPlanReviews: Map<string, SessionPlanReview>;
+  lastAutoOpenedPlanFingerprintBySession: Map<string, string>;
+  activePlanReviewSessionId: string | null;
   ephemeralToolOverlays: Record<EphemeralToolId, EphemeralToolOverlayState>;
   resizeDragState: {
     splitPath: string;
@@ -449,6 +452,9 @@ const ui: UiState = {
   fileBrowserLoadId: 0,
   fileBrowserLoading: false,
   fileBrowserExpandedDirs: new Set<string>(),
+  sessionPlanReviews: new Map<string, SessionPlanReview>(),
+  lastAutoOpenedPlanFingerprintBySession: new Map<string, string>(),
+  activePlanReviewSessionId: null as string | null,
   ephemeralToolOverlays: {
     lazygit: createEphemeralToolOverlayState(),
     tokscale: createEphemeralToolOverlayState()
@@ -482,6 +488,7 @@ const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogE
 const quickSwitcherDialog = document.getElementById("quick-switcher-dialog") as HTMLDialogElement;
 const sessionSearchDialog = document.getElementById("session-search-dialog") as HTMLDialogElement;
 const commandPaletteDialog = document.getElementById("command-palette-dialog") as HTMLDialogElement;
+const planReviewDialog = document.getElementById("plan-review-dialog") as HTMLDialogElement;
 const tokscaleDialog = document.getElementById("tokscale-dialog") as HTMLDialogElement;
 const lazygitDialog = document.getElementById("lazygit-dialog") as HTMLDialogElement;
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -640,6 +647,12 @@ type SimplifiedJsonEntry = {
 
 type ThemeAppearance = "system" | "light" | "dark";
 type ThemeMode = "light" | "dark";
+type SessionPlanReview = {
+  sessionId: string;
+  markdown: string;
+  fingerprint: string;
+  detectedAt: string;
+};
 
 type ThemeSeedPalette = {
   background: string;
@@ -1151,6 +1164,10 @@ document.addEventListener("dragover", handleDragOver, true);
 document.addEventListener("drop", handleDrop, true);
 document.addEventListener("pointermove", handlePointerMove);
 document.addEventListener("pointerup", handlePointerUp);
+planReviewDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closePlanReviewDialog();
+});
 
 for (const [toolId, definition] of Object.entries(EPHEMERAL_TOOL_DIALOGS) as Array<
   [EphemeralToolId, (typeof EPHEMERAL_TOOL_DIALOGS)[EphemeralToolId]]
@@ -1163,6 +1180,7 @@ for (const [toolId, definition] of Object.entries(EPHEMERAL_TOOL_DIALOGS) as Arr
 
 api.onStateChanged((nextState) => {
   replaceState(nextState);
+  syncPlanReviewsFromState();
   ensureValidSelection();
   syncViewedSessionReadState();
   renderSidebar();
@@ -1172,6 +1190,10 @@ api.onStateChanged((nextState) => {
 
 api.onSessionOutput((payload) => {
   const session = appendSessionOutput(payload.sessionId, payload.data, payload.session);
+  syncSessionPlanReview(session, { autoOpen: true });
+  if (ui.activePlanReviewSessionId === payload.sessionId) {
+    renderPlanReviewDialog();
+  }
   syncViewedSessionReadState(payload.sessionId);
   renderSidebar();
 
@@ -1200,6 +1222,10 @@ api.onSessionOutput((payload) => {
 
 api.onSessionUpdated((payload) => {
   const session = mergeSessionSummary(payload.session);
+  syncSessionPlanReview(session, { autoOpen: false });
+  if (ui.activePlanReviewSessionId === payload.session?.id) {
+    renderPlanReviewDialog();
+  }
   syncViewedSessionReadState(payload.session?.id);
   renderSidebar();
 
@@ -2816,7 +2842,8 @@ function updateSessionPane(session) {
   terminalWrap.classList.toggle("session-pane-terminal-wrap-paused", session.runtimeState !== "live");
 
   const isRenaming = ui.renamingSessionId === session.id;
-  const headerSig = `${session.title}|${session.status}|${session.runtimeState}|${isRenaming}|${session.isPinned}|${session.tagColor || ""}|${session.sessionIconUrl || ""}|${session.sessionIconUpdatedAt || ""}`;
+  const planFingerprint = planReviewForSession(session.id)?.fingerprint || "";
+  const headerSig = `${session.title}|${session.status}|${session.runtimeState}|${isRenaming}|${session.isPinned}|${session.tagColor || ""}|${session.sessionIconUrl || ""}|${session.sessionIconUpdatedAt || ""}|${planFingerprint}`;
   if (header.dataset.sig !== headerSig) {
     header.dataset.sig = headerSig;
     replaceDomChildren(header, renderSessionPaneHeader(session, isRenaming));
@@ -2834,8 +2861,10 @@ function updateSessionPane(session) {
   }
 
   const blockerSig = session.blocker
-    ? `${session.blocker.kind}|${session.blocker.summary}|${session.runtimeState}`
-    : "";
+    ? `${session.blocker.kind}|${session.blocker.summary}|${session.runtimeState}|${planFingerprint}`
+    : planFingerprint
+      ? `plan|${planFingerprint}`
+      : "";
   if (blockerElement.dataset.sig !== blockerSig) {
     blockerElement.dataset.sig = blockerSig;
     replaceDomChildren(blockerElement, renderSessionBlocker(session));
@@ -2851,6 +2880,7 @@ function updateSessionPane(session) {
 }
 
 function renderSessionPaneHeader(session, isRenaming: boolean) {
+  const planReview = planReviewForSession(session.id);
   const paneBar = dom(
     "div",
     {
@@ -2913,6 +2943,21 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
             },
             "Rename"
           ),
+      planReview
+        ? dom(
+            "button",
+            {
+              className: "pane-action-btn",
+              attrs: {
+                "data-action": "open-plan-review",
+                "data-session-id": session.id,
+                "data-no-drag": "true",
+                title: "Review latest plan"
+              }
+            },
+            "Review Plan"
+          )
+        : null,
       session.runtimeState !== "live"
         ? dom(
             "button",
@@ -2951,6 +2996,9 @@ function renderSessionBlocker(session) {
     return null;
   }
 
+  const planReview = planReviewForSession(session.id);
+  const canReplyToApproval = session.blocker.kind === "approval" && session.runtimeState === "live";
+
   return dom(
     "div",
     { className: "blocker-banner" },
@@ -2960,21 +3008,124 @@ function renderSessionBlocker(session) {
       dom("div", { className: "row-title" }, blockerLabel(session.blocker.kind)),
       dom("div", { className: "row-subtitle" }, session.blocker.summary)
     ),
-    session.blocker.kind === "approval" && session.runtimeState === "live"
+    canReplyToApproval || planReview
       ? dom(
           "div",
           { className: "session-actions" },
-          dom(
-            "button",
-            {
-              className: "primary",
-              attrs: { "data-action": "approve-blocker", "data-session-id": session.id }
-            },
-            "Approve"
-          ),
-          dom("button", { attrs: { "data-action": "deny-blocker", "data-session-id": session.id } }, "Deny")
+          planReview
+            ? dom(
+                "button",
+                {
+                  attrs: { "data-action": "open-plan-review", "data-session-id": session.id }
+                },
+                "Review Plan"
+              )
+            : null,
+          canReplyToApproval
+            ? dom(
+                "button",
+                {
+                  className: "primary",
+                  attrs: { "data-action": "approve-blocker", "data-session-id": session.id }
+                },
+                "Approve"
+              )
+            : null,
+          canReplyToApproval
+            ? dom("button", { attrs: { "data-action": "deny-blocker", "data-session-id": session.id } }, "Deny")
+            : null
         )
       : null
+  );
+}
+
+function renderPlanReviewDialog() {
+  const sessionId = ui.activePlanReviewSessionId;
+  const session = sessionById(sessionId || "");
+  const planReview = sessionId ? planReviewForSession(sessionId) : null;
+  const repo = session ? repoById(session.repoID) : null;
+  const canReplyToApproval = !!(
+    session &&
+    session.blocker?.kind === "approval" &&
+    session.runtimeState === "live"
+  );
+
+  replaceDomChildren(
+    planReviewDialog,
+    dom(
+      "div",
+      { className: "dialog-body dialog-body-plan-review" },
+      dom(
+        "div",
+        { className: "dialog-header" },
+        dom(
+          "div",
+          {},
+          dom("div", { className: "eyebrow" }, "Codex Plan Review"),
+          dom("h2", { className: "dialog-title" }, session?.title || "Plan Review"),
+          dom(
+            "div",
+            { className: "muted" },
+            repo ? abbreviateHome(repo.path) : "No active session selected."
+          )
+        ),
+        dom(
+          "button",
+          {
+            attrs: {
+              type: "button",
+              "data-action": "close-plan-review"
+            }
+          },
+          "Close"
+        )
+      ),
+      !planReview
+        ? emptyStateElement("No proposed plan is available for this session.")
+        : dom(
+            "div",
+            { className: "dialog-panel dialog-panel-plan-review" },
+            !canReplyToApproval
+              ? dom(
+                  "div",
+                  { className: "plan-review-note" },
+                  session?.runtimeState === "live"
+                    ? "Waiting for Codex to reach the approval prompt before sending a decision."
+                    : "This session is not live, so approval actions are unavailable."
+                )
+              : null,
+            trustedElement(
+              `<div class="plan-review-markdown markdown-body">${renderMarkdownDocument(planReview.markdown)}</div>`
+            )
+          ),
+      dom(
+        "div",
+        { className: "dialog-footer" },
+        dom(
+          "button",
+          {
+            attrs: {
+              type: "button",
+              "data-action": "deny-plan-review",
+              disabled: canReplyToApproval ? undefined : true
+            }
+          },
+          "Deny"
+        ),
+        dom(
+          "button",
+          {
+            className: "primary",
+            attrs: {
+              type: "button",
+              "data-action": "approve-plan-review",
+              disabled: canReplyToApproval ? undefined : true
+            }
+          },
+          "Approve"
+        )
+      )
+    )
   );
 }
 
@@ -3264,6 +3415,7 @@ function renderDialogs() {
   renderQuickSwitcherDialog();
   renderSessionSearchDialog();
   renderCommandPaletteDialog();
+  renderPlanReviewDialog();
   if (settingsDialog.open) {
     renderSettingsDialog();
   }
@@ -5619,6 +5771,24 @@ async function handleClick(event) {
     case "deny-blocker":
       await api.sendInput(target.dataset.sessionId, "3\r");
       break;
+    case "open-plan-review":
+      openPlanReviewDialog(target.dataset.sessionId);
+      break;
+    case "close-plan-review":
+      closePlanReviewDialog();
+      break;
+    case "approve-plan-review":
+      if (ui.activePlanReviewSessionId) {
+        await api.sendInput(ui.activePlanReviewSessionId, "1\r");
+        closePlanReviewDialog();
+      }
+      break;
+    case "deny-plan-review":
+      if (ui.activePlanReviewSessionId) {
+        await api.sendInput(ui.activePlanReviewSessionId, "3\r");
+        closePlanReviewDialog();
+      }
+      break;
     case "open-quick-switcher":
       openQuickSwitcher();
       break;
@@ -7187,6 +7357,27 @@ function openCommandPalette() {
   }
 }
 
+function openPlanReviewDialog(sessionId: string | null | undefined) {
+  const nextSessionId = sessionId || "";
+  if (!nextSessionId || !planReviewForSession(nextSessionId)) {
+    return;
+  }
+
+  ui.activePlanReviewSessionId = nextSessionId;
+  renderPlanReviewDialog();
+  if (!planReviewDialog.open) {
+    planReviewDialog.showModal();
+  }
+}
+
+function closePlanReviewDialog() {
+  ui.activePlanReviewSessionId = null;
+  if (planReviewDialog.open) {
+    planReviewDialog.close();
+  }
+  renderPlanReviewDialog();
+}
+
 function overlayState(toolId: EphemeralToolId): EphemeralToolOverlayState {
   return ui.ephemeralToolOverlays[toolId];
 }
@@ -7404,6 +7595,108 @@ function clearWikiState() {
   ui.wikiPreviewMarkdown = "";
   ui.wikiStatusMessage = "";
   ui.wikiLoading = false;
+}
+
+function planReviewForSession(sessionId: string) {
+  return ui.sessionPlanReviews.get(sessionId) || null;
+}
+
+function syncPlanReviewsFromState() {
+  const activeSessionIds = new Set(state.sessions.map((session) => session.id));
+
+  for (const sessionId of ui.sessionPlanReviews.keys()) {
+    if (!activeSessionIds.has(sessionId)) {
+      ui.sessionPlanReviews.delete(sessionId);
+    }
+  }
+
+  for (const sessionId of ui.lastAutoOpenedPlanFingerprintBySession.keys()) {
+    if (!activeSessionIds.has(sessionId)) {
+      ui.lastAutoOpenedPlanFingerprintBySession.delete(sessionId);
+    }
+  }
+
+  if (ui.activePlanReviewSessionId && !activeSessionIds.has(ui.activePlanReviewSessionId)) {
+    ui.activePlanReviewSessionId = null;
+    if (planReviewDialog.open) {
+      planReviewDialog.close();
+    }
+  }
+
+  for (const session of state.sessions) {
+    syncSessionPlanReview(session, { autoOpen: false });
+  }
+}
+
+function syncSessionPlanReview(session: SessionSummary | null, options: { autoOpen: boolean }) {
+  if (!session) {
+    return null;
+  }
+
+  if (session.startupAgentId !== "codex") {
+    ui.sessionPlanReviews.delete(session.id);
+    if (ui.activePlanReviewSessionId === session.id) {
+      closePlanReviewDialog();
+    }
+    return null;
+  }
+
+  const proposedPlan = extractLatestProposedPlan(session.transcript || session.rawTranscript || "");
+  if (!proposedPlan) {
+    ui.sessionPlanReviews.delete(session.id);
+    if (ui.activePlanReviewSessionId === session.id) {
+      closePlanReviewDialog();
+    }
+    return null;
+  }
+
+  const nextReview: SessionPlanReview = {
+    sessionId: session.id,
+    markdown: proposedPlan.markdown,
+    fingerprint: proposedPlan.fingerprint,
+    detectedAt: session.updatedAt || new Date().toISOString()
+  };
+  const previousReview = ui.sessionPlanReviews.get(session.id);
+  ui.sessionPlanReviews.set(session.id, nextReview);
+
+  if (ui.activePlanReviewSessionId === session.id && previousReview?.fingerprint !== nextReview.fingerprint) {
+    renderPlanReviewDialog();
+  }
+
+  if (
+    options.autoOpen &&
+    previousReview?.fingerprint !== nextReview.fingerprint &&
+    ui.lastAutoOpenedPlanFingerprintBySession.get(session.id) !== nextReview.fingerprint
+  ) {
+    ui.lastAutoOpenedPlanFingerprintBySession.set(session.id, nextReview.fingerprint);
+    openPlanReviewDialog(session.id);
+  }
+
+  return nextReview;
+}
+
+function extractLatestProposedPlan(transcript: string) {
+  const normalized = String(transcript || "").replace(/\r\n/g, "\n");
+  const pattern = /<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_plan>/g;
+  let latestMarkdown = "";
+
+  while (true) {
+    const match = pattern.exec(normalized);
+    if (!match) {
+      break;
+    }
+    latestMarkdown = match[1] || "";
+  }
+
+  const markdown = latestMarkdown.trim();
+  if (!markdown) {
+    return null;
+  }
+
+  return {
+    markdown,
+    fingerprint: markdown
+  };
 }
 
 async function loadWikiContext(
@@ -8535,13 +8828,7 @@ function mergeSessionSummary(summary) {
 }
 
 function appendSessionOutput(sessionId, chunk, summary) {
-  const session = mergeSessionSummary(summary);
-  if (!session) {
-    return null;
-  }
-
-  session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${chunk}`);
-  return session;
+  return mergeSessionSummary(summary);
 }
 
 function renderSessionDragAttributes(sessionId, source = "list") {
@@ -9945,7 +10232,12 @@ function renderSessionVisualElement(
   extraClass = "",
   options: { includePlaceholder?: boolean } = {}
 ) {
-  return trustedElement<HTMLElement>(renderSessionVisual(session, extraClass, options));
+  const html = renderSessionVisual(session, extraClass, options).trim();
+  if (!html) {
+    return null;
+  }
+
+  return trustedElement<HTMLElement>(html);
 }
 
 function renderSessionPinIndicatorElement(label = "Pinned", extraClass = "") {

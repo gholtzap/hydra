@@ -49,6 +49,7 @@ export type KeybindingAction =
   | "open-lazygit"
   | "open-tokscale"
   | "open-launcher"
+  | "build-and-run-app"
   | "search-project-sessions"
   | "navigate-section-left"
   | "navigate-section-right"
@@ -90,7 +91,8 @@ export type SessionBlockerKind =
   | "toolPermission"
   | "gitConflict"
   | "question"
-  | "crashed";
+  | "crashed"
+  | "planMode";
 
 export type SessionBlocker = {
   kind: SessionBlockerKind;
@@ -127,6 +129,7 @@ export type RepoRecord = {
   name: string;
   path: string;
   wikiEnabled: boolean;
+  appLaunchConfig: RepoAppLaunchConfig | null;
   discoveredAt: string;
   updatedAt?: string;
 };
@@ -134,6 +137,11 @@ export type RepoRecord = {
 export type RepoSnapshot = RepoRecord & {
   wikiExists: boolean;
   wikiPath: string;
+};
+
+export type RepoAppLaunchConfig = {
+  buildCommand: string;
+  runCommand: string;
 };
 
 export type SessionRecord = {

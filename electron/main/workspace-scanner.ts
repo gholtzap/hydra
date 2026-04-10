@@ -18,6 +18,7 @@ async function createRepoRecord(repoPath: string, workspaceId: string): Promise<
     name: path.basename(repoPath) || repoPath,
     path: repoPath,
     wikiEnabled: await detectWikiEnabled(repoPath),
+    appLaunchConfig: null,
     discoveredAt: new Date().toISOString()
   };
 }

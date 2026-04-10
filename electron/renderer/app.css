@@ -2544,6 +2544,18 @@ textarea {
   gap: 8px;
 }
 
+.app-launch-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.app-launch-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .plan-review-note {
   padding: 10px 12px;
   border: 1px solid var(--warn-border);

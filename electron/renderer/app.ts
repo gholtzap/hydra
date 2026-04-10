@@ -10,6 +10,7 @@ import type {
   JsonValue,
   KeybindingAction,
   KeybindingMap,
+  RepoAppLaunchConfig,
   RepoSnapshot,
   SessionSearchResult as SharedSessionSearchResult,
   SessionSummary,
@@ -42,6 +43,7 @@ const DEFAULT_KEYBINDINGS: KeybindingMap = {
   "open-lazygit": "CmdOrCtrl+Shift+G",
   "open-tokscale": "CmdOrCtrl+Shift+T",
   "open-launcher": "CmdOrCtrl+C",
+  "build-and-run-app": "CmdOrCtrl+Shift+R",
   "search-project-sessions": "CmdOrCtrl+F",
   "navigate-section-left": "CmdOrCtrl+ArrowLeft",
   "navigate-section-right": "CmdOrCtrl+ArrowRight",
@@ -61,6 +63,7 @@ const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   "open-lazygit": "Open Lazygit",
   "open-tokscale": "Open Token Usage",
   "open-launcher": "Open Launcher",
+  "build-and-run-app": "Build and Run App",
   "search-project-sessions": "Search Project Sessions",
   "navigate-section-left": "Navigate Section Left",
   "navigate-section-right": "Navigate Section Right",
@@ -329,6 +332,10 @@ type UiState = {
   settingsJsonDraft: JsonValue | null;
   settingsJsonError: string;
   settingsShowRawJson: boolean;
+  appLaunchRepoId: string | null;
+  appLaunchBuildCommand: string;
+  appLaunchRunCommand: string;
+  appLaunchError: string;
   marketplaceResults: MarketplaceSkillSummary[];
   marketplaceSelectedId: string | null;
   marketplaceSelectedDetail: MarketplaceSkillDetails | null;
@@ -418,6 +425,10 @@ const ui: UiState = {
   settingsJsonDraft: null,
   settingsJsonError: "",
   settingsShowRawJson: false,
+  appLaunchRepoId: null,
+  appLaunchBuildCommand: "",
+  appLaunchRunCommand: "",
+  appLaunchError: "",
   marketplaceResults: [] as MarketplaceSkillSummary[],
   marketplaceSelectedId: null as string | null,
   marketplaceSelectedDetail: null as MarketplaceSkillDetails | null,
@@ -488,6 +499,7 @@ const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogE
 const quickSwitcherDialog = document.getElementById("quick-switcher-dialog") as HTMLDialogElement;
 const sessionSearchDialog = document.getElementById("session-search-dialog") as HTMLDialogElement;
 const commandPaletteDialog = document.getElementById("command-palette-dialog") as HTMLDialogElement;
+const appLaunchDialog = document.getElementById("app-launch-dialog") as HTMLDialogElement;
 const planReviewDialog = document.getElementById("plan-review-dialog") as HTMLDialogElement;
 const tokscaleDialog = document.getElementById("tokscale-dialog") as HTMLDialogElement;
 const lazygitDialog = document.getElementById("lazygit-dialog") as HTMLDialogElement;
@@ -1242,6 +1254,25 @@ api.onSessionUpdated((payload) => {
   }
 });
 
+api.onPlanDetected(({ sessionId, markdown }) => {
+  const session = sessionById(sessionId);
+  if (!session) return;
+
+  const fingerprint = markdown;
+  const existing = ui.sessionPlanReviews.get(sessionId);
+  ui.sessionPlanReviews.set(sessionId, {
+    sessionId,
+    markdown,
+    fingerprint,
+    detectedAt: new Date().toISOString()
+  });
+
+  if (!existing || existing.fingerprint !== fingerprint) {
+    ui.lastAutoOpenedPlanFingerprintBySession.set(sessionId, fingerprint);
+    openPlanReviewDialog(sessionId);
+  }
+});
+
 api.onCommand(async ({ command, sessionId, repoId }) => {
   const targetRepoId = repoId || currentRepoId();
   switch (command) {
@@ -1303,6 +1334,12 @@ api.onCommand(async ({ command, sessionId, repoId }) => {
       break;
     case "open-tokscale":
       await openTokscaleOverlay(repoId || currentRepoId());
+      break;
+    case "build-and-run-app":
+      await runConfiguredApp(repoId || currentRepoId());
+      break;
+    case "configure-build-and-run-app":
+      openAppLaunchDialog(repoId || currentRepoId());
       break;
     default:
       break;
@@ -3046,7 +3083,7 @@ function renderPlanReviewDialog() {
   const repo = session ? repoById(session.repoID) : null;
   const canReplyToApproval = !!(
     session &&
-    session.blocker?.kind === "approval" &&
+    (session.blocker?.kind === "approval" || session.blocker?.kind === "planMode") &&
     session.runtimeState === "live"
   );
 
@@ -3534,6 +3571,7 @@ function commandPaletteShortcutForAction(action: string): string | null {
     "open-workspace": "open-folder",
     "create-project": "create-folder",
     "open-launcher": "new-session",
+    "build-and-run-app": "build-and-run-app",
     "open-wiki": "open-wiki",
     "open-quick-switcher": "quick-switcher",
     "open-tokscale": "open-tokscale",
@@ -3549,6 +3587,8 @@ function renderCommandPaletteDialog() {
     { id: "open-workspace", label: "Open Folder", action: "open-workspace" },
     { id: "create-project", label: "Create Folder", action: "create-project" },
     { id: "open-launcher", label: "New Session", action: "open-launcher" },
+    { id: "build-and-run-app", label: "Build and Run App", action: "build-and-run-app" },
+    { id: "configure-build-and-run-app", label: "Configure App Launch", action: "configure-build-and-run-app" },
     { id: "open-session-search", label: "Search Session Files", action: "open-session-search" },
     { id: "open-wiki", label: "Open Wiki", action: "open-wiki" },
     { id: "initialize-wiki", label: "Initialize Wiki", action: "initialize-wiki" },
@@ -5654,6 +5694,27 @@ async function handleClick(event) {
     case "open-launcher":
       await startDefaultAgentSession(target.dataset.repoId || currentRepoId());
       break;
+    case "build-and-run-app":
+      await runConfiguredApp(target.dataset.repoId || currentRepoId());
+      break;
+    case "configure-build-and-run-app":
+      openAppLaunchDialog(target.dataset.repoId || currentRepoId());
+      break;
+    case "close-app-launch-dialog":
+      closeAppLaunchDialog();
+      break;
+    case "save-app-launch-config":
+      if (await saveAppLaunchConfig()) {
+        closeAppLaunchDialog();
+      }
+      break;
+    case "save-and-run-app-launch":
+      if (await saveAppLaunchConfig()) {
+        const repoId = ui.appLaunchRepoId;
+        closeAppLaunchDialog();
+        await runConfiguredApp(repoId);
+      }
+      break;
     case "open-status":
       await selectStatus();
       break;
@@ -6575,6 +6636,18 @@ async function handleKeyDown(event) {
     }
   }
 
+  if (keydownTarget instanceof HTMLInputElement && appLaunchDialog.open) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (await saveAppLaunchConfig()) {
+        const repoId = ui.appLaunchRepoId;
+        closeAppLaunchDialog();
+        await runConfiguredApp(repoId);
+      }
+      return;
+    }
+  }
+
   if (sessionSearchDialog.open) {
     if (await handleSessionSearchKeyDown(event)) {
       return;
@@ -6708,6 +6781,12 @@ async function handleAppShortcut(event) {
     return true;
   }
 
+  if (matchesAccelerator(event, kb["build-and-run-app"])) {
+    event.preventDefault();
+    await runConfiguredApp(currentRepoId() || state.repos[0]?.id || null);
+    return true;
+  }
+
   return false;
 }
 
@@ -6741,6 +6820,14 @@ async function handleInput(event) {
     case "command-palette-query":
       ui.commandPaletteQuery = target.value;
       rerenderDialogInput(renderCommandPaletteDialog, "command-palette-query", target);
+      break;
+    case "app-launch-build-command":
+      ui.appLaunchBuildCommand = target.value;
+      ui.appLaunchError = "";
+      break;
+    case "app-launch-run-command":
+      ui.appLaunchRunCommand = target.value;
+      ui.appLaunchError = "";
       break;
     case "marketplace-inspect-url":
       ui.marketplaceInspectUrl = target.value;
@@ -7008,6 +7095,71 @@ async function initializeWiki(repoId: string | null) {
   await api.toggleWiki(repoId, true);
   ui.wikiStatusMessage = "Wiki enabled. Agents can now maintain durable knowledge in .wiki/.";
   await openWiki(repoId);
+}
+
+function currentAppLaunchConfig(): RepoAppLaunchConfig | null {
+  const buildCommand = ui.appLaunchBuildCommand.trim();
+  const runCommand = ui.appLaunchRunCommand.trim();
+
+  if (!buildCommand || !runCommand) {
+    return null;
+  }
+
+  return {
+    buildCommand,
+    runCommand
+  };
+}
+
+async function saveAppLaunchConfig() {
+  const repoId = ui.appLaunchRepoId;
+  const config = currentAppLaunchConfig();
+  if (!repoId || !config) {
+    ui.appLaunchError = "Both build and run commands are required.";
+    renderAppLaunchDialog();
+    return null;
+  }
+
+  try {
+    await api.updateRepoAppLaunchConfig({
+      repoId,
+      config
+    });
+    const repo = repoById(repoId);
+    if (repo) {
+      repo.appLaunchConfig = config;
+    }
+    ui.appLaunchError = "";
+    return config;
+  } catch (error) {
+    ui.appLaunchError = error instanceof Error ? error.message : "Failed to save app commands.";
+    renderAppLaunchDialog();
+    return null;
+  }
+}
+
+async function runConfiguredApp(repoId: string | null) {
+  if (!repoId) {
+    window.alert("Select a folder first.");
+    return;
+  }
+
+  const repo = repoById(repoId);
+  if (!repo?.appLaunchConfig) {
+    openAppLaunchDialog(repoId);
+    return;
+  }
+
+  try {
+    const sessionId = await api.buildAndRunApp(repoId);
+    if (sessionId) {
+      commandPaletteDialog.close();
+      await selectSession(sessionId, "terminal");
+    }
+  } catch (error) {
+    ui.appLaunchError = error instanceof Error ? error.message : "Failed to build and run the app.";
+    openAppLaunchDialog(repoId, { preserveInput: true });
+  }
 }
 
 async function toggleWiki(repoId: string | null) {
@@ -7357,6 +7509,132 @@ function openCommandPalette() {
   }
 }
 
+function openAppLaunchDialog(repoId: string | null, options: { preserveInput?: boolean } = {}) {
+  const repo = repoById(repoId || "");
+  if (!repo) {
+    window.alert("Select a folder first.");
+    return;
+  }
+
+  const config = repo.appLaunchConfig;
+  ui.appLaunchRepoId = repo.id;
+  ui.appLaunchError = "";
+  if (!options.preserveInput) {
+    ui.appLaunchBuildCommand = config?.buildCommand || "";
+    ui.appLaunchRunCommand = config?.runCommand || "";
+  }
+
+  renderAppLaunchDialog();
+  if (!appLaunchDialog.open) {
+    appLaunchDialog.showModal();
+  }
+}
+
+function closeAppLaunchDialog() {
+  ui.appLaunchRepoId = null;
+  ui.appLaunchBuildCommand = "";
+  ui.appLaunchRunCommand = "";
+  ui.appLaunchError = "";
+  if (appLaunchDialog.open) {
+    appLaunchDialog.close();
+  }
+}
+
+function renderAppLaunchDialog() {
+  const repo = repoById(ui.appLaunchRepoId || "");
+
+  replaceDomChildren(
+    appLaunchDialog,
+    dom(
+      "form",
+      { className: "dialog-body", attrs: { method: "dialog" } },
+      dom(
+        "div",
+        { className: "dialog-header" },
+        dom(
+          "div",
+          {},
+          dom("div", { className: "eyebrow" }, "App Launch"),
+          dom("h2", { className: "dialog-title" }, repo ? `Build and Run ${repo.name}` : "Build and Run App"),
+          dom(
+            "div",
+            { className: "muted" },
+            repo ? abbreviateHome(repo.path) : "Select a repo to configure commands."
+          )
+        ),
+        dom(
+          "button",
+          {
+            attrs: {
+              type: "button",
+              "data-action": "close-app-launch-dialog"
+            }
+          },
+          "Close"
+        )
+      ),
+      dom(
+        "div",
+        { className: "app-launch-fields" },
+        dom(
+          "label",
+          { className: "app-launch-field" },
+          dom("div", { className: "row-title" }, "Build Command"),
+          dom("input", {
+            value: ui.appLaunchBuildCommand,
+            attrs: {
+              id: "app-launch-build-command",
+              placeholder: "npm run build"
+            }
+          }),
+          dom("div", { className: "muted" }, "Runs first. If it exits non-zero, Hydra skips the run command.")
+        ),
+        dom(
+          "label",
+          { className: "app-launch-field" },
+          dom("div", { className: "row-title" }, "Run Command"),
+          dom("input", {
+            value: ui.appLaunchRunCommand,
+            attrs: {
+              id: "app-launch-run-command",
+              placeholder: "npm run dev"
+            }
+          }),
+          dom("div", { className: "muted" }, "Starts after a successful build inside a Hydra shell session.")
+        )
+      ),
+      ui.appLaunchError
+        ? dom("div", { className: "settings-warning-card" }, ui.appLaunchError)
+        : null,
+      dom(
+        "div",
+        { className: "dialog-footer" },
+        dom(
+          "button",
+          {
+            attrs: {
+              type: "button",
+              "data-action": "save-app-launch-config"
+            }
+          },
+          "Save"
+        ),
+        dom(
+          "button",
+          {
+            className: "primary",
+            attrs: {
+              type: "button",
+              "data-action": "save-and-run-app-launch"
+            }
+          },
+          "Save and Run"
+        )
+      )
+    )
+  );
+}
+
 function openPlanReviewDialog(sessionId: string | null | undefined) {
   const nextSessionId = sessionId || "";
   if (!nextSessionId || !planReviewForSession(nextSessionId)) {
@@ -7633,15 +7911,16 @@ function syncSessionPlanReview(session: SessionSummary | null, options: { autoOp
     return null;
   }
 
-  if (session.startupAgentId !== "codex") {
-    ui.sessionPlanReviews.delete(session.id);
-    if (ui.activePlanReviewSessionId === session.id) {
-      closePlanReviewDialog();
-    }
-    return null;
+  const isCodex = session.startupAgentId === "codex";
+
+  if (!isCodex) {
+    // Non-Codex sessions (Claude, etc.): plan reviews are set via the plans
+    // directory watcher (onPlanDetected). Don't auto-clear them here.
+    return ui.sessionPlanReviews.get(session.id) || null;
   }
 
-  const proposedPlan = extractLatestProposedPlan(session.transcript || session.rawTranscript || "");
+  const transcript = session.transcript || session.rawTranscript || "";
+  const proposedPlan = extractLatestProposedPlan(transcript);
   if (!proposedPlan) {
     ui.sessionPlanReviews.delete(session.id);
     if (ui.activePlanReviewSessionId === session.id) {
@@ -7697,6 +7976,38 @@ function extractLatestProposedPlan(transcript: string) {
     markdown,
     fingerprint: markdown
   };
+}
+
+function extractClaudePlanFromTranscript(transcript: string) {
+  const normalized = String(transcript || "").replace(/\r\n/g, "\n");
+
+  const approvalPatterns = [
+    /would you like to proceed with this plan/i,
+    /do you want to proceed with this plan/i,
+    /proceed with this plan/i
+  ];
+
+  let approvalIndex = -1;
+  for (const pattern of approvalPatterns) {
+    const match = normalized.search(pattern);
+    if (match !== -1 && (approvalIndex === -1 || match < approvalIndex)) {
+      approvalIndex = match;
+    }
+  }
+
+  if (approvalIndex === -1) return null;
+
+  const beforeApproval = normalized.slice(0, approvalIndex).trimEnd();
+  if (!beforeApproval) return null;
+
+  const lines = beforeApproval.split("\n");
+  const planLines = lines.slice(-200);
+
+  let start = 0;
+  while (start < planLines.length && !planLines[start].trim()) start++;
+  const markdown = planLines.slice(start).join("\n").trim();
+
+  return markdown ? { markdown, fingerprint: markdown } : null;
 }
 
 async function loadWikiContext(
@@ -10354,6 +10665,8 @@ function isAnyDialogOpen() {
     quickSwitcherDialog.open ||
     sessionSearchDialog.open ||
     commandPaletteDialog.open ||
+    appLaunchDialog.open ||
+    planReviewDialog.open ||
     Object.values(EPHEMERAL_TOOL_DIALOGS).some((definition) => definition.dialog.open)
   );
 }

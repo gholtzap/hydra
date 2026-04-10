@@ -13,6 +13,7 @@ import type {
   MarketplaceSkillDetails,
   Point,
   ReadFileResult,
+  RepoAppLaunchConfig,
   SessionOrganizationPatch,
   SessionOutputPayload,
   SessionSearchResponse,
@@ -52,6 +53,11 @@ type ClaudeSkillFileRequest = {
 type ClaudeRepoFileRequest = {
   repoId: string;
   filePath: string;
+};
+
+type RepoAppLaunchConfigRequest = {
+  repoId: string;
+  config: RepoAppLaunchConfig;
 };
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -113,6 +119,9 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
   openRepoInFinder: (repoId: string) => invoke<void>("repo:reveal", repoId),
   showRepoContextMenu: (repoId: string, position: Point) =>
     invoke<void>("repo:contextMenu", { repoId, position }),
+  updateRepoAppLaunchConfig: (payload: RepoAppLaunchConfigRequest) =>
+    invoke<RepoAppLaunchConfig | null>("repo:updateAppLaunchConfig", payload),
+  buildAndRunApp: (repoId: string) => invoke<string | null>("repo:buildAndRunApp", repoId),
   readClipboardText: () => invoke<string>("clipboard:readText"),
   writeClipboardText: (text: string) => invoke<void>("clipboard:writeText", text),
   revealPath: (payload: ClaudePathRevealRequest) => invoke<void>("path:reveal", payload),
@@ -176,5 +185,7 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
   onEphemeralToolOutput: (callback: (payload: EphemeralToolOutputPayload) => void) =>
     subscribe<EphemeralToolOutputPayload>("ephemeralTool:output", callback),
   onEphemeralToolExit: (callback: (payload: EphemeralToolExitPayload) => void) =>
-    subscribe<EphemeralToolExitPayload>("ephemeralTool:exit", callback)
+    subscribe<EphemeralToolExitPayload>("ephemeralTool:exit", callback),
+  onPlanDetected: (callback: (payload: { sessionId: string; markdown: string }) => void) =>
+    subscribe<{ sessionId: string; markdown: string }>("plan:detected", callback)
 });

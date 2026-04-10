@@ -55,6 +55,21 @@ function detectSignal(chunk: string): { status: SessionStatus; blocker: SessionB
     };
   }
 
+  const planModeSignals = [
+    "would you like to proceed with this plan",
+    "do you want to proceed with this plan",
+    "proceed with this plan",
+    "1. yes, proceed",
+    "1) yes, proceed"
+  ];
+
+  if (planModeSignals.some((signal) => lowered.includes(signal))) {
+    return {
+      status: "blocked",
+      blocker: blocker("planMode", "Claude is waiting for plan approval.")
+    };
+  }
+
   if (lowered.includes("process crashed") || lowered.includes("fatal error")) {
     return {
       status: "failed",

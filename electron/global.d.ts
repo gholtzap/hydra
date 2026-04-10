@@ -12,6 +12,7 @@ import type {
   MarketplaceSkillDetails,
   Point,
   ReadFileResult,
+  RepoAppLaunchConfig,
   SessionOrganizationPatch,
   SessionOutputPayload,
   SessionSearchResponse,
@@ -77,6 +78,11 @@ interface ClaudeWorkspaceApi {
     repoId: string,
     position: Point
   ) => Promise<void>;
+  updateRepoAppLaunchConfig: (payload: {
+    repoId: string;
+    config: RepoAppLaunchConfig;
+  }) => Promise<RepoAppLaunchConfig | null>;
+  buildAndRunApp: (repoId: string) => Promise<string | null>;
   readClipboardText: () => Promise<string>;
   writeClipboardText: (text: string) => Promise<void>;
   revealPath: (payload: ClaudePathRevealRequest) => Promise<void>;
@@ -145,6 +151,9 @@ interface ClaudeWorkspaceApi {
   ) => Unsubscribe;
   onEphemeralToolExit: (
     callback: (payload: EphemeralToolExitPayload) => void
+  ) => Unsubscribe;
+  onPlanDetected: (
+    callback: (payload: { sessionId: string; markdown: string }) => void
   ) => Unsubscribe;
 }
 

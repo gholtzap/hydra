@@ -2429,6 +2429,10 @@ textarea {
   width: min(1320px, calc(100vw - 48px));
 }
 
+.app-dialog-plan-review {
+  width: min(1040px, calc(100vw - 48px));
+}
+
 .app-dialog::backdrop {
   background: var(--dialog-backdrop);
   backdrop-filter: blur(10px);
@@ -2518,6 +2522,10 @@ textarea {
   overflow: auto;
 }
 
+.dialog-body-plan-review {
+  min-height: min(78vh, 820px);
+}
+
 .dialog-panel {
   display: flex;
   flex-direction: column;
@@ -2525,10 +2533,46 @@ textarea {
   min-width: 0;
 }
 
+.dialog-panel-plan-review {
+  flex: 1;
+  min-height: 0;
+}
+
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.app-launch-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.app-launch-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan-review-note {
+  padding: 10px 12px;
+  border: 1px solid var(--warn-border);
+  border-radius: 12px;
+  background: var(--warn-bg);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.plan-review-markdown {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-soft);
 }
 
 /* ── Session Search Result Rows ─────────────────────────────── */

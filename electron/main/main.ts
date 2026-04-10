@@ -22,6 +22,7 @@ import type {
   PtyCreateSessionPayload,
   PtyHostMessage,
   ReadFileResult,
+  RepoAppLaunchConfig,
   RepoRecord,
   SessionBlocker,
   SessionOrganizationPatch,
@@ -76,6 +77,10 @@ type PtyHostClientConstructor = {
 type EphemeralSessionRecord = {
   repoId: string;
   toolId: EphemeralToolId;
+};
+type QueuedSessionLaunch = {
+  title?: string;
+  input: string;
 };
 
 const { scanWorkspace } = require("./workspace-scanner") as {
@@ -134,6 +139,7 @@ const {
   emptyState,
   loadState,
   normalizeAgentId,
+  normalizeRepoAppLaunchConfig,
   normalizePreferences,
   saveState
 } = require("./state-store") as {
@@ -143,6 +149,7 @@ const {
   emptyState: () => StoredAppState;
   loadState: () => Promise<StoredAppState>;
   normalizeAgentId: (value: unknown, fallback?: AgentId | null) => AgentId | null;
+  normalizeRepoAppLaunchConfig: (value: unknown) => RepoAppLaunchConfig | null;
   normalizePreferences: (preferences: Record<string, unknown>) => AppPreferences;
   saveState: (state: StoredAppState) => Promise<void>;
 };
@@ -292,11 +299,14 @@ class AppController {
   terminalBuffers: Map<string, TerminalTranscriptBufferInstance>;
   signalBuffers: Map<string, string>;
   blockerClearStreaks: Map<string, number>;
+  queuedSessionLaunches: Map<string, QueuedSessionLaunch>;
   ptyHost: PtyHostClientInstance;
   ephemeralSessions: Map<string, EphemeralSessionRecord>;
   lazygitPath: string | null;
   npxPath: string | null;
   saveChain: Promise<void>;
+  knownPlanFiles: Set<string>;
+  plansDirWatcher: ReturnType<typeof fs.watch> | null;
 
   constructor() {
     this.state = emptyState();
@@ -310,10 +320,13 @@ class AppController {
     this.terminalBuffers = new Map();
     this.signalBuffers = new Map();
     this.blockerClearStreaks = new Map();
+    this.queuedSessionLaunches = new Map();
     this.ephemeralSessions = new Map();
     this.lazygitPath = null;
     this.npxPath = null;
     this.saveChain = Promise.resolve();
+    this.knownPlanFiles = new Set();
+    this.plansDirWatcher = null;
     this.ptyHost = new PtyHostClient();
     this.ptyHost.onMessage((message) => this.handlePtyMessage(message));
   }
@@ -330,6 +343,7 @@ class AppController {
     this.npxPath = npxPath;
     this.normalizeFolderRepos();
     this.repairStoredTranscripts();
+    this.watchPlansDir();
   }
 
   createWindow() {
@@ -405,6 +419,10 @@ class AppController {
     );
     ipcMain.handle("session:nextUnread", () => this.nextUnreadSession());
     ipcMain.handle("preferences:update", (_event, patch) => this.updatePreferences(patch));
+    ipcMain.handle("repo:updateAppLaunchConfig", (_event, payload) =>
+      this.updateRepoAppLaunchConfig(payload?.repoId, payload?.config)
+    );
+    ipcMain.handle("repo:buildAndRunApp", (_event, repoId) => this.buildAndRunApp(repoId));
     ipcMain.handle("status:ports", () => inspectTrackedPorts());
     ipcMain.handle("settings:context", (_event, repoId) =>
       buildClaudeSettingsContext(this.repoById(repoId) || null)
@@ -613,6 +631,14 @@ class AppController {
             label: "New Session (Cmd+N)",
             accelerator: kb["new-session-alt"],
             click: () => this.sendCommand("new-session")
+          },
+          {
+            type: "separator"
+          },
+          {
+            label: "Build and Run App",
+            accelerator: kb["build-and-run-app"],
+            click: () => this.sendCommand("build-and-run-app")
           }
         ]
       },
@@ -678,6 +704,11 @@ class AppController {
             label: "Open Token Usage",
             accelerator: kb["open-tokscale"],
             click: () => this.sendCommand("open-tokscale")
+          },
+          {
+            label: "Build and Run App",
+            accelerator: kb["build-and-run-app"],
+            click: () => this.sendCommand("build-and-run-app")
           }
         ]
       },
@@ -782,6 +813,58 @@ class AppController {
     this.window.webContents.send("ephemeralTool:exit", payload);
   }
 
+  sendPlanDetected(sessionId: string, markdown: string) {
+    if (!this.window || this.window.isDestroyed()) return;
+    this.window.webContents.send("plan:detected", { sessionId, markdown });
+  }
+
+  watchPlansDir() {
+    const os = require("node:os");
+    const plansDir = path.join(os.homedir(), ".claude", "plans");
+
+    try {
+      fs.mkdirSync(plansDir, { recursive: true });
+    } catch {}
+
+    try {
+      const existing = fs.readdirSync(plansDir);
+      for (const f of existing) {
+        if (f.endsWith(".md")) this.knownPlanFiles.add(f);
+      }
+    } catch {}
+
+    try {
+      this.plansDirWatcher = fs.watch(plansDir, (_event: string, filename: string | null) => {
+        if (!filename || !filename.endsWith(".md")) return;
+        if (this.knownPlanFiles.has(filename)) return;
+        this.knownPlanFiles.add(filename);
+
+        const sessionId = this.findActiveClaudeSessionId();
+        if (!sessionId) return;
+
+        try {
+          const markdown = fs.readFileSync(path.join(plansDir, filename), "utf-8");
+          if (markdown.trim()) {
+            this.sendPlanDetected(sessionId, markdown);
+          }
+        } catch {}
+      });
+    } catch {}
+  }
+
+  findActiveClaudeSessionId(): string | null {
+    const focused = this.focusedSessionId ? this.sessionById(this.focusedSessionId) : null;
+    if (focused && isClaudeSession(focused) && focused.runtimeState === "live") {
+      return focused.id;
+    }
+    return (
+      this.state.sessions
+        .filter((s) => isClaudeSession(s) && s.runtimeState === "live")
+        .sort((a, b) => (b.lastActivityAt || "").localeCompare(a.lastActivityAt || ""))
+        [0]?.id || null
+    );
+  }
+
   scheduleSave() {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
@@ -874,13 +957,14 @@ class AppController {
     const mergedRepos = scannedRepos.map((repo) => {
       const existing = existingByPath.get(repo.path);
       return existing
-        ? {
+          ? {
             ...repo,
             ...existing,
             name: repo.name,
             path: repo.path,
             workspaceID: repo.workspaceID,
-            wikiEnabled: existing.wikiEnabled ?? repo.wikiEnabled
+            wikiEnabled: existing.wikiEnabled ?? repo.wikiEnabled,
+            appLaunchConfig: existing.appLaunchConfig ?? repo.appLaunchConfig
           }
         : repo;
     });
@@ -1081,6 +1165,7 @@ class AppController {
   closeSession(sessionId) {
     const session = this.sessionById(sessionId);
     this.cancelPendingAgentLaunch(sessionId);
+    this.queuedSessionLaunches.delete(sessionId);
     this.sessionSizes.delete(sessionId);
     this.terminalBuffers.delete(sessionId);
     this.resetSignalTracking(sessionId);
@@ -1134,6 +1219,14 @@ class AppController {
       {
         label: "Open Wiki",
         click: () => this.sendCommand("open-wiki", { repoId })
+      },
+      {
+        label: "Build and Run App",
+        click: () => this.sendCommand("build-and-run-app", { repoId })
+      },
+      {
+        label: "Configure App Launch",
+        click: () => this.sendCommand("configure-build-and-run-app", { repoId })
       },
       {
         label: repo.wikiEnabled ? "Disable Wiki" : "Enable Wiki",
@@ -1270,6 +1363,7 @@ class AppController {
           name: path.basename(workspace.rootPath) || workspace.rootPath,
           path: path.resolve(workspace.rootPath),
           wikiEnabled: false,
+          appLaunchConfig: null,
           discoveredAt: now()
         };
 
@@ -1316,6 +1410,77 @@ class AppController {
 
     this.scheduleSave();
     this.broadcastState();
+  }
+
+  updateRepoAppLaunchConfig(repoId: string, config: unknown): RepoAppLaunchConfig | null {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      throw new Error("Project not found.");
+    }
+
+    const normalizedConfig = normalizeRepoAppLaunchConfig(config);
+    if (!normalizedConfig) {
+      throw new Error("Build and run commands are required.");
+    }
+
+    repo.appLaunchConfig = normalizedConfig;
+    repo.updatedAt = now();
+    this.scheduleSave();
+    this.broadcastState();
+    return structuredClone(normalizedConfig);
+  }
+
+  buildAndRunApp(repoId: string): string | null {
+    const repo = this.repoById(repoId);
+    const config = repo?.appLaunchConfig;
+    if (!repo) {
+      throw new Error("Project not found.");
+    }
+
+    if (!config) {
+      throw new Error("Set build and run commands for this project first.");
+    }
+
+    const input = buildAppLaunchInput(config);
+    const reusableSession = this.findReusableAppSession(repoId);
+    const sessionId =
+      reusableSession?.runtimeState === "stopped"
+        ? reusableSession.id
+        : this.createShellSession(repoId, `App: ${repo.name}`, input);
+
+    if (!sessionId) {
+      return null;
+    }
+
+    if (reusableSession?.runtimeState === "stopped") {
+      this.queueSessionLaunch(sessionId, input);
+    }
+
+    if (reusableSession?.runtimeState === "stopped") {
+      this.reopenSession(sessionId);
+    } else {
+      this.sendSessionUpdated(sessionId);
+    }
+
+    return sessionId;
+  }
+
+  findReusableAppSession(repoId: string): SessionRecord | null {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      return null;
+    }
+
+    const expectedTitle = `App: ${repo.name}`;
+    return (
+      this.state.sessions.find(
+        (session) =>
+          session.repoID === repoId &&
+          !session.startupAgentId &&
+          session.title === expectedTitle &&
+          session.runtimeState === "stopped"
+      ) || null
+    );
   }
 
   findHydraSessionIdForSearchResult(
@@ -1446,7 +1611,13 @@ class AppController {
 
   handleHostCreated(sessionId) {
     const session = this.sessionById(sessionId);
-    if (!session || !session.startupAgentId) {
+    if (!session) {
+      return;
+    }
+
+    this.flushQueuedSessionLaunch(sessionId);
+
+    if (!session.startupAgentId) {
       return;
     }
 
@@ -1518,6 +1689,7 @@ class AppController {
     }
 
     this.cancelPendingAgentLaunch(sessionId);
+    this.queuedSessionLaunches.delete(sessionId);
     this.resetSignalTracking(sessionId);
     this.sessionSizes.delete(sessionId);
     session.runtimeState = "stopped";
@@ -1556,6 +1728,75 @@ class AppController {
     }
 
     return buffer;
+  }
+
+  createShellSession(repoId: string, title?: string, queuedInput?: string) {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      return null;
+    }
+
+    const sessionId = randomUUID();
+    const session: SessionRecord = {
+      id: sessionId,
+      repoID: repoId,
+      title: title || repo.name,
+      initialPrompt: "",
+      launchesClaudeOnStart: false,
+      startupAgentId: null,
+      claudeSessionId: null,
+      agentSessionId: null,
+      status: "running",
+      runtimeState: "live",
+      blocker: null,
+      unreadCount: 0,
+      createdAt: now(),
+      updatedAt: now(),
+      lastActivityAt: null,
+      stoppedAt: null,
+      launchCount: 1,
+      isPinned: false,
+      tagColor: null,
+      sessionIconPath: null,
+      sessionIconUpdatedAt: null,
+      transcript: "",
+      rawTranscript: ""
+    };
+
+    this.state.sessions.unshift(session);
+    this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(session.transcript));
+    if (queuedInput) {
+      this.queueSessionLaunch(session.id, queuedInput, title);
+    }
+    this.launchRuntime(session, repo);
+    this.scheduleSave();
+    this.broadcastState();
+    return session.id;
+  }
+
+  queueSessionLaunch(sessionId: string, input: string, title?: string) {
+    this.queuedSessionLaunches.set(sessionId, {
+      input,
+      title
+    });
+  }
+
+  flushQueuedSessionLaunch(sessionId: string) {
+    const queued = this.queuedSessionLaunches.get(sessionId);
+    if (!queued) {
+      return;
+    }
+
+    const session = this.sessionById(sessionId);
+    if (session && queued.title && session.title !== queued.title) {
+      session.title = queued.title;
+      session.updatedAt = now();
+      this.scheduleSave();
+      this.broadcastState();
+    }
+
+    this.queuedSessionLaunches.delete(sessionId);
+    this.ptyHost.sendInput(sessionId, queued.input);
   }
 
   repairStoredTranscripts() {
@@ -1726,6 +1967,7 @@ class AppController {
     for (const session of this.state.sessions) {
       if (session.runtimeState === "live") {
         this.cancelPendingAgentLaunch(session.id);
+        this.queuedSessionLaunches.delete(session.id);
         this.sessionSizes.delete(session.id);
         session.runtimeState = "stopped";
         session.stoppedAt = now();
@@ -1949,6 +2191,24 @@ function resolvedAgentCommand(preferences, agentId) {
   return normalized || DEFAULT_AGENT_COMMANDS[agentId] || DEFAULT_AGENT_COMMANDS[DEFAULT_AGENT_ID];
 }
 
+function buildAppLaunchInput(config: RepoAppLaunchConfig) {
+  const buildCommand = String(config.buildCommand || "").trim();
+  const runCommand = String(config.runCommand || "").trim();
+
+  return [
+    "printf '\\n[Hydra] Starting configured build...\\n'",
+    buildCommand,
+    "__hydra_build_status=$?",
+    'if [ "$__hydra_build_status" -ne 0 ]; then',
+    '  printf "\\n[Hydra] Build failed with status %s. Run command skipped.\\n" "$__hydra_build_status"',
+    "else",
+    "  printf '\\n[Hydra] Build succeeded. Starting app...\\n'",
+    runCommand,
+    "fi",
+    ""
+  ].join("\r");
+}
+
 function shellEscape(value) {
   return `'${String(value || "").replace(/'/g, `'\\''`)}'`;
 }
@@ -1984,10 +2244,15 @@ function hasMeaningfulVisibleOutput(chunk) {
   return /\S/.test(chunk || "");
 }
 
+function isClaudeSession(session) {
+  return !session.startupAgentId || session.startupAgentId === "claude";
+}
+
 function blockerClearThreshold(kind) {
   switch (kind) {
     case "approval":
     case "question":
+    case "planMode":
       return 4;
     case "crashed":
       return Number.POSITIVE_INFINITY;
@@ -1997,7 +2262,7 @@ function blockerClearThreshold(kind) {
 }
 
 function interactiveBlockerKinds() {
-  return new Set(["approval", "question"]);
+  return new Set(["approval", "question", "planMode"]);
 }
 
 function now() {

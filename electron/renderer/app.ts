@@ -10,6 +10,7 @@ import type {
   JsonValue,
   KeybindingAction,
   KeybindingMap,
+  RepoAppLaunchConfig,
   RepoSnapshot,
   SessionSearchResult as SharedSessionSearchResult,
   SessionSummary,
@@ -42,6 +43,7 @@ const DEFAULT_KEYBINDINGS: KeybindingMap = {
   "open-lazygit": "CmdOrCtrl+Shift+G",
   "open-tokscale": "CmdOrCtrl+Shift+T",
   "open-launcher": "CmdOrCtrl+C",
+  "build-and-run-app": "CmdOrCtrl+Shift+R",
   "search-project-sessions": "CmdOrCtrl+F",
   "navigate-section-left": "CmdOrCtrl+ArrowLeft",
   "navigate-section-right": "CmdOrCtrl+ArrowRight",
@@ -61,6 +63,7 @@ const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   "open-lazygit": "Open Lazygit",
   "open-tokscale": "Open Token Usage",
   "open-launcher": "Open Launcher",
+  "build-and-run-app": "Build and Run App",
   "search-project-sessions": "Search Project Sessions",
   "navigate-section-left": "Navigate Section Left",
   "navigate-section-right": "Navigate Section Right",
@@ -329,6 +332,10 @@ type UiState = {
   settingsJsonDraft: JsonValue | null;
   settingsJsonError: string;
   settingsShowRawJson: boolean;
+  appLaunchRepoId: string | null;
+  appLaunchBuildCommand: string;
+  appLaunchRunCommand: string;
+  appLaunchError: string;
   marketplaceResults: MarketplaceSkillSummary[];
   marketplaceSelectedId: string | null;
   marketplaceSelectedDetail: MarketplaceSkillDetails | null;
@@ -363,6 +370,9 @@ type UiState = {
   fileBrowserLoadId: number;
   fileBrowserLoading: boolean;
   fileBrowserExpandedDirs: Set<string>;
+  sessionPlanReviews: Map<string, SessionPlanReview>;
+  lastAutoOpenedPlanFingerprintBySession: Map<string, string>;
+  activePlanReviewSessionId: string | null;
   ephemeralToolOverlays: Record<EphemeralToolId, EphemeralToolOverlayState>;
   resizeDragState: {
     splitPath: string;
@@ -415,6 +425,10 @@ const ui: UiState = {
   settingsJsonDraft: null,
   settingsJsonError: "",
   settingsShowRawJson: false,
+  appLaunchRepoId: null,
+  appLaunchBuildCommand: "",
+  appLaunchRunCommand: "",
+  appLaunchError: "",
   marketplaceResults: [] as MarketplaceSkillSummary[],
   marketplaceSelectedId: null as string | null,
   marketplaceSelectedDetail: null as MarketplaceSkillDetails | null,
@@ -449,6 +463,9 @@ const ui: UiState = {
   fileBrowserLoadId: 0,
   fileBrowserLoading: false,
   fileBrowserExpandedDirs: new Set<string>(),
+  sessionPlanReviews: new Map<string, SessionPlanReview>(),
+  lastAutoOpenedPlanFingerprintBySession: new Map<string, string>(),
+  activePlanReviewSessionId: null as string | null,
   ephemeralToolOverlays: {
     lazygit: createEphemeralToolOverlayState(),
     tokscale: createEphemeralToolOverlayState()
@@ -482,6 +499,8 @@ const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogE
 const quickSwitcherDialog = document.getElementById("quick-switcher-dialog") as HTMLDialogElement;
 const sessionSearchDialog = document.getElementById("session-search-dialog") as HTMLDialogElement;
 const commandPaletteDialog = document.getElementById("command-palette-dialog") as HTMLDialogElement;
+const appLaunchDialog = document.getElementById("app-launch-dialog") as HTMLDialogElement;
+const planReviewDialog = document.getElementById("plan-review-dialog") as HTMLDialogElement;
 const tokscaleDialog = document.getElementById("tokscale-dialog") as HTMLDialogElement;
 const lazygitDialog = document.getElementById("lazygit-dialog") as HTMLDialogElement;
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -640,6 +659,12 @@ type SimplifiedJsonEntry = {
 
 type ThemeAppearance = "system" | "light" | "dark";
 type ThemeMode = "light" | "dark";
+type SessionPlanReview = {
+  sessionId: string;
+  markdown: string;
+  fingerprint: string;
+  detectedAt: string;
+};
 
 type ThemeSeedPalette = {
   background: string;
@@ -1151,6 +1176,10 @@ document.addEventListener("dragover", handleDragOver, true);
 document.addEventListener("drop", handleDrop, true);
 document.addEventListener("pointermove", handlePointerMove);
 document.addEventListener("pointerup", handlePointerUp);
+planReviewDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closePlanReviewDialog();
+});
 
 for (const [toolId, definition] of Object.entries(EPHEMERAL_TOOL_DIALOGS) as Array<
   [EphemeralToolId, (typeof EPHEMERAL_TOOL_DIALOGS)[EphemeralToolId]]
@@ -1163,6 +1192,7 @@ for (const [toolId, definition] of Object.entries(EPHEMERAL_TOOL_DIALOGS) as Arr
 
 api.onStateChanged((nextState) => {
   replaceState(nextState);
+  syncPlanReviewsFromState();
   ensureValidSelection();
   syncViewedSessionReadState();
   renderSidebar();
@@ -1172,6 +1202,10 @@ api.onStateChanged((nextState) => {
 
 api.onSessionOutput((payload) => {
   const session = appendSessionOutput(payload.sessionId, payload.data, payload.session);
+  syncSessionPlanReview(session, { autoOpen: true });
+  if (ui.activePlanReviewSessionId === payload.sessionId) {
+    renderPlanReviewDialog();
+  }
   syncViewedSessionReadState(payload.sessionId);
   renderSidebar();
 
@@ -1200,6 +1234,10 @@ api.onSessionOutput((payload) => {
 
 api.onSessionUpdated((payload) => {
   const session = mergeSessionSummary(payload.session);
+  syncSessionPlanReview(session, { autoOpen: false });
+  if (ui.activePlanReviewSessionId === payload.session?.id) {
+    renderPlanReviewDialog();
+  }
   syncViewedSessionReadState(payload.session?.id);
   renderSidebar();
 
@@ -1213,6 +1251,25 @@ api.onSessionUpdated((payload) => {
     syncSessionTerminalLiveState(session);
   } else if (ui.selection.type !== "session") {
     renderDetail();
+  }
+});
+
+api.onPlanDetected(({ sessionId, markdown }) => {
+  const session = sessionById(sessionId);
+  if (!session) return;
+
+  const fingerprint = markdown;
+  const existing = ui.sessionPlanReviews.get(sessionId);
+  ui.sessionPlanReviews.set(sessionId, {
+    sessionId,
+    markdown,
+    fingerprint,
+    detectedAt: new Date().toISOString()
+  });
+
+  if (!existing || existing.fingerprint !== fingerprint) {
+    ui.lastAutoOpenedPlanFingerprintBySession.set(sessionId, fingerprint);
+    openPlanReviewDialog(sessionId);
   }
 });
 
@@ -1277,6 +1334,12 @@ api.onCommand(async ({ command, sessionId, repoId }) => {
       break;
     case "open-tokscale":
       await openTokscaleOverlay(repoId || currentRepoId());
+      break;
+    case "build-and-run-app":
+      await runConfiguredApp(repoId || currentRepoId());
+      break;
+    case "configure-build-and-run-app":
+      openAppLaunchDialog(repoId || currentRepoId());
       break;
     default:
       break;
@@ -2816,7 +2879,8 @@ function updateSessionPane(session) {
   terminalWrap.classList.toggle("session-pane-terminal-wrap-paused", session.runtimeState !== "live");
 
   const isRenaming = ui.renamingSessionId === session.id;
-  const headerSig = `${session.title}|${session.status}|${session.runtimeState}|${isRenaming}|${session.isPinned}|${session.tagColor || ""}|${session.sessionIconUrl || ""}|${session.sessionIconUpdatedAt || ""}`;
+  const planFingerprint = planReviewForSession(session.id)?.fingerprint || "";
+  const headerSig = `${session.title}|${session.status}|${session.runtimeState}|${isRenaming}|${session.isPinned}|${session.tagColor || ""}|${session.sessionIconUrl || ""}|${session.sessionIconUpdatedAt || ""}|${planFingerprint}`;
   if (header.dataset.sig !== headerSig) {
     header.dataset.sig = headerSig;
     replaceDomChildren(header, renderSessionPaneHeader(session, isRenaming));
@@ -2834,8 +2898,10 @@ function updateSessionPane(session) {
   }
 
   const blockerSig = session.blocker
-    ? `${session.blocker.kind}|${session.blocker.summary}|${session.runtimeState}`
-    : "";
+    ? `${session.blocker.kind}|${session.blocker.summary}|${session.runtimeState}|${planFingerprint}`
+    : planFingerprint
+      ? `plan|${planFingerprint}`
+      : "";
   if (blockerElement.dataset.sig !== blockerSig) {
     blockerElement.dataset.sig = blockerSig;
     replaceDomChildren(blockerElement, renderSessionBlocker(session));
@@ -2851,6 +2917,7 @@ function updateSessionPane(session) {
 }
 
 function renderSessionPaneHeader(session, isRenaming: boolean) {
+  const planReview = planReviewForSession(session.id);
   const paneBar = dom(
     "div",
     {
@@ -2913,6 +2980,21 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
             },
             "Rename"
           ),
+      planReview
+        ? dom(
+            "button",
+            {
+              className: "pane-action-btn",
+              attrs: {
+                "data-action": "open-plan-review",
+                "data-session-id": session.id,
+                "data-no-drag": "true",
+                title: "Review latest plan"
+              }
+            },
+            "Review Plan"
+          )
+        : null,
       session.runtimeState !== "live"
         ? dom(
             "button",
@@ -2951,6 +3033,9 @@ function renderSessionBlocker(session) {
     return null;
   }
 
+  const planReview = planReviewForSession(session.id);
+  const canReplyToApproval = session.blocker.kind === "approval" && session.runtimeState === "live";
+
   return dom(
     "div",
     { className: "blocker-banner" },
@@ -2960,21 +3045,124 @@ function renderSessionBlocker(session) {
       dom("div", { className: "row-title" }, blockerLabel(session.blocker.kind)),
       dom("div", { className: "row-subtitle" }, session.blocker.summary)
     ),
-    session.blocker.kind === "approval" && session.runtimeState === "live"
+    canReplyToApproval || planReview
       ? dom(
           "div",
           { className: "session-actions" },
-          dom(
-            "button",
-            {
-              className: "primary",
-              attrs: { "data-action": "approve-blocker", "data-session-id": session.id }
-            },
-            "Approve"
-          ),
-          dom("button", { attrs: { "data-action": "deny-blocker", "data-session-id": session.id } }, "Deny")
+          planReview
+            ? dom(
+                "button",
+                {
+                  attrs: { "data-action": "open-plan-review", "data-session-id": session.id }
+                },
+                "Review Plan"
+              )
+            : null,
+          canReplyToApproval
+            ? dom(
+                "button",
+                {
+                  className: "primary",
+                  attrs: { "data-action": "approve-blocker", "data-session-id": session.id }
+                },
+                "Approve"
+              )
+            : null,
+          canReplyToApproval
+            ? dom("button", { attrs: { "data-action": "deny-blocker", "data-session-id": session.id } }, "Deny")
+            : null
         )
       : null
+  );
+}
+
+function renderPlanReviewDialog() {
+  const sessionId = ui.activePlanReviewSessionId;
+  const session = sessionById(sessionId || "");
+  const planReview = sessionId ? planReviewForSession(sessionId) : null;
+  const repo = session ? repoById(session.repoID) : null;
+  const canReplyToApproval = !!(
+    session &&
+    (session.blocker?.kind === "approval" || session.blocker?.kind === "planMode") &&
+    session.runtimeState === "live"
+  );
+
+  replaceDomChildren(
+    planReviewDialog,
+    dom(
+      "div",
+      { className: "dialog-body dialog-body-plan-review" },
+      dom(
+        "div",
+        { className: "dialog-header" },
+        dom(
+          "div",
+          {},
+          dom("div", { className: "eyebrow" }, "Codex Plan Review"),
+          dom("h2", { className: "dialog-title" }, session?.title || "Plan Review"),
+          dom(
+            "div",
+            { className: "muted" },
+            repo ? abbreviateHome(repo.path) : "No active session selected."
+          )
+        ),
+        dom(
+          "button",
+          {
+            attrs: {
+              type: "button",
+              "data-action": "close-plan-review"
+            }
+          },
+          "Close"
+        )
+      ),
+      !planReview
+        ? emptyStateElement("No proposed plan is available for this session.")
+        : dom(
+            "div",
+            { className: "dialog-panel dialog-panel-plan-review" },
+            !canReplyToApproval
+              ? dom(
+                  "div",
+                  { className: "plan-review-note" },
+                  session?.runtimeState === "live"
+                    ? "Waiting for Codex to reach the approval prompt before sending a decision."
+                    : "This session is not live, so approval actions are unavailable."
+                )
+              : null,
+            trustedElement(
+              `<div class="plan-review-markdown markdown-body">${renderMarkdownDocument(planReview.markdown)}</div>`
+            )
+          ),
+      dom(
+        "div",
+        { className: "dialog-footer" },
+        dom(
+          "button",
+          {
+            attrs: {
+              type: "button",
+              "data-action": "deny-plan-review",
+              disabled: canReplyToApproval ? undefined : true
+            }
+          },
+          "Deny"
+        ),
+        dom(
+          "button",
+          {
+            className: "primary",
+            attrs: {
+              type: "button",
+              "data-action": "approve-plan-review",
+              disabled: canReplyToApproval ? undefined : true
+            }
+          },
+          "Approve"
+        )
+      )
+    )
   );
 }
 
@@ -3266,6 +3454,7 @@ function renderDialogs() {
   renderQuickSwitcherDialog();
   renderSessionSearchDialog();
   renderCommandPaletteDialog();
+  renderPlanReviewDialog();
   if (settingsDialog.open) {
     renderSettingsDialog();
   }
@@ -3384,6 +3573,7 @@ function commandPaletteShortcutForAction(action: string): string | null {
     "open-workspace": "open-folder",
     "create-project": "create-folder",
     "open-launcher": "new-session",
+    "build-and-run-app": "build-and-run-app",
     "open-wiki": "open-wiki",
     "open-quick-switcher": "quick-switcher",
     "open-tokscale": "open-tokscale",
@@ -3399,6 +3589,8 @@ function renderCommandPaletteDialog() {
     { id: "open-workspace", label: "Open Folder", action: "open-workspace" },
     { id: "create-project", label: "Create Folder", action: "create-project" },
     { id: "open-launcher", label: "New Session", action: "open-launcher" },
+    { id: "build-and-run-app", label: "Build and Run App", action: "build-and-run-app" },
+    { id: "configure-build-and-run-app", label: "Configure App Launch", action: "configure-build-and-run-app" },
     { id: "open-session-search", label: "Search Session Files", action: "open-session-search" },
     { id: "open-wiki", label: "Open Wiki", action: "open-wiki" },
     { id: "initialize-wiki", label: "Initialize Wiki", action: "initialize-wiki" },
@@ -5504,6 +5696,27 @@ async function handleClick(event) {
     case "open-launcher":
       await startDefaultAgentSession(target.dataset.repoId || currentRepoId());
       break;
+    case "build-and-run-app":
+      await runConfiguredApp(target.dataset.repoId || currentRepoId());
+      break;
+    case "configure-build-and-run-app":
+      openAppLaunchDialog(target.dataset.repoId || currentRepoId());
+      break;
+    case "close-app-launch-dialog":
+      closeAppLaunchDialog();
+      break;
+    case "save-app-launch-config":
+      if (await saveAppLaunchConfig()) {
+        closeAppLaunchDialog();
+      }
+      break;
+    case "save-and-run-app-launch":
+      if (await saveAppLaunchConfig()) {
+        const repoId = ui.appLaunchRepoId;
+        closeAppLaunchDialog();
+        await runConfiguredApp(repoId);
+      }
+      break;
     case "open-status":
       await selectStatus();
       break;
@@ -5620,6 +5833,24 @@ async function handleClick(event) {
       break;
     case "deny-blocker":
       await api.sendInput(target.dataset.sessionId, "3\r");
+      break;
+    case "open-plan-review":
+      openPlanReviewDialog(target.dataset.sessionId);
+      break;
+    case "close-plan-review":
+      closePlanReviewDialog();
+      break;
+    case "approve-plan-review":
+      if (ui.activePlanReviewSessionId) {
+        await api.sendInput(ui.activePlanReviewSessionId, "1\r");
+        closePlanReviewDialog();
+      }
+      break;
+    case "deny-plan-review":
+      if (ui.activePlanReviewSessionId) {
+        await api.sendInput(ui.activePlanReviewSessionId, "3\r");
+        closePlanReviewDialog();
+      }
       break;
     case "open-quick-switcher":
       openQuickSwitcher();
@@ -6407,6 +6638,18 @@ async function handleKeyDown(event) {
     }
   }
 
+  if (keydownTarget instanceof HTMLInputElement && appLaunchDialog.open) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (await saveAppLaunchConfig()) {
+        const repoId = ui.appLaunchRepoId;
+        closeAppLaunchDialog();
+        await runConfiguredApp(repoId);
+      }
+      return;
+    }
+  }
+
   if (sessionSearchDialog.open) {
     if (await handleSessionSearchKeyDown(event)) {
       return;
@@ -6540,6 +6783,12 @@ async function handleAppShortcut(event) {
     return true;
   }
 
+  if (matchesAccelerator(event, kb["build-and-run-app"])) {
+    event.preventDefault();
+    await runConfiguredApp(currentRepoId() || state.repos[0]?.id || null);
+    return true;
+  }
+
   return false;
 }
 
@@ -6573,6 +6822,14 @@ async function handleInput(event) {
     case "command-palette-query":
       ui.commandPaletteQuery = target.value;
       rerenderDialogInput(renderCommandPaletteDialog, "command-palette-query", target);
+      break;
+    case "app-launch-build-command":
+      ui.appLaunchBuildCommand = target.value;
+      ui.appLaunchError = "";
+      break;
+    case "app-launch-run-command":
+      ui.appLaunchRunCommand = target.value;
+      ui.appLaunchError = "";
       break;
     case "marketplace-inspect-url":
       ui.marketplaceInspectUrl = target.value;
@@ -6840,6 +7097,71 @@ async function initializeWiki(repoId: string | null) {
   await api.toggleWiki(repoId, true);
   ui.wikiStatusMessage = "Wiki enabled. Agents can now maintain durable knowledge in .wiki/.";
   await openWiki(repoId);
+}
+
+function currentAppLaunchConfig(): RepoAppLaunchConfig | null {
+  const buildCommand = ui.appLaunchBuildCommand.trim();
+  const runCommand = ui.appLaunchRunCommand.trim();
+
+  if (!buildCommand || !runCommand) {
+    return null;
+  }
+
+  return {
+    buildCommand,
+    runCommand
+  };
+}
+
+async function saveAppLaunchConfig() {
+  const repoId = ui.appLaunchRepoId;
+  const config = currentAppLaunchConfig();
+  if (!repoId || !config) {
+    ui.appLaunchError = "Both build and run commands are required.";
+    renderAppLaunchDialog();
+    return null;
+  }
+
+  try {
+    await api.updateRepoAppLaunchConfig({
+      repoId,
+      config
+    });
+    const repo = repoById(repoId);
+    if (repo) {
+      repo.appLaunchConfig = config;
+    }
+    ui.appLaunchError = "";
+    return config;
+  } catch (error) {
+    ui.appLaunchError = error instanceof Error ? error.message : "Failed to save app commands.";
+    renderAppLaunchDialog();
+    return null;
+  }
+}
+
+async function runConfiguredApp(repoId: string | null) {
+  if (!repoId) {
+    window.alert("Select a folder first.");
+    return;
+  }
+
+  const repo = repoById(repoId);
+  if (!repo?.appLaunchConfig) {
+    openAppLaunchDialog(repoId);
+    return;
+  }
+
+  try {
+    const sessionId = await api.buildAndRunApp(repoId);
+    if (sessionId) {
+      commandPaletteDialog.close();
+      await selectSession(sessionId, "terminal");
+    }
+  } catch (error) {
+    ui.appLaunchError = error instanceof Error ? error.message : "Failed to build and run the app.";
+    openAppLaunchDialog(repoId, { preserveInput: true });
+  }
 }
 
 async function toggleWiki(repoId: string | null) {
@@ -7189,6 +7511,153 @@ function openCommandPalette() {
   }
 }
 
+function openAppLaunchDialog(repoId: string | null, options: { preserveInput?: boolean } = {}) {
+  const repo = repoById(repoId || "");
+  if (!repo) {
+    window.alert("Select a folder first.");
+    return;
+  }
+
+  const config = repo.appLaunchConfig;
+  ui.appLaunchRepoId = repo.id;
+  ui.appLaunchError = "";
+  if (!options.preserveInput) {
+    ui.appLaunchBuildCommand = config?.buildCommand || "";
+    ui.appLaunchRunCommand = config?.runCommand || "";
+  }
+
+  renderAppLaunchDialog();
+  if (!appLaunchDialog.open) {
+    appLaunchDialog.showModal();
+  }
+}
+
+function closeAppLaunchDialog() {
+  ui.appLaunchRepoId = null;
+  ui.appLaunchBuildCommand = "";
+  ui.appLaunchRunCommand = "";
+  ui.appLaunchError = "";
+  if (appLaunchDialog.open) {
+    appLaunchDialog.close();
+  }
+}
+
+function renderAppLaunchDialog() {
+  const repo = repoById(ui.appLaunchRepoId || "");
+
+  replaceDomChildren(
+    appLaunchDialog,
+    dom(
+      "form",
+      { className: "dialog-body", attrs: { method: "dialog" } },
+      dom(
+        "div",
+        { className: "dialog-header" },
+        dom(
+          "div",
+          {},
+          dom("div", { className: "eyebrow" }, "App Launch"),
+          dom("h2", { className: "dialog-title" }, repo ? `Build and Run ${repo.name}` : "Build and Run App"),
+          dom(
+            "div",
+            { className: "muted" },
+            repo ? abbreviateHome(repo.path) : "Select a repo to configure commands."
+          )
+        ),
+        dom(
+          "button",
+          {
+            attrs: {
+              type: "button",
+              "data-action": "close-app-launch-dialog"
+            }
+          },
+          "Close"
+        )
+      ),
+      dom(
+        "div",
+        { className: "app-launch-fields" },
+        dom(
+          "label",
+          { className: "app-launch-field" },
+          dom("div", { className: "row-title" }, "Build Command"),
+          dom("input", {
+            value: ui.appLaunchBuildCommand,
+            attrs: {
+              id: "app-launch-build-command",
+              placeholder: "npm run build"
+            }
+          }),
+          dom("div", { className: "muted" }, "Runs first. If it exits non-zero, Hydra skips the run command.")
+        ),
+        dom(
+          "label",
+          { className: "app-launch-field" },
+          dom("div", { className: "row-title" }, "Run Command"),
+          dom("input", {
+            value: ui.appLaunchRunCommand,
+            attrs: {
+              id: "app-launch-run-command",
+              placeholder: "npm run dev"
+            }
+          }),
+          dom("div", { className: "muted" }, "Starts after a successful build inside a Hydra shell session.")
+        )
+      ),
+      ui.appLaunchError
+        ? dom("div", { className: "settings-warning-card" }, ui.appLaunchError)
+        : null,
+      dom(
+        "div",
+        { className: "dialog-footer" },
+        dom(
+          "button",
+          {
+            attrs: {
+              type: "button",
+              "data-action": "save-app-launch-config"
+            }
+          },
+          "Save"
+        ),
+        dom(
+          "button",
+          {
+            className: "primary",
+            attrs: {
+              type: "button",
+              "data-action": "save-and-run-app-launch"
+            }
+          },
+          "Save and Run"
+        )
+      )
+    )
+  );
+}
+
+function openPlanReviewDialog(sessionId: string | null | undefined) {
+  const nextSessionId = sessionId || "";
+  if (!nextSessionId || !planReviewForSession(nextSessionId)) {
+    return;
+  }
+
+  ui.activePlanReviewSessionId = nextSessionId;
+  renderPlanReviewDialog();
+  if (!planReviewDialog.open) {
+    planReviewDialog.showModal();
+  }
+}
+
+function closePlanReviewDialog() {
+  ui.activePlanReviewSessionId = null;
+  if (planReviewDialog.open) {
+    planReviewDialog.close();
+  }
+  renderPlanReviewDialog();
+}
+
 function overlayState(toolId: EphemeralToolId): EphemeralToolOverlayState {
   return ui.ephemeralToolOverlays[toolId];
 }
@@ -7406,6 +7875,141 @@ function clearWikiState() {
   ui.wikiPreviewMarkdown = "";
   ui.wikiStatusMessage = "";
   ui.wikiLoading = false;
+}
+
+function planReviewForSession(sessionId: string) {
+  return ui.sessionPlanReviews.get(sessionId) || null;
+}
+
+function syncPlanReviewsFromState() {
+  const activeSessionIds = new Set(state.sessions.map((session) => session.id));
+
+  for (const sessionId of ui.sessionPlanReviews.keys()) {
+    if (!activeSessionIds.has(sessionId)) {
+      ui.sessionPlanReviews.delete(sessionId);
+    }
+  }
+
+  for (const sessionId of ui.lastAutoOpenedPlanFingerprintBySession.keys()) {
+    if (!activeSessionIds.has(sessionId)) {
+      ui.lastAutoOpenedPlanFingerprintBySession.delete(sessionId);
+    }
+  }
+
+  if (ui.activePlanReviewSessionId && !activeSessionIds.has(ui.activePlanReviewSessionId)) {
+    ui.activePlanReviewSessionId = null;
+    if (planReviewDialog.open) {
+      planReviewDialog.close();
+    }
+  }
+
+  for (const session of state.sessions) {
+    syncSessionPlanReview(session, { autoOpen: false });
+  }
+}
+
+function syncSessionPlanReview(session: SessionSummary | null, options: { autoOpen: boolean }) {
+  if (!session) {
+    return null;
+  }
+
+  const isCodex = session.startupAgentId === "codex";
+
+  if (!isCodex) {
+    // Non-Codex sessions (Claude, etc.): plan reviews are set via the plans
+    // directory watcher (onPlanDetected). Don't auto-clear them here.
+    return ui.sessionPlanReviews.get(session.id) || null;
+  }
+
+  const transcript = session.transcript || session.rawTranscript || "";
+  const proposedPlan = extractLatestProposedPlan(transcript);
+  if (!proposedPlan) {
+    ui.sessionPlanReviews.delete(session.id);
+    if (ui.activePlanReviewSessionId === session.id) {
+      closePlanReviewDialog();
+    }
+    return null;
+  }
+
+  const nextReview: SessionPlanReview = {
+    sessionId: session.id,
+    markdown: proposedPlan.markdown,
+    fingerprint: proposedPlan.fingerprint,
+    detectedAt: session.updatedAt || new Date().toISOString()
+  };
+  const previousReview = ui.sessionPlanReviews.get(session.id);
+  ui.sessionPlanReviews.set(session.id, nextReview);
+
+  if (ui.activePlanReviewSessionId === session.id && previousReview?.fingerprint !== nextReview.fingerprint) {
+    renderPlanReviewDialog();
+  }
+
+  if (
+    options.autoOpen &&
+    previousReview?.fingerprint !== nextReview.fingerprint &&
+    ui.lastAutoOpenedPlanFingerprintBySession.get(session.id) !== nextReview.fingerprint
+  ) {
+    ui.lastAutoOpenedPlanFingerprintBySession.set(session.id, nextReview.fingerprint);
+    openPlanReviewDialog(session.id);
+  }
+
+  return nextReview;
+}
+
+function extractLatestProposedPlan(transcript: string) {
+  const normalized = String(transcript || "").replace(/\r\n/g, "\n");
+  const pattern = /<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_plan>/g;
+  let latestMarkdown = "";
+
+  while (true) {
+    const match = pattern.exec(normalized);
+    if (!match) {
+      break;
+    }
+    latestMarkdown = match[1] || "";
+  }
+
+  const markdown = latestMarkdown.trim();
+  if (!markdown) {
+    return null;
+  }
+
+  return {
+    markdown,
+    fingerprint: markdown
+  };
+}
+
+function extractClaudePlanFromTranscript(transcript: string) {
+  const normalized = String(transcript || "").replace(/\r\n/g, "\n");
+
+  const approvalPatterns = [
+    /would you like to proceed with this plan/i,
+    /do you want to proceed with this plan/i,
+    /proceed with this plan/i
+  ];
+
+  let approvalIndex = -1;
+  for (const pattern of approvalPatterns) {
+    const match = normalized.search(pattern);
+    if (match !== -1 && (approvalIndex === -1 || match < approvalIndex)) {
+      approvalIndex = match;
+    }
+  }
+
+  if (approvalIndex === -1) return null;
+
+  const beforeApproval = normalized.slice(0, approvalIndex).trimEnd();
+  if (!beforeApproval) return null;
+
+  const lines = beforeApproval.split("\n");
+  const planLines = lines.slice(-200);
+
+  let start = 0;
+  while (start < planLines.length && !planLines[start].trim()) start++;
+  const markdown = planLines.slice(start).join("\n").trim();
+
+  return markdown ? { markdown, fingerprint: markdown } : null;
 }
 
 async function loadWikiContext(
@@ -8537,13 +9141,7 @@ function mergeSessionSummary(summary) {
 }
 
 function appendSessionOutput(sessionId, chunk, summary) {
-  const session = mergeSessionSummary(summary);
-  if (!session) {
-    return null;
-  }
-
-  session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${chunk}`);
-  return session;
+  return mergeSessionSummary(summary);
 }
 
 function renderSessionDragAttributes(sessionId, source = "list") {
@@ -9947,7 +10545,12 @@ function renderSessionVisualElement(
   extraClass = "",
   options: { includePlaceholder?: boolean } = {}
 ) {
-  return trustedElement<HTMLElement>(renderSessionVisual(session, extraClass, options));
+  const html = renderSessionVisual(session, extraClass, options).trim();
+  if (!html) {
+    return null;
+  }
+
+  return trustedElement<HTMLElement>(html);
 }
 
 function renderSessionPinIndicatorElement(label = "Pinned", extraClass = "") {
@@ -10064,6 +10667,8 @@ function isAnyDialogOpen() {
     quickSwitcherDialog.open ||
     sessionSearchDialog.open ||
     commandPaletteDialog.open ||
+    appLaunchDialog.open ||
+    planReviewDialog.open ||
     Object.values(EPHEMERAL_TOOL_DIALOGS).some((definition) => definition.dialog.open)
   );
 }

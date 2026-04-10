@@ -2,6 +2,7 @@ import type {
   AgentDefinition,
   AgentId,
   AppPreferences,
+  RepoAppLaunchConfig,
   RepoRecord,
   SessionRecord,
   SessionTagColor,
@@ -193,10 +194,32 @@ function normalizeRepos(repos: unknown): RepoRecord[] {
     return [];
   }
 
-  return repos.map((repo) => ({
-    wikiEnabled: false,
-    ...(isPlainObject(repo) ? repo : {})
-  })) as RepoRecord[];
+  return repos.map((repo) => {
+    const safeRepo = isPlainObject(repo) ? repo : {};
+    return {
+      wikiEnabled: false,
+      ...safeRepo,
+      appLaunchConfig: normalizeRepoAppLaunchConfig(safeRepo.appLaunchConfig)
+    };
+  }) as RepoRecord[];
+}
+
+function normalizeRepoAppLaunchConfig(value: unknown): RepoAppLaunchConfig | null {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+
+  const buildCommand = typeof value.buildCommand === "string" ? value.buildCommand.trim() : "";
+  const runCommand = typeof value.runCommand === "string" ? value.runCommand.trim() : "";
+
+  if (!buildCommand || !runCommand) {
+    return null;
+  }
+
+  return {
+    buildCommand,
+    runCommand
+  };
 }
 
 function normalizeAgentId(value: unknown, fallback: AgentId | null = DEFAULT_AGENT_ID): AgentId | null {
@@ -246,6 +269,7 @@ module.exports = {
   emptyState,
   loadState,
   normalizeAgentId,
+  normalizeRepoAppLaunchConfig,
   normalizePreferences,
   saveState
 };

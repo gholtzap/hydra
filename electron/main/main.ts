@@ -990,6 +990,7 @@ class AppController {
       id: sessionId,
       repoID: repoId,
       title: repo.name,
+      launchProfile: "agent",
       initialPrompt: "",
       launchesClaudeOnStart: !!startupAgentId,
       startupAgentId,
@@ -1304,6 +1305,7 @@ class AppController {
       id: sessionId,
       repoID: repoId,
       title: repo.name,
+      launchProfile: "agent",
       initialPrompt: "",
       launchesClaudeOnStart: true,
       startupAgentId,
@@ -1441,19 +1443,14 @@ class AppController {
       throw new Error("Set build and run commands for this project first.");
     }
 
-    const input = buildAppLaunchInput(config);
     const reusableSession = this.findReusableAppSession(repoId);
     const sessionId =
       reusableSession?.runtimeState === "stopped"
         ? reusableSession.id
-        : this.createShellSession(repoId, `App: ${repo.name}`, input);
+        : this.createAppLaunchSession(repoId, `App: ${repo.name}`);
 
     if (!sessionId) {
       return null;
-    }
-
-    if (reusableSession?.runtimeState === "stopped") {
-      this.queueSessionLaunch(sessionId, input);
     }
 
     if (reusableSession?.runtimeState === "stopped") {
@@ -1476,6 +1473,7 @@ class AppController {
       this.state.sessions.find(
         (session) =>
           session.repoID === repoId &&
+          session.launchProfile === "appLaunch" &&
           !session.startupAgentId &&
           session.title === expectedTitle &&
           session.runtimeState === "stopped"
@@ -1511,6 +1509,20 @@ class AppController {
 
   launchRuntime(session, repo) {
     this.cancelPendingAgentLaunch(session.id);
+    const appLaunchCommand =
+      session.launchProfile === "appLaunch"
+        ? resolvedAppLaunchCommand(this.state.preferences, repo)
+        : null;
+
+    if (appLaunchCommand) {
+      this.ptyHost.createSession({
+        sessionId: session.id,
+        cwd: repo.path,
+        command: appLaunchCommand
+      });
+      return;
+    }
+
     this.ptyHost.createSession({
       sessionId: session.id,
       cwd: repo.path,
@@ -1741,6 +1753,7 @@ class AppController {
       id: sessionId,
       repoID: repoId,
       title: title || repo.name,
+      launchProfile: "shell",
       initialPrompt: "",
       launchesClaudeOnStart: false,
       startupAgentId: null,
@@ -1768,6 +1781,48 @@ class AppController {
     if (queuedInput) {
       this.queueSessionLaunch(session.id, queuedInput, title);
     }
+    this.launchRuntime(session, repo);
+    this.scheduleSave();
+    this.broadcastState();
+    return session.id;
+  }
+
+  createAppLaunchSession(repoId: string, title?: string) {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      return null;
+    }
+
+    const sessionId = randomUUID();
+    const session: SessionRecord = {
+      id: sessionId,
+      repoID: repoId,
+      title: title || `App: ${repo.name}`,
+      launchProfile: "appLaunch",
+      initialPrompt: "",
+      launchesClaudeOnStart: false,
+      startupAgentId: null,
+      claudeSessionId: null,
+      agentSessionId: null,
+      status: "running",
+      runtimeState: "live",
+      blocker: null,
+      unreadCount: 0,
+      createdAt: now(),
+      updatedAt: now(),
+      lastActivityAt: null,
+      stoppedAt: null,
+      launchCount: 1,
+      isPinned: false,
+      tagColor: null,
+      sessionIconPath: null,
+      sessionIconUpdatedAt: null,
+      transcript: "",
+      rawTranscript: ""
+    };
+
+    this.state.sessions.unshift(session);
+    this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(session.transcript));
     this.launchRuntime(session, repo);
     this.scheduleSave();
     this.broadcastState();
@@ -2155,6 +2210,20 @@ function resolvedShellPath(preferences) {
   return candidate || process.env.SHELL || "/bin/zsh";
 }
 
+function resolvedAppLaunchCommand(preferences, repo) {
+  const config = repo?.appLaunchConfig;
+  if (!config) {
+    return null;
+  }
+
+  const shellPath = resolvedShellPath(preferences);
+  return [
+    shellPath,
+    "-lc",
+    `${shellEscape(appLaunchRunnerPath())} ${shellEscape(config.buildCommand)} ${shellEscape(config.runCommand)}`
+  ];
+}
+
 function resolvedSessionLaunchCommand(preferences, session) {
   const startupAgentId = normalizeAgentId(session?.startupAgentId, null);
   if (!session?.launchesClaudeOnStart || !startupAgentId) {
@@ -2191,22 +2260,8 @@ function resolvedAgentCommand(preferences, agentId) {
   return normalized || DEFAULT_AGENT_COMMANDS[agentId] || DEFAULT_AGENT_COMMANDS[DEFAULT_AGENT_ID];
 }
 
-function buildAppLaunchInput(config: RepoAppLaunchConfig) {
-  const buildCommand = String(config.buildCommand || "").trim();
-  const runCommand = String(config.runCommand || "").trim();
-
-  return [
-    "printf '\\n[Hydra] Starting configured build...\\n'",
-    buildCommand,
-    "__hydra_build_status=$?",
-    'if [ "$__hydra_build_status" -ne 0 ]; then',
-    '  printf "\\n[Hydra] Build failed with status %s. Run command skipped.\\n" "$__hydra_build_status"',
-    "else",
-    "  printf '\\n[Hydra] Build succeeded. Starting app...\\n'",
-    runCommand,
-    "fi",
-    ""
-  ].join("\r");
+function appLaunchRunnerPath() {
+  return path.join(__dirname, "app-launch-runner.sh");
 }
 
 function shellEscape(value) {

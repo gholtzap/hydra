@@ -4,6 +4,7 @@ import type {
   AppPreferences,
   RepoAppLaunchConfig,
   RepoRecord,
+  SessionLaunchProfile,
   SessionRecord,
   SessionTagColor,
   StoredAppState
@@ -101,6 +102,7 @@ function migrateSnapshot(snapshot: unknown): StoredAppState {
   const sessions = Array.isArray(safeSnapshot.sessions)
     ? safeSnapshot.sessions.map((session) => ({
         initialPrompt: "",
+        launchProfile: "agent",
         launchesClaudeOnStart: true,
         startupAgentId: null,
         claudeSessionId: null,
@@ -160,6 +162,7 @@ function normalizeRestoredSessions(sessions: SessionRecord[]): void {
   const now = new Date().toISOString();
 
   for (const session of sessions) {
+    session.launchProfile = normalizeSessionLaunchProfile(session);
     const startupAgentId = normalizeAgentId(session.startupAgentId, null);
     session.startupAgentId = startupAgentId || (session.launchesClaudeOnStart ? DEFAULT_AGENT_ID : null);
     session.launchesClaudeOnStart = !!session.startupAgentId;
@@ -187,6 +190,21 @@ function normalizeRestoredSessions(sessions: SessionRecord[]): void {
       }
     }
   }
+}
+
+function normalizeSessionLaunchProfile(session: SessionRecord): SessionLaunchProfile {
+  const normalized = typeof session.launchProfile === "string" ? session.launchProfile.trim() : "";
+  if (normalized === "agent" || normalized === "shell" || normalized === "appLaunch") {
+    return normalized;
+  }
+
+  if (session.launchesClaudeOnStart) {
+    return "agent";
+  }
+
+  return typeof session.title === "string" && session.title.startsWith("App: ")
+    ? "appLaunch"
+    : "shell";
 }
 
 function normalizeRepos(repos: unknown): RepoRecord[] {

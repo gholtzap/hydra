@@ -109,6 +109,7 @@ export type SessionStatus =
   | "idle";
 
 export type SessionRuntimeState = "live" | "stopped";
+export type SessionLaunchProfile = "agent" | "shell" | "appLaunch";
 
 export type SessionOrganizationPatch = {
   isPinned?: boolean;
@@ -148,6 +149,7 @@ export type SessionRecord = {
   id: string;
   repoID: string;
   title: string;
+  launchProfile: SessionLaunchProfile;
   initialPrompt: string;
   launchesClaudeOnStart: boolean;
   startupAgentId: AgentId | null;

@@ -43,7 +43,7 @@ const DEFAULT_KEYBINDINGS: KeybindingMap = {
   "open-lazygit": "CmdOrCtrl+Shift+G",
   "open-tokscale": "CmdOrCtrl+Shift+T",
   "open-launcher": "CmdOrCtrl+C",
-  "build-and-run-app": "CmdOrCtrl+Shift+R",
+  "build-and-run-app": "CmdOrCtrl+Shift+B",
   "search-project-sessions": "CmdOrCtrl+F",
   "navigate-section-left": "CmdOrCtrl+ArrowLeft",
   "navigate-section-right": "CmdOrCtrl+ArrowRight",

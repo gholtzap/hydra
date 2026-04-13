@@ -177,6 +177,9 @@ const {
 const { resolveCommandPath } = require("./command-path") as {
   resolveCommandPath: (command: string) => Promise<string | null>;
 };
+const { startMcpServer } = require("./mcp-server") as {
+  startMcpServer: (appController: InstanceType<typeof AppController>) => Promise<unknown>;
+};
 
 app.setName("ClaudeWorkspace");
 
@@ -2338,6 +2341,9 @@ app.whenReady().then(async () => {
   controller.setupIpc();
   controller.setupMenu();
   controller.createWindow();
+  startMcpServer(controller).catch((err) =>
+    console.error("[MCP] Server failed to start:", err)
+  );
 });
 
 app.on("before-quit", (event) => {

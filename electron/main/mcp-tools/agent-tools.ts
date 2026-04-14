@@ -1,6 +1,7 @@
 /**
  * MCP tools for agent configuration.
  */
+import { z } from "zod";
 
 const AGENT_DEFINITIONS = [
   { id: "claude", label: "Claude Code", defaultCommand: "claude" },
@@ -22,9 +23,9 @@ function textResult(data: unknown) {
 }
 
 export function register(server: any, appController: any) {
-  // ── list_agents ────────────────────────────────────────────────
   server.tool(
     "list_agents",
+    "List available AI coding agents and their configuration",
     {},
     async () => {
       const prefs = appController.state.preferences;
@@ -37,11 +38,11 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── set_default_agent ──────────────────────────────────────────
   server.tool(
     "set_default_agent",
+    "Set the default agent for new sessions",
     {
-      agentId: { type: "string", description: "Agent ID to set as default" },
+      agentId: z.string().describe("Agent ID to set as default"),
     },
     async (args: { agentId: string }) => {
       const result = await appController.handleMcpAction("update_preferences", {
@@ -51,12 +52,12 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── set_agent_command ──────────────────────────────────────────
   server.tool(
     "set_agent_command",
+    "Override the CLI command for an agent",
     {
-      agentId: { type: "string", description: "Agent ID" },
-      command: { type: "string", description: "CLI command override" },
+      agentId: z.string().describe("Agent ID"),
+      command: z.string().describe("CLI command override"),
     },
     async (args: { agentId: string; command: string }) => {
       const currentOverrides = appController.state.preferences.agentCommandOverrides || {};

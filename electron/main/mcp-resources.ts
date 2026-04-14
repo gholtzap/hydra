@@ -7,7 +7,7 @@ export function registerResources(server: any, appController: any) {
     "hydra://state",
     { title: "App State", description: "Full Hydra app state snapshot", mimeType: "application/json" },
     async (uri: URL) => ({
-      contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(appController.getSnapshot()) }],
+      contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(appController.snapshot()) }],
     })
   );
 

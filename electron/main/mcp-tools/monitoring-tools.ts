@@ -1,15 +1,16 @@
 /**
  * MCP tools for monitoring, ephemeral tools, and inbox.
  */
+import { z } from "zod";
 
 function textResult(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
 export function register(server: any, appController: any) {
-  // ── get_port_status ────────────────────────────────────────────
   server.tool(
     "get_port_status",
+    "Get dev port monitoring status",
     {},
     async () => {
       const result = await appController.handleMcpAction("get_port_status", {});
@@ -17,12 +18,12 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── launch_ephemeral_tool ──────────────────────────────────────
   server.tool(
     "launch_ephemeral_tool",
+    "Launch an ephemeral tool (lazygit or tokscale)",
     {
-      toolId: { type: "string", description: "Tool ID: lazygit or tokscale" },
-      repoId: { type: "string", description: "Repo ID" },
+      toolId: z.string().describe("Tool ID: lazygit or tokscale"),
+      repoId: z.string().describe("Repo ID"),
     },
     async (args: { toolId: string; repoId: string }) => {
       const result = await appController.handleMcpAction("launch_ephemeral_tool", args);
@@ -30,12 +31,12 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── close_ephemeral_tool ───────────────────────────────────────
   server.tool(
     "close_ephemeral_tool",
+    "Close an ephemeral tool session",
     {
-      toolId: { type: "string", description: "Tool ID: lazygit or tokscale" },
-      sessionId: { type: "string", description: "Session ID of the ephemeral tool" },
+      toolId: z.string().describe("Tool ID: lazygit or tokscale"),
+      sessionId: z.string().describe("Session ID of the ephemeral tool"),
     },
     async (args: { toolId: string; sessionId: string }) => {
       const result = await appController.handleMcpAction("close_ephemeral_tool", args);
@@ -43,9 +44,9 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── get_inbox ──────────────────────────────────────────────────
   server.tool(
     "get_inbox",
+    "Get blocked and unread sessions (the inbox)",
     {},
     async () => {
       const sessions = appController.state.sessions;

@@ -1,19 +1,20 @@
 /**
  * MCP tools for skills marketplace.
  */
+import { z } from "zod";
 
 function textResult(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
 export function register(server: any, appController: any) {
-  // ── get_skill_details ──────────────────────────────────────────
   server.tool(
     "get_skill_details",
+    "Get skill details from the marketplace",
     {
-      owner: { type: "string", description: "GitHub owner" },
-      repo: { type: "string", description: "GitHub repo name" },
-      path: { type: "string", description: "Path within repo" },
+      owner: z.string().describe("GitHub owner"),
+      repo: z.string().describe("GitHub repo name"),
+      path: z.string().describe("Path within repo"),
     },
     async (args: { owner: string; repo: string; path: string }) => {
       const result = await appController.handleMcpAction("get_skill_details", args);
@@ -21,11 +22,11 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── inspect_skill_url ──────────────────────────────────────────
   server.tool(
     "inspect_skill_url",
+    "Inspect a GitHub URL for installable skills",
     {
-      url: { type: "string", description: "GitHub URL to inspect" },
+      url: z.string().describe("GitHub URL to inspect"),
     },
     async (args: { url: string }) => {
       const result = await appController.handleMcpAction("inspect_skill_url", args);
@@ -33,14 +34,14 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── install_skill ──────────────────────────────────────────────
   server.tool(
     "install_skill",
+    "Install a skill from the marketplace",
     {
-      owner: { type: "string", description: "GitHub owner" },
-      repo: { type: "string", description: "GitHub repo name" },
-      path: { type: "string", description: "Path within repo" },
-      scope: { type: "string", description: "Install scope: user or project" },
+      owner: z.string().describe("GitHub owner"),
+      repo: z.string().describe("GitHub repo name"),
+      path: z.string().describe("Path within repo"),
+      scope: z.string().describe("Install scope: user or project"),
     },
     async (args: { owner: string; repo: string; path: string; scope: string }) => {
       const result = await appController.handleMcpAction("install_skill", args);

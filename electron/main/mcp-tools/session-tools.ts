@@ -1,6 +1,7 @@
 /**
  * MCP tools for session management.
  */
+import { z } from "zod";
 
 const AGENT_APPROVE_MAP: Record<string, string> = {
   claude: "1\r",
@@ -27,10 +28,11 @@ export function register(server: any, appController: any) {
   // ── list_sessions ──────────────────────────────────────────────
   server.tool(
     "list_sessions",
+    "List sessions, optionally filtered by repo or status",
     {
-      repoId: { type: "string", description: "Filter by repo ID" },
-      status: { type: "string", description: "Filter by status (running|blocked|needs_input|failed|done|idle)" },
-      limit: { type: "number", description: "Max results to return" },
+      repoId: z.string().optional().describe("Filter by repo ID"),
+      status: z.string().optional().describe("Filter by status (running|blocked|needs_input|failed|done|idle)"),
+      limit: z.number().optional().describe("Max results to return"),
     },
     async (args: { repoId?: string; status?: string; limit?: number }) => {
       let sessions = [...appController.state.sessions];
@@ -45,9 +47,10 @@ export function register(server: any, appController: any) {
   // ── get_session ────────────────────────────────────────────────
   server.tool(
     "get_session",
+    "Get session details including transcript",
     {
-      sessionId: { type: "string", description: "Session ID" },
-      includeRawTranscript: { type: "boolean", description: "Include raw ANSI transcript" },
+      sessionId: z.string().describe("Session ID"),
+      includeRawTranscript: z.boolean().optional().describe("Include raw ANSI transcript"),
     },
     async (args: { sessionId: string; includeRawTranscript?: boolean }) => {
       const session = appController.state.sessions.find((s: any) => s.id === args.sessionId);
@@ -62,10 +65,11 @@ export function register(server: any, appController: any) {
   // ── create_session ─────────────────────────────────────────────
   server.tool(
     "create_session",
+    "Create a new agent session in a repo",
     {
-      repoId: { type: "string", description: "Repo ID to create session in" },
-      agentId: { type: "string", description: "Agent ID (defaults to user preference)" },
-      prompt: { type: "string", description: "Initial prompt to send" },
+      repoId: z.string().describe("Repo ID to create session in"),
+      agentId: z.string().optional().describe("Agent ID (defaults to user preference)"),
+      prompt: z.string().optional().describe("Initial prompt to send"),
     },
     async (args: { repoId: string; agentId?: string; prompt?: string }) => {
       const result = await appController.handleMcpAction("create_session", args);
@@ -76,9 +80,10 @@ export function register(server: any, appController: any) {
   // ── rename_session ─────────────────────────────────────────────
   server.tool(
     "rename_session",
+    "Rename a session",
     {
-      sessionId: { type: "string", description: "Session ID" },
-      title: { type: "string", description: "New title" },
+      sessionId: z.string().describe("Session ID"),
+      title: z.string().describe("New title"),
     },
     async (args: { sessionId: string; title: string }) => {
       const result = await appController.handleMcpAction("rename_session", args);
@@ -89,8 +94,9 @@ export function register(server: any, appController: any) {
   // ── close_session ──────────────────────────────────────────────
   server.tool(
     "close_session",
+    "Close and delete a session",
     {
-      sessionId: { type: "string", description: "Session ID to close" },
+      sessionId: z.string().describe("Session ID to close"),
     },
     async (args: { sessionId: string }) => {
       const result = await appController.handleMcpAction("close_session", args);
@@ -101,8 +107,9 @@ export function register(server: any, appController: any) {
   // ── reopen_session ─────────────────────────────────────────────
   server.tool(
     "reopen_session",
+    "Reopen a stopped session",
     {
-      sessionId: { type: "string", description: "Session ID to reopen" },
+      sessionId: z.string().describe("Session ID to reopen"),
     },
     async (args: { sessionId: string }) => {
       const result = await appController.handleMcpAction("reopen_session", args);
@@ -113,11 +120,12 @@ export function register(server: any, appController: any) {
   // ── organize_session ───────────────────────────────────────────
   server.tool(
     "organize_session",
+    "Update session pin, tag color, or move to another repo",
     {
-      sessionId: { type: "string", description: "Session ID" },
-      isPinned: { type: "boolean", description: "Pin or unpin" },
-      tagColor: { type: "string", description: "Tag color (red|orange|yellow|green|blue|purple|gray) or null" },
-      repoId: { type: "string", description: "Move to different repo" },
+      sessionId: z.string().describe("Session ID"),
+      isPinned: z.boolean().optional().describe("Pin or unpin"),
+      tagColor: z.string().optional().describe("Tag color (red|orange|yellow|green|blue|purple|gray) or null"),
+      repoId: z.string().optional().describe("Move to different repo"),
     },
     async (args: { sessionId: string; isPinned?: boolean; tagColor?: string | null; repoId?: string }) => {
       const result = await appController.handleMcpAction("organize_session", args);
@@ -128,9 +136,10 @@ export function register(server: any, appController: any) {
   // ── send_input ─────────────────────────────────────────────────
   server.tool(
     "send_input",
+    "Send text input to a session terminal",
     {
-      sessionId: { type: "string", description: "Session ID" },
-      text: { type: "string", description: "Text to send to terminal" },
+      sessionId: z.string().describe("Session ID"),
+      text: z.string().describe("Text to send to terminal"),
     },
     async (args: { sessionId: string; text: string }) => {
       appController.ptyHost.sendInput(args.sessionId, args.text + "\r");
@@ -141,8 +150,9 @@ export function register(server: any, appController: any) {
   // ── approve_action ─────────────────────────────────────────────
   server.tool(
     "approve_action",
+    "Approve a session blocker (tool use, plan, permission)",
     {
-      sessionId: { type: "string", description: "Session ID to approve" },
+      sessionId: z.string().describe("Session ID to approve"),
     },
     async (args: { sessionId: string }) => {
       const session = appController.state.sessions.find((s: any) => s.id === args.sessionId);
@@ -157,8 +167,9 @@ export function register(server: any, appController: any) {
   // ── deny_action ────────────────────────────────────────────────
   server.tool(
     "deny_action",
+    "Deny a session blocker",
     {
-      sessionId: { type: "string", description: "Session ID to deny" },
+      sessionId: z.string().describe("Session ID to deny"),
     },
     async (args: { sessionId: string }) => {
       const session = appController.state.sessions.find((s: any) => s.id === args.sessionId);
@@ -173,9 +184,10 @@ export function register(server: any, appController: any) {
   // ── search_sessions ────────────────────────────────────────────
   server.tool(
     "search_sessions",
+    "Search across session transcripts",
     {
-      repoId: { type: "string", description: "Repo ID to search within" },
-      query: { type: "string", description: "Search query" },
+      repoId: z.string().describe("Repo ID to search within"),
+      query: z.string().describe("Search query"),
     },
     async (args: { repoId: string; query: string }) => {
       const result = await appController.handleMcpAction("search_sessions", args);
@@ -186,6 +198,7 @@ export function register(server: any, appController: any) {
   // ── get_next_unread ────────────────────────────────────────────
   server.tool(
     "get_next_unread",
+    "Get the next session with unread output",
     {},
     async () => {
       const unread = appController.state.sessions

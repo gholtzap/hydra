@@ -1,26 +1,27 @@
 /**
  * MCP tools for workspace and repository management.
  */
+import { z } from "zod";
 
 function textResult(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
 export function register(server: any, appController: any) {
-  // ── list_workspaces ────────────────────────────────────────────
   server.tool(
     "list_workspaces",
+    "List all workspaces",
     {},
     async () => {
       return textResult(appController.state.workspaces);
     }
   );
 
-  // ── add_workspace ──────────────────────────────────────────────
   server.tool(
     "add_workspace",
+    "Add a workspace folder",
     {
-      path: { type: "string", description: "Absolute path to workspace folder" },
+      path: z.string().describe("Absolute path to workspace folder"),
     },
     async (args: { path: string }) => {
       const result = await appController.handleMcpAction("add_workspace", args);
@@ -28,11 +29,11 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── rescan_workspace ───────────────────────────────────────────
   server.tool(
     "rescan_workspace",
+    "Rescan workspace for new repos",
     {
-      workspaceId: { type: "string", description: "Workspace ID to rescan" },
+      workspaceId: z.string().describe("Workspace ID to rescan"),
     },
     async (args: { workspaceId: string }) => {
       const result = await appController.handleMcpAction("rescan_workspace", args);
@@ -40,11 +41,11 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── list_repos ─────────────────────────────────────────────────
   server.tool(
     "list_repos",
+    "List repos, optionally filtered by workspace",
     {
-      workspaceId: { type: "string", description: "Filter by workspace ID" },
+      workspaceId: z.string().optional().describe("Filter by workspace ID"),
     },
     async (args: { workspaceId?: string }) => {
       let repos = [...appController.state.repos];
@@ -53,11 +54,11 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── get_repo ───────────────────────────────────────────────────
   server.tool(
     "get_repo",
+    "Get repo details by ID",
     {
-      repoId: { type: "string", description: "Repo ID" },
+      repoId: z.string().describe("Repo ID"),
     },
     async (args: { repoId: string }) => {
       const repo = appController.state.repos.find((r: any) => r.id === args.repoId);
@@ -66,11 +67,11 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── list_files ─────────────────────────────────────────────────
   server.tool(
     "list_files",
+    "List file tree of a repo",
     {
-      repoId: { type: "string", description: "Repo ID" },
+      repoId: z.string().describe("Repo ID"),
     },
     async (args: { repoId: string }) => {
       const result = await appController.handleMcpAction("list_files", args);
@@ -78,12 +79,12 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── read_file ──────────────────────────────────────────────────
   server.tool(
     "read_file",
+    "Read file content from a repo",
     {
-      repoId: { type: "string", description: "Repo ID" },
-      path: { type: "string", description: "Relative file path within repo" },
+      repoId: z.string().describe("Repo ID"),
+      path: z.string().describe("Relative file path within repo"),
     },
     async (args: { repoId: string; path: string }) => {
       const result = await appController.handleMcpAction("read_file", args);
@@ -91,13 +92,13 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── set_build_run_config ───────────────────────────────────────
   server.tool(
     "set_build_run_config",
+    "Set build and run commands for a repo",
     {
-      repoId: { type: "string", description: "Repo ID" },
-      buildCommand: { type: "string", description: "Build command" },
-      runCommand: { type: "string", description: "Run command" },
+      repoId: z.string().describe("Repo ID"),
+      buildCommand: z.string().describe("Build command"),
+      runCommand: z.string().describe("Run command"),
     },
     async (args: { repoId: string; buildCommand: string; runCommand: string }) => {
       const result = await appController.handleMcpAction("set_build_run_config", args);
@@ -105,11 +106,11 @@ export function register(server: any, appController: any) {
     }
   );
 
-  // ── build_and_run_app ──────────────────────────────────────────
   server.tool(
     "build_and_run_app",
+    "Execute build and run for a repo",
     {
-      repoId: { type: "string", description: "Repo ID" },
+      repoId: z.string().describe("Repo ID"),
     },
     async (args: { repoId: string }) => {
       const result = await appController.handleMcpAction("build_and_run_app", args);

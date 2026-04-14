@@ -740,6 +740,98 @@ class AppController {
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
   }
 
+  /**
+   * Dispatch MCP tool mutations to existing controller methods.
+   * This avoids duplicating IPC handler logic — every mutation tool
+   * routes through here to the same method the renderer uses.
+   */
+  async handleMcpAction(action: string, args: any): Promise<any> {
+    switch (action) {
+      // Session mutations
+      case "create_session":
+        return this.createSession(args.repoId, args.autoLaunch ?? true);
+      case "rename_session":
+        return this.renameSession(args.sessionId, args.title);
+      case "close_session":
+        return this.closeSession(args.sessionId);
+      case "reopen_session":
+        return this.reopenSession(args.sessionId);
+      case "organize_session":
+        return this.updateSessionOrganization(args.sessionId, {
+          isPinned: args.pin,
+          tagColor: args.tagColor,
+          repoID: args.repoId,
+        });
+      case "search_sessions":
+        return this.querySessionFiles(args.repoId, args.query);
+
+      // Workspace / repo mutations
+      case "add_workspace":
+        return this.openWorkspaceFolder();
+      case "rescan_workspace":
+        return this.rescanWorkspace(args.workspaceId);
+      case "set_build_run_config":
+        return this.updateRepoAppLaunchConfig(args.repoId, {
+          buildCommand: args.buildCommand,
+          runCommand: args.runCommand,
+        });
+      case "build_and_run_app":
+        return this.buildAndRunApp(args.repoId);
+      case "list_files": {
+        const repo = this.repoById(args.repoId);
+        if (!repo) return null;
+        return { path: repo.path, tree: await buildFileTree(repo.path, repo.path, 0) };
+      }
+      case "read_file": {
+        const filePath = this.assertRepoFilePath(args.repoId, args.path);
+        const stats = await fsp.stat(filePath);
+        if (stats.size > 512 * 1024) return { content: null, tooLarge: true, size: stats.size };
+        const buffer = await fsp.readFile(filePath);
+        return { content: buffer.toString("utf-8"), tooLarge: false };
+      }
+
+      // Preferences
+      case "update_preferences":
+        return this.updatePreferences(args.patch ?? args);
+
+      // Settings files
+      case "get_settings_context":
+        return buildClaudeSettingsContext(this.repoById(args.repoId) || null);
+      case "load_settings_file":
+        return readClaudeSettingsFile(args.filePath, this.settingsRepoPaths(args.repoId));
+      case "save_settings_file":
+        await writeClaudeSettingsFile(args.filePath, args.content, this.settingsRepoPaths(args.repoId));
+        return { ok: true };
+
+      // Wiki
+      case "get_wiki":
+        return this.projectWikiContext(args.repoId);
+      case "read_wiki_page":
+        return this.projectWikiFile(args.repoId, args.path);
+      case "toggle_wiki":
+        return this.toggleProjectWiki(args.repoId, args.enabled);
+
+      // Marketplace
+      case "get_skill_details":
+        return getMarketplaceSkillDetails(args);
+      case "inspect_skill_url":
+        return inspectMarketplaceGitHubUrl(args);
+      case "install_skill":
+        return installMarketplaceSkill(args);
+
+      // Monitoring
+      case "get_port_status":
+        return inspectTrackedPorts();
+      case "launch_ephemeral_tool":
+        return this.createEphemeralToolSession(args.toolId, args.repoId);
+      case "close_ephemeral_tool":
+        return this.closeEphemeralToolSession(args.toolId, args.sessionId);
+
+      default:
+        return { error: `Unknown MCP action: ${action}` };
+    }
+  }
+
   snapshot() {
     return structuredClone({
       ...this.state,

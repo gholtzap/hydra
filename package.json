@@ -13,6 +13,7 @@
     "dev": "npm run build && electron ."
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "node-pty": "^1.0.0"
   },
   "devDependencies": {

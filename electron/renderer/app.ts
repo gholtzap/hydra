@@ -25,7 +25,7 @@ const api = window.claudeWorkspace;
 let sessionSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 const SECTION_ORDER = ["sidebar", "sidebar-drawer", "main", "terminal"] as const;
 type SectionId = (typeof SECTION_ORDER)[number];
-const MAX_VISIBLE_SESSION_PANES = 4;
+const MAX_VISIBLE_SESSION_PANES = 9;
 
 // ---------------------------------------------------------------------------
 // Keybinding configuration
@@ -9278,7 +9278,12 @@ function buildGridWorkspaceLayout(sessionIds: string[]) {
     return buildAxisWorkspaceLayout(visibleIds, "row");
   }
 
-  const rows = [visibleIds.slice(0, 2), visibleIds.slice(2)];
+  const cols = Math.ceil(Math.sqrt(visibleIds.length));
+  const rows: string[][] = [];
+  for (let i = 0; i < visibleIds.length; i += cols) {
+    rows.push(visibleIds.slice(i, i + cols));
+  }
+
   const rowLayouts = rows
     .filter((row) => row.length)
     .map((row) => buildAxisWorkspaceLayout(row, "row"))

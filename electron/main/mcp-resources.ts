@@ -94,6 +94,30 @@ export function registerResources(server: any, appController: any) {
     }
   );
 
+  // hydra://repos/{id}/wiki — wiki tree for a repo
+  server.registerResource(
+    "repo-wiki",
+    new ResourceTemplate("hydra://repos/{id}/wiki", {
+      list: async () => ({
+        resources: appController.state.repos.map((r: any) => ({
+          uri: `hydra://repos/${r.id}/wiki`,
+          name: `${r.name} - Wiki`,
+        })),
+      }),
+    }),
+    { title: "Repo Wiki", description: "Wiki tree and content for a repository", mimeType: "application/json" },
+    async (uri: URL, { id }: { id: string }) => {
+      const result = await appController.handleMcpAction("get_wiki", { repoId: id });
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: "application/json",
+          text: JSON.stringify(result ?? { error: "Wiki not available" }),
+        }],
+      };
+    }
+  );
+
   // hydra://agents — available agent definitions
   server.registerResource(
     "agents",

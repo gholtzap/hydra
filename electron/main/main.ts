@@ -178,7 +178,7 @@ const { resolveCommandPath } = require("./command-path") as {
   resolveCommandPath: (command: string) => Promise<string | null>;
 };
 const { startMcpServer } = require("./mcp-server") as {
-  startMcpServer: (appController: InstanceType<typeof AppController>) => Promise<unknown>;
+  startMcpServer: (appController: InstanceType<typeof AppController>) => Promise<any>;
 };
 
 app.setName("ClaudeWorkspace");
@@ -310,6 +310,7 @@ class AppController {
   saveChain: Promise<void>;
   knownPlanFiles: Set<string>;
   plansDirWatcher: ReturnType<typeof fs.watch> | null;
+  mcpServer: any;
 
   constructor() {
     this.state = emptyState();
@@ -330,6 +331,7 @@ class AppController {
     this.saveChain = Promise.resolve();
     this.knownPlanFiles = new Set();
     this.plansDirWatcher = null;
+    this.mcpServer = null;
     this.ptyHost = new PtyHostClient();
     this.ptyHost.onMessage((message) => this.handlePtyMessage(message));
   }
@@ -764,10 +766,16 @@ class AppController {
         });
       case "search_sessions":
         return this.querySessionFiles(args.repoId, args.query);
+      case "resume_session":
+        return this.resumeFromSearchResult(
+          args.repoId,
+          args.source || "claude",
+          args.externalSessionId
+        );
 
       // Workspace / repo mutations
       case "add_workspace":
-        return this.openWorkspaceFolder();
+        return this.addWorkspace(args.path);
       case "rescan_workspace":
         return this.rescanWorkspace(args.workspaceId);
       case "set_build_run_config":
@@ -859,11 +867,14 @@ class AppController {
   }
 
   broadcastState() {
-    if (!this.window || this.window.isDestroyed()) {
-      return;
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send("state:changed", this.snapshot());
     }
-
-    this.window.webContents.send("state:changed", this.snapshot());
+    // Notify MCP subscribers
+    if (this.mcpServer) {
+      this.mcpServer.notifyResourceChanged("hydra://state");
+      this.mcpServer.notifyResourceChanged("hydra://sessions");
+    }
   }
 
   sendSessionUpdated(sessionId) {
@@ -879,15 +890,18 @@ class AppController {
 
   sendSessionOutput(sessionId, data) {
     const session = this.sessionById(sessionId);
-    if (!this.window || this.window.isDestroyed() || !session) {
-      return;
+    if (this.window && !this.window.isDestroyed() && session) {
+      this.window.webContents.send("session:output", {
+        sessionId,
+        data,
+        session: summarizeSession(session)
+      });
     }
-
-    this.window.webContents.send("session:output", {
-      sessionId,
-      data,
-      session: summarizeSession(session)
-    });
+    // Notify MCP subscribers about session output
+    if (this.mcpServer) {
+      this.mcpServer.notifyResourceChanged(`hydra://sessions/${sessionId}`);
+      this.mcpServer.notifyResourceChanged(`hydra://sessions/${sessionId}/transcript`);
+    }
   }
 
   sendCommand(command, payload = {}) {
@@ -909,8 +923,13 @@ class AppController {
   }
 
   sendPlanDetected(sessionId: string, markdown: string) {
-    if (!this.window || this.window.isDestroyed()) return;
-    this.window.webContents.send("plan:detected", { sessionId, markdown });
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send("plan:detected", { sessionId, markdown });
+    }
+    // Notify MCP subscribers about plan
+    if (this.mcpServer) {
+      this.mcpServer.notifyResourceChanged(`hydra://sessions/${sessionId}`);
+    }
   }
 
   watchPlansDir() {
@@ -2433,7 +2452,9 @@ app.whenReady().then(async () => {
   controller.setupIpc();
   controller.setupMenu();
   controller.createWindow();
-  startMcpServer(controller).catch((err) =>
+  startMcpServer(controller).then((server) => {
+    controller.mcpServer = server;
+  }).catch((err) =>
     console.error("[MCP] Server failed to start:", err)
   );
 });

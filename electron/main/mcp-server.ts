@@ -4,6 +4,10 @@
  * Exposes Hydra's full functionality over the MCP protocol via an HTTP
  * endpoint on localhost:4141. External MCP clients (Discord bot, voice
  * agents, etc.) connect via SSE / Streamable HTTP transport.
+ *
+ * Each client connection gets its own McpServer + transport instance so
+ * multiple clients (Inspector, Discord bot, etc.) can connect simultaneously
+ * without the "Server already initialized" error.
  */
 
 import type { IncomingMessage, ServerResponse, Server as HttpServer } from "node:http";
@@ -24,75 +28,75 @@ const {
   StreamableHTTPServerTransport: typeof import("@modelcontextprotocol/sdk/server/streamableHttp.js").StreamableHTTPServerTransport;
 };
 
-const { InternalApi } = require("./internal-api.js") as {
-  InternalApi: typeof import("./internal-api.js").InternalApi;
-};
-
 const MCP_PORT = 4141;
+
+interface SessionEntry {
+  server: InstanceType<typeof McpServer>;
+  transport: InstanceType<typeof StreamableHTTPServerTransport>;
+}
 
 export class HydraMcpServer {
   private appController: AppControllerHandle;
-  private mcpServer: InstanceType<typeof McpServer>;
   private httpServer: HttpServer | null = null;
-  private transport: InstanceType<typeof StreamableHTTPServerTransport> | null = null;
-  private api: InstanceType<typeof InternalApi>;
+  /** Active sessions keyed by mcp-session-id */
+  private sessions = new Map<string, SessionEntry>();
 
   constructor(appController: AppControllerHandle) {
     this.appController = appController;
-    this.api = new InternalApi(appController);
-
-    this.mcpServer = new McpServer(
-      { name: "hydra", version: "1.0.0" },
-      {
-        capabilities: {
-          tools: {},
-          resources: {},
-          prompts: {},
-        },
-      }
-    );
-
-    this.registerTools();
-    this.registerResources();
-    this.registerPrompts();
   }
 
-  // ── Tool registration ───────────────────────────────────────────
+  // ── Per-session server factory ─────────────────────────────────
 
-  private registerTools(): void {
+  private createSessionServer(): SessionEntry {
+    const server = new McpServer(
+      { name: "hydra", version: "1.0.0" },
+      { capabilities: { tools: {}, resources: {}, prompts: {} } }
+    );
+
     const { registerAllTools } = require("./mcp-tools/index.js") as {
       registerAllTools: (server: any, appController: any) => void;
     };
-    registerAllTools(this.mcpServer, this.appController);
-  }
-
-  // ── Resource registration ─────────────────────────────────────
-
-  private registerResources(): void {
     const { registerResources } = require("./mcp-resources.js") as {
       registerResources: (server: any, appController: any) => void;
     };
-    registerResources(this.mcpServer, this.appController);
-  }
-
-  // ── Prompt registration ───────────────────────────────────────
-
-  private registerPrompts(): void {
     const { registerPrompts } = require("./mcp-prompts.js") as {
       registerPrompts: (server: any, appController: any) => void;
     };
-    registerPrompts(this.mcpServer, this.appController);
+
+    registerAllTools(server, this.appController);
+    registerResources(server, this.appController);
+    registerPrompts(server, this.appController);
+
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+    });
+
+    return { server, transport };
+  }
+
+  // ── Notifications ───────────────────────────────────────────
+
+  /** Emit a resource-updated notification to all active sessions. */
+  notifyResourceChanged(uri: string): void {
+    for (const { server } of this.sessions.values()) {
+      try {
+        const lowLevel = (server as any).server;
+        if (lowLevel && typeof lowLevel.sendResourceUpdated === "function") {
+          lowLevel.sendResourceUpdated({ uri });
+        }
+      } catch {
+        // Silently ignore — no subscribers or session closing
+      }
+    }
+  }
+
+  get isRunning(): boolean {
+    return this.httpServer !== null;
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────
 
   async start(): Promise<void> {
-    this.transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-    });
-
-    await this.mcpServer.connect(this.transport);
-
     this.httpServer = http.createServer(
       async (req: IncomingMessage, res: ServerResponse) => {
         // CORS headers for local clients
@@ -111,7 +115,7 @@ export class HydraMcpServer {
 
         if (url === "/mcp" || url.startsWith("/mcp?")) {
           try {
-            await this.transport!.handleRequest(req, res);
+            await this.handleMcpRequest(req, res);
           } catch (err) {
             console.error("[MCP] Transport error:", err);
             if (!res.headersSent) {
@@ -125,7 +129,12 @@ export class HydraMcpServer {
         // Health check endpoint
         if (url === "/health" && req.method === "GET") {
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ status: "ok", server: "hydra-mcp", version: "1.0.0" }));
+          res.end(JSON.stringify({
+            status: "ok",
+            server: "hydra-mcp",
+            version: "1.0.0",
+            sessions: this.sessions.size,
+          }));
           return;
         }
 
@@ -153,12 +162,46 @@ export class HydraMcpServer {
     });
   }
 
-  async stop(): Promise<void> {
-    try {
-      await this.mcpServer.close();
-    } catch {
-      // Ignore close errors
+  private async handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+    // DELETE = client closing session
+    if (req.method === "DELETE" && sessionId) {
+      const entry = this.sessions.get(sessionId);
+      if (entry) {
+        try { await entry.server.close(); } catch { /* ignore */ }
+        this.sessions.delete(sessionId);
+      }
+      res.writeHead(204);
+      res.end();
+      return;
     }
+
+    // Existing session
+    if (sessionId && this.sessions.has(sessionId)) {
+      await this.sessions.get(sessionId)!.transport.handleRequest(req, res);
+      return;
+    }
+
+    // New session (no session ID = initialize request)
+    const entry = this.createSessionServer();
+    await entry.server.connect(entry.transport);
+    await entry.transport.handleRequest(req, res);
+
+    // After the initialize handshake the transport has a sessionId — store it
+    const newId = (entry.transport as any).sessionId as string | undefined;
+    if (newId) {
+      this.sessions.set(newId, entry);
+      console.log(`[MCP] New session: ${newId} (total: ${this.sessions.size})`);
+    }
+  }
+
+  async stop(): Promise<void> {
+    for (const { server } of this.sessions.values()) {
+      try { await server.close(); } catch { /* ignore */ }
+    }
+    this.sessions.clear();
+
     if (this.httpServer) {
       return new Promise<void>((resolve) => {
         this.httpServer!.close(() => {

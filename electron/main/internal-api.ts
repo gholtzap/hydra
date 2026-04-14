@@ -27,6 +27,7 @@ export interface AppControllerHandle {
   snapshot(): AppStateSnapshot;
   sessionById(sessionId: string): SessionRecord | null;
   broadcastState(): void;
+  handleMcpAction(action: string, args: any): Promise<any>;
 }
 
 export type SessionFilters = {
@@ -103,7 +104,86 @@ export class InternalApi {
     return this.ctrl.state.repos;
   }
 
-  // ── Mutation stubs ────────────────────────────────────────────────
-  // These will be filled in as tool files are implemented.
-  // Tools call these via the appController reference passed through.
+  // ── Mutations ────────────────────────────────────────────────────
+  // Typed wrappers around handleMcpAction for type-safe access.
+
+  async createSession(repoId: string, options?: { agentId?: string; prompt?: string }): Promise<any> {
+    return this.ctrl.handleMcpAction("create_session", { repoId, ...options });
+  }
+
+  async renameSession(sessionId: string, title: string): Promise<any> {
+    return this.ctrl.handleMcpAction("rename_session", { sessionId, title });
+  }
+
+  async closeSession(sessionId: string): Promise<any> {
+    return this.ctrl.handleMcpAction("close_session", { sessionId });
+  }
+
+  async reopenSession(sessionId: string): Promise<any> {
+    return this.ctrl.handleMcpAction("reopen_session", { sessionId });
+  }
+
+  async organizeSession(sessionId: string, patch: { isPinned?: boolean; tagColor?: string | null; repoId?: string }): Promise<any> {
+    return this.ctrl.handleMcpAction("organize_session", { sessionId, ...patch });
+  }
+
+  async searchSessions(repoId: string, query: string): Promise<any> {
+    return this.ctrl.handleMcpAction("search_sessions", { repoId, query });
+  }
+
+  async resumeSession(repoId: string, externalSessionId: string, source?: string): Promise<any> {
+    return this.ctrl.handleMcpAction("resume_session", { repoId, externalSessionId, source });
+  }
+
+  async addWorkspace(path: string): Promise<any> {
+    return this.ctrl.handleMcpAction("add_workspace", { path });
+  }
+
+  async rescanWorkspace(workspaceId: string): Promise<any> {
+    return this.ctrl.handleMcpAction("rescan_workspace", { workspaceId });
+  }
+
+  async setBuildRunConfig(repoId: string, buildCommand: string, runCommand: string): Promise<any> {
+    return this.ctrl.handleMcpAction("set_build_run_config", { repoId, buildCommand, runCommand });
+  }
+
+  async buildAndRunApp(repoId: string): Promise<any> {
+    return this.ctrl.handleMcpAction("build_and_run_app", { repoId });
+  }
+
+  async updatePreferences(patch: Record<string, any>): Promise<any> {
+    return this.ctrl.handleMcpAction("update_preferences", { patch });
+  }
+
+  async loadSettingsFile(repoId: string, filePath: string): Promise<any> {
+    return this.ctrl.handleMcpAction("load_settings_file", { repoId, filePath });
+  }
+
+  async saveSettingsFile(repoId: string, filePath: string, content: string): Promise<any> {
+    return this.ctrl.handleMcpAction("save_settings_file", { repoId, filePath, content });
+  }
+
+  async getSettingsContext(repoId: string): Promise<any> {
+    return this.ctrl.handleMcpAction("get_settings_context", { repoId });
+  }
+
+  async getWiki(repoId: string): Promise<any> {
+    return this.ctrl.handleMcpAction("get_wiki", { repoId });
+  }
+
+  async readWikiPage(repoId: string, pagePath: string): Promise<any> {
+    return this.ctrl.handleMcpAction("read_wiki_page", { repoId, path: pagePath });
+  }
+
+  async toggleWiki(repoId: string, enabled: boolean): Promise<any> {
+    return this.ctrl.handleMcpAction("toggle_wiki", { repoId, enabled });
+  }
+
+  async listFiles(repoId: string): Promise<any> {
+    return this.ctrl.handleMcpAction("list_files", { repoId });
+  }
+
+  async readFile(repoId: string, filePath: string): Promise<any> {
+    return this.ctrl.handleMcpAction("read_file", { repoId, path: filePath });
+  }
 }

@@ -25,6 +25,16 @@ function textResult(data: unknown) {
 }
 
 export function register(server: any, appController: any) {
+  // ── get_app_state ───────────────────────────────────────────────
+  server.tool(
+    "get_app_state",
+    "Get full app state snapshot (workspaces, repos, sessions, preferences)",
+    {},
+    async () => {
+      return textResult(appController.snapshot());
+    }
+  );
+
   // ── list_sessions ──────────────────────────────────────────────
   server.tool(
     "list_sessions",
@@ -210,6 +220,21 @@ export function register(server: any, appController: any) {
         });
       const next = unread[0] ?? null;
       return textResult({ sessionId: next?.id ?? null, unreadTotal: unread.length });
+    }
+  );
+
+  // ── resume_session ──────────────────────────────────────────────
+  server.tool(
+    "resume_session",
+    "Resume a session from an existing Claude or Codex session",
+    {
+      repoId: z.string().describe("Repo ID to resume in"),
+      source: z.string().optional().describe("Source agent: 'claude' or 'codex' (defaults to 'claude')"),
+      externalSessionId: z.string().describe("External session ID to resume from"),
+    },
+    async (args: { repoId: string; source?: string; externalSessionId: string }) => {
+      const result = await appController.handleMcpAction("resume_session", args);
+      return textResult(result);
     }
   );
 }

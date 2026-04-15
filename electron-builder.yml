@@ -7,6 +7,9 @@ directories:
 files:
   - dist-electron/**/*
 
+asarUnpack:
+  - node_modules/@tokscale/cli-*/bin/*
+
 extraResources:
   - from: dist-electron/main/pty_host.py
     to: helpers/pty_host.py

@@ -24,7 +24,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "electron-updater": "^6.8.3",
-    "node-pty": "^1.0.0"
+    "node-pty": "^1.0.0",
+    "tokscale": "^2.0.19"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",

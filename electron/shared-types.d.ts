@@ -205,6 +205,7 @@ export type AppStateSnapshot = {
   sessions: SessionSummary[];
   preferences: AppPreferences;
   lazygitInstalled: boolean;
+  tokscaleInstalled: boolean;
 };
 
 export type EphemeralToolId = "lazygit" | "tokscale";

@@ -159,8 +159,13 @@ const { resolveKeybindings } = require("./keybindings");
 const { PtyHostClient } = require("./pty-host-client") as {
   PtyHostClient: PtyHostClientConstructor;
 };
-const { resolveBundledHelperPath } = require("./runtime-paths") as {
+const { resolveBundledHelperPath, resolveBundledNodeModulePath } = require("./runtime-paths") as {
   resolveBundledHelperPath: (fileName: string) => string;
+  resolveBundledNodeModulePath: (
+    packageName: string,
+    relativePath: string,
+    options?: { unpacked?: boolean }
+  ) => string | null;
 };
 const {
   disableWiki,
@@ -271,6 +276,42 @@ function assertTrustedGitHubUrl(input: unknown) {
   return parsed.toString();
 }
 
+function tokscaleBinaryPackageName(): string | null {
+  const arch = process.arch;
+
+  if (process.platform === "darwin") {
+    if (arch === "arm64") return "@tokscale/cli-darwin-arm64";
+    if (arch === "x64") return "@tokscale/cli-darwin-x64";
+    return null;
+  }
+
+  if (process.platform === "linux") {
+    if (arch === "arm64") return "@tokscale/cli-linux-arm64-gnu";
+    if (arch === "x64") return "@tokscale/cli-linux-x64-gnu";
+    return null;
+  }
+
+  if (process.platform === "win32") {
+    if (arch === "arm64") return "@tokscale/cli-win32-arm64-msvc";
+    if (arch === "x64") return "@tokscale/cli-win32-x64-msvc";
+    return null;
+  }
+
+  return null;
+}
+
+function resolveTokscaleBinaryPath(): string | null {
+  const packageName = tokscaleBinaryPackageName();
+  if (!packageName) {
+    return null;
+  }
+
+  const binaryName = process.platform === "win32" ? "tokscale.exe" : "tokscale";
+  return resolveBundledNodeModulePath(packageName, path.join("bin", binaryName), {
+    unpacked: true
+  });
+}
+
 async function buildFileTree(rootPath: string, currentPath: string, depth: number): Promise<FileTreeNode[]> {
   if (depth >= 5) {
     return [];
@@ -336,7 +377,7 @@ class AppController {
   ptyHost: PtyHostClientInstance;
   ephemeralSessions: Map<string, EphemeralSessionRecord>;
   lazygitPath: string | null;
-  npxPath: string | null;
+  tokscalePath: string | null;
   saveChain: Promise<void>;
   knownPlanFiles: Set<string>;
   plansDirWatcher: ReturnType<typeof fs.watch> | null;
@@ -357,7 +398,7 @@ class AppController {
     this.queuedSessionLaunches = new Map();
     this.ephemeralSessions = new Map();
     this.lazygitPath = null;
-    this.npxPath = null;
+    this.tokscalePath = null;
     this.saveChain = Promise.resolve();
     this.knownPlanFiles = new Set();
     this.plansDirWatcher = null;
@@ -367,15 +408,14 @@ class AppController {
   }
 
   async initialize() {
-    const [state, lazygitPath, npxPath] = await Promise.all([
+    const [state, lazygitPath] = await Promise.all([
       loadState(),
-      resolveCommandPath("lazygit"),
-      resolveCommandPath(process.platform === "win32" ? "npx.cmd" : "npx")
+      resolveCommandPath("lazygit")
     ]);
 
     this.state = state;
     this.lazygitPath = lazygitPath;
-    this.npxPath = npxPath;
+    this.tokscalePath = resolveTokscaleBinaryPath();
     this.normalizeFolderRepos();
     this.repairStoredTranscripts();
     this.watchPlansDir();
@@ -912,6 +952,7 @@ class AppController {
     return structuredClone({
       ...this.state,
       lazygitInstalled: this.lazygitPath !== null,
+      tokscaleInstalled: this.tokscalePath !== null,
       workspaces: [...this.state.workspaces].sort((left, right) =>
         left.name.localeCompare(right.name)
       ),
@@ -1718,7 +1759,7 @@ class AppController {
     }
 
     if (toolId === "tokscale") {
-      return this.npxPath ? [this.npxPath, "--yes", "tokscale@latest", "tui"] : null;
+      return this.tokscalePath ? [this.tokscalePath, "tui"] : null;
     }
 
     return null;

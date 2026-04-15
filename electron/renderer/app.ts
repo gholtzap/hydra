@@ -300,7 +300,8 @@ const state: AppStateSnapshot = {
   repos: [] as RepoSnapshot[],
   sessions: [] as SessionSummary[],
   preferences: { ...INITIAL_PREFERENCES },
-  lazygitInstalled: false
+  lazygitInstalled: false,
+  tokscaleInstalled: false
 };
 
 type UiState = {
@@ -1415,6 +1416,7 @@ function replaceState(nextState) {
   state.sessions = nextState.sessions || [];
   state.preferences = nextState.preferences || {};
   state.lazygitInstalled = !!nextState.lazygitInstalled;
+  state.tokscaleInstalled = !!nextState.tokscaleInstalled;
   applyThemePreferences();
   refreshTerminalThemes();
   if (ui.renamingSessionId && !state.sessions.some((session) => session.id === ui.renamingSessionId)) {
@@ -7707,14 +7709,25 @@ function overlayHost(toolId: EphemeralToolId): HTMLElement {
 }
 
 function unavailableEphemeralToolMarkup(toolId: EphemeralToolId): string | null {
-  if (toolId !== "lazygit" || state.lazygitInstalled) {
-    return null;
+  if (toolId === "lazygit") {
+    if (state.lazygitInstalled) {
+      return null;
+    }
+
+    return `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-family:var(--font-mono);font-size:14px;flex-direction:column;gap:8px;">
+      <span>lazygit is not installed. Install lazygit and launch app again.</span>
+      <code style="color:var(--text);background:var(--surface);padding:4px 10px;border-radius:6px;font-size:13px;">brew install lazygit</code>
+    </div>`;
   }
 
-  return `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-family:var(--font-mono);font-size:14px;flex-direction:column;gap:8px;">
-    <span>lazygit is not installed. Install lazygit and launch app again.</span>
-    <code style="color:var(--text);background:var(--surface);padding:4px 10px;border-radius:6px;font-size:13px;">brew install lazygit</code>
-  </div>`;
+  if (toolId === "tokscale" && !state.tokscaleInstalled) {
+    return `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-family:var(--font-mono);font-size:14px;flex-direction:column;gap:8px;">
+      <span>Tokscale is unavailable in this Hydra build.</span>
+      <span>Reinstall or update Hydra so the bundled Tokscale binary is included.</span>
+    </div>`;
+  }
+
+  return null;
 }
 
 function mountEphemeralToolTerminal(

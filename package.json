@@ -12,7 +12,6 @@
     "build:assets": "mkdir -p dist-electron/main dist-electron/renderer/vendor && cp electron/main/pty_host.py dist-electron/main/pty_host.py && cp electron/main/app-launch-runner.sh dist-electron/main/app-launch-runner.sh && chmod +x dist-electron/main/app-launch-runner.sh && cp electron/renderer/index.html dist-electron/renderer/index.html && cp electron/renderer/app.css dist-electron/renderer/app.css && cp electron/renderer/vendor/xterm.css dist-electron/renderer/vendor/xterm.css && cp electron/renderer/vendor/xterm.js dist-electron/renderer/vendor/xterm.js && cp electron/renderer/vendor/addon-fit.js dist-electron/renderer/vendor/addon-fit.js",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
-<<<<<<< HEAD
     "pack": "npm run build && npm run build:icon && node scripts/run-electron-builder.mjs --dir",
     "dist": "npm run build && npm run build:icon && node scripts/run-electron-builder.mjs",
     "dist:mac": "npm run build && npm run build:icon && node scripts/run-electron-builder.mjs --mac",
@@ -21,11 +20,6 @@
     "release:minor": "node scripts/release.mjs minor",
     "release:major": "node scripts/release.mjs major",
     "release:dry-run": "node scripts/release.mjs --dry-run"
-=======
-    "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac"
->>>>>>> ceebce1 (Replace generated icon with hydra.icns)
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

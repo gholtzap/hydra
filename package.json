@@ -11,10 +11,13 @@
     "build:assets": "mkdir -p dist-electron/main dist-electron/renderer/vendor && cp electron/main/pty_host.py dist-electron/main/pty_host.py && cp electron/main/app-launch-runner.sh dist-electron/main/app-launch-runner.sh && chmod +x dist-electron/main/app-launch-runner.sh && cp electron/renderer/index.html dist-electron/renderer/index.html && cp electron/renderer/app.css dist-electron/renderer/app.css && cp electron/renderer/vendor/xterm.css dist-electron/renderer/vendor/xterm.css && cp electron/renderer/vendor/xterm.js dist-electron/renderer/vendor/xterm.js && cp electron/renderer/vendor/addon-fit.js dist-electron/renderer/vendor/addon-fit.js",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
-    "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac",
+    "pack": "npm run build && node scripts/run-electron-builder.mjs --dir",
+    "dist": "npm run build && node scripts/run-electron-builder.mjs",
+    "dist:mac": "npm run build && node scripts/run-electron-builder.mjs --mac",
     "release": "node scripts/release.mjs",
+    "release:patch": "node scripts/release.mjs patch",
+    "release:minor": "node scripts/release.mjs minor",
+    "release:major": "node scripts/release.mjs major",
     "release:dry-run": "node scripts/release.mjs --dry-run"
   },
   "dependencies": {

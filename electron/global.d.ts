@@ -27,11 +27,12 @@ type Unsubscribe = () => void;
 
 type ClaudePathRevealRequest =
   | { scope: "repo-file"; repoId: string; filePath: string }
+  | { scope: "repo-relative-file"; repoId: string; relativePath: string }
   | { scope: "settings-file"; repoId: string | null; filePath: string }
   | { scope: "session-search-result"; repoId: string; filePath: string };
 
 type ClaudeExternalUrlRequest = {
-  scope: "marketplace-source";
+  scope: "github-url";
   url: string;
 };
 

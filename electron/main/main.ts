@@ -42,7 +42,7 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path");
 const { randomUUID, randomBytes } = require("node:crypto");
-const { pathToFileURL, URL } = require("node:url");
+const { fileURLToPath, pathToFileURL, URL } = require("node:url");
 const {
   app,
   BrowserWindow,
@@ -209,6 +209,7 @@ const SESSION_TAG_COLORS = new Set([
   "gray"
 ]);
 const SESSION_ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
+const TRUSTED_RENDERER_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "renderer", "index.html"));
 const AGENT_LABELS: Record<AgentId, string> = Object.fromEntries(
   AGENT_DEFINITIONS.map((agent) => [agent.id, agent.label])
 ) as Record<AgentId, string>;
@@ -230,7 +231,24 @@ function isPathWithinRoot(filePath: string, rootPath: string) {
   );
 }
 
-function assertMarketplaceSourceUrl(input: unknown) {
+function normalizeFileUrlPath(input: string): string | null {
+  try {
+    const parsed = new URL(input);
+    if (parsed.protocol !== "file:") {
+      return null;
+    }
+
+    return path.resolve(fileURLToPath(parsed));
+  } catch {
+    return null;
+  }
+}
+
+function isTrustedRendererUrl(input: string) {
+  return normalizeFileUrlPath(input) === TRUSTED_RENDERER_ENTRY_PATH;
+}
+
+function assertTrustedGitHubUrl(input: unknown) {
   const value = typeof input === "string" ? input.trim() : "";
   if (!value) {
     throw new Error("URL is required.");
@@ -384,7 +402,20 @@ class AppController {
       this.window = null;
     });
 
-    window.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+    const denyUnexpectedNavigation = (
+      event: { preventDefault: () => void },
+      navigationUrl: string
+    ) => {
+      if (!isTrustedRendererUrl(navigationUrl)) {
+        event.preventDefault();
+      }
+    };
+
+    window.webContents.on("will-navigate", denyUnexpectedNavigation);
+    window.webContents.on("will-redirect", denyUnexpectedNavigation);
+    window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+
+    window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
   }
 
   setupIpc() {
@@ -577,10 +608,35 @@ class AppController {
     return normalizedFilePath;
   }
 
+  assertRepoRelativeFilePath(repoId, relativePath) {
+    const repo = this.repoById(repoId);
+    if (!repo?.path) {
+      throw new Error("Project not found.");
+    }
+
+    const value = typeof relativePath === "string" ? relativePath.trim() : "";
+    if (!value) {
+      throw new Error("File path is required.");
+    }
+
+    const normalizedRepoPath = path.resolve(repo.path);
+    const normalizedRelativePath = value.replace(/^[/\\]+/, "");
+    const normalizedFilePath = path.resolve(normalizedRepoPath, normalizedRelativePath);
+    if (!isPathWithinRoot(normalizedFilePath, normalizedRepoPath)) {
+      throw new Error("File access denied for the requested path.");
+    }
+
+    return normalizedFilePath;
+  }
+
   async revealTrustedPath(payload) {
     switch (payload?.scope) {
       case "repo-file":
         return shell.showItemInFolder(this.assertRepoFilePath(payload.repoId, payload.filePath));
+      case "repo-relative-file":
+        return shell.showItemInFolder(
+          this.assertRepoRelativeFilePath(payload.repoId, payload.relativePath)
+        );
       case "settings-file":
         return shell.showItemInFolder(
           assertReadableClaudeSettingsFilePath(payload.filePath, this.settingsRepoPaths(payload.repoId))
@@ -603,8 +659,8 @@ class AppController {
 
   openTrustedExternalUrl(payload) {
     switch (payload?.scope) {
-      case "marketplace-source":
-        return shell.openExternal(assertMarketplaceSourceUrl(payload.url));
+      case "github-url":
+        return shell.openExternal(assertTrustedGitHubUrl(payload.url));
       default:
         throw new Error("Unsupported external URL request.");
     }

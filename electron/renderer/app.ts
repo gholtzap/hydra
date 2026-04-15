@@ -641,6 +641,16 @@ type MarketplaceSkillDetails = MarketplaceSkillSummary & {
   };
 };
 
+type MarkdownRenderContext =
+  | { kind: "plain"; repoId: string | null }
+  | { kind: "wiki"; repoId: string; currentPath: string }
+  | { kind: "marketplace"; source: MarketplaceSkillSource };
+
+type ResolvedMarkdownLink =
+  | { kind: "github-url"; url: string }
+  | { kind: "wiki-file"; repoId: string; relativePath: string }
+  | { kind: "repo-file"; repoId: string; relativePath: string };
+
 type SimplifiedJsonCategory = {
   id: string;
   label: string;
@@ -2017,6 +2027,11 @@ function renderWikiPreview() {
     `;
   }
 
+  const markdownContext: MarkdownRenderContext =
+    ui.wikiContextRepoId && ui.wikiSelectedPath
+      ? { kind: "wiki", repoId: ui.wikiContextRepoId, currentPath: ui.wikiSelectedPath }
+      : { kind: "plain", repoId: currentRepoId() };
+
   return `
     <div class="wiki-panel-header">
       <div>
@@ -2025,7 +2040,7 @@ function renderWikiPreview() {
       </div>
     </div>
     <div class="wiki-preview-markdown markdown-body">
-      ${renderMarkdownDocument(ui.wikiPreviewMarkdown)}
+      ${renderMarkdownDocument(ui.wikiPreviewMarkdown, markdownContext)}
     </div>
   `;
 }
@@ -3132,7 +3147,7 @@ function renderPlanReviewDialog() {
                 )
               : null,
             trustedElement(
-              `<div class="plan-review-markdown markdown-body">${renderMarkdownDocument(planReview.markdown)}</div>`
+              `<div class="plan-review-markdown markdown-body">${renderMarkdownDocument(planReview.markdown, { kind: "plain", repoId: session?.repoID || null })}</div>`
             )
           ),
       dom(
@@ -4808,7 +4823,7 @@ function renderClaudeMarketplacePane(context) {
                       </div>
                     </div>
                     <div class="wiki-preview-markdown markdown-body marketplace-markdown-preview">
-                      ${renderMarkdownDocument(selectedDetail.markdown)}
+                      ${renderMarkdownDocument(selectedDetail.markdown, { kind: "marketplace", source: selectedDetail.source })}
                     </div>
                   </div>
                 </div>
@@ -5658,6 +5673,8 @@ async function handleClick(event) {
     return;
   }
 
+  event.preventDefault();
+
   const { action } = target.dataset;
 
   syncSidebarNavItemFromTarget(target);
@@ -5803,6 +5820,25 @@ async function handleClick(event) {
     case "wiki-select-file":
       await selectWikiFile(target.dataset.repoId || currentRepoId(), target.dataset.wikiPath);
       break;
+    case "markdown-open-github":
+      if (target.dataset.url) {
+        await api.openExternalUrl({ scope: "github-url", url: target.dataset.url });
+      }
+      break;
+    case "markdown-open-wiki":
+      if (target.dataset.repoId && target.dataset.wikiPath) {
+        await selectWikiFile(target.dataset.repoId, target.dataset.wikiPath);
+      }
+      break;
+    case "markdown-reveal-repo-file":
+      if (target.dataset.repoId && target.dataset.relativePath) {
+        await api.revealPath({
+          scope: "repo-relative-file",
+          repoId: target.dataset.repoId,
+          relativePath: target.dataset.relativePath
+        });
+      }
+      break;
     case "close-session":
       await closeSessionById(target.dataset.sessionId);
       break;
@@ -5922,7 +5958,7 @@ async function handleClick(event) {
     case "marketplace-open-source":
       if (ui.marketplaceSelectedDetail?.sourceUrl) {
         await api.openExternalUrl({
-          scope: "marketplace-source",
+          scope: "github-url",
           url: ui.marketplaceSelectedDetail.sourceUrl
         });
       }
@@ -11156,7 +11192,10 @@ function pathLabel(filePath) {
   return parts[parts.length - 1] || filePath;
 }
 
-function renderMarkdownDocument(markdown) {
+function renderMarkdownDocument(
+  markdown: string | null | undefined,
+  context: MarkdownRenderContext = { kind: "plain", repoId: null }
+) {
   const normalized = String(markdown || "").replace(/\r\n/g, "\n");
   if (!normalized.trim()) {
     return `<p class="muted">This file is empty.</p>`;
@@ -11175,7 +11214,7 @@ function renderMarkdownDocument(markdown) {
       return;
     }
 
-    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(" "))}</p>`);
+    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(" "), context)}</p>`);
     paragraph.length = 0;
   };
 
@@ -11184,7 +11223,9 @@ function renderMarkdownDocument(markdown) {
       return;
     }
 
-    blocks.push(`<ul>${unorderedList.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ul>`);
+    blocks.push(
+      `<ul>${unorderedList.map((item) => `<li>${renderInlineMarkdown(item, context)}</li>`).join("")}</ul>`
+    );
     unorderedList.length = 0;
   };
 
@@ -11193,7 +11234,9 @@ function renderMarkdownDocument(markdown) {
       return;
     }
 
-    blocks.push(`<ol>${orderedList.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ol>`);
+    blocks.push(
+      `<ol>${orderedList.map((item) => `<li>${renderInlineMarkdown(item, context)}</li>`).join("")}</ol>`
+    );
     orderedList.length = 0;
   };
 
@@ -11233,7 +11276,7 @@ function renderMarkdownDocument(markdown) {
       flushUnorderedList();
       flushOrderedList();
       const level = heading[1].length;
-      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`);
+      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2].trim(), context)}</h${level}>`);
       continue;
     }
 
@@ -11242,7 +11285,7 @@ function renderMarkdownDocument(markdown) {
       flushParagraph();
       flushUnorderedList();
       flushOrderedList();
-      blocks.push(`<blockquote>${renderInlineMarkdown(quote[1])}</blockquote>`);
+      blocks.push(`<blockquote>${renderInlineMarkdown(quote[1], context)}</blockquote>`);
       continue;
     }
 
@@ -11280,17 +11323,180 @@ function renderMarkdownDocument(markdown) {
   return blocks.join("");
 }
 
-function renderInlineMarkdown(value) {
+function renderInlineMarkdownText(value: string | null | undefined) {
   let html = escapeHtml(value);
 
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) => {
-    return `<a href="${escapeAttribute(url)}">${label}</a>`;
-  });
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
 
   return html;
+}
+
+function renderInlineMarkdown(
+  value: string | null | undefined,
+  context: MarkdownRenderContext = { kind: "plain", repoId: null }
+) {
+  const raw = String(value ?? "");
+  const linkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
+  let html = "";
+  let lastIndex = 0;
+
+  for (const match of raw.matchAll(linkPattern)) {
+    const index = match.index ?? 0;
+    html += renderInlineMarkdownText(raw.slice(lastIndex, index));
+    html += renderMarkdownLink(match[1] || "", match[2] || "", context);
+    lastIndex = index + match[0].length;
+  }
+
+  html += renderInlineMarkdownText(raw.slice(lastIndex));
+  return html;
+}
+
+function renderMarkdownLink(
+  label: string,
+  href: string,
+  context: MarkdownRenderContext
+) {
+  const resolved = resolveMarkdownLink(href, context);
+  const renderedLabel = renderInlineMarkdownText(label);
+  if (!resolved) {
+    return renderedLabel;
+  }
+
+  switch (resolved.kind) {
+    case "github-url":
+      return `<a href="#" data-action="markdown-open-github" data-url="${escapeAttribute(resolved.url)}">${renderedLabel}</a>`;
+    case "wiki-file":
+      return `<a href="#" data-action="markdown-open-wiki" data-repo-id="${escapeAttribute(resolved.repoId)}" data-wiki-path="${escapeAttribute(resolved.relativePath)}">${renderedLabel}</a>`;
+    case "repo-file":
+      return `<a href="#" data-action="markdown-reveal-repo-file" data-repo-id="${escapeAttribute(resolved.repoId)}" data-relative-path="${escapeAttribute(resolved.relativePath)}">${renderedLabel}</a>`;
+    default:
+      return renderedLabel;
+  }
+}
+
+function resolveMarkdownLink(
+  href: string,
+  context: MarkdownRenderContext
+): ResolvedMarkdownLink | null {
+  const normalizedHref = String(href ?? "").trim();
+  if (!normalizedHref || normalizedHref.startsWith("#")) {
+    return null;
+  }
+
+  const githubUrl = resolveGitHubMarkdownUrl(normalizedHref, context);
+  if (githubUrl) {
+    return { kind: "github-url", url: githubUrl };
+  }
+
+  if (context.kind === "wiki") {
+    return resolveWikiMarkdownLink(normalizedHref, context.repoId, context.currentPath);
+  }
+
+  if (context.kind === "plain" && context.repoId) {
+    return resolveRepoMarkdownLink(normalizedHref, context.repoId);
+  }
+
+  return null;
+}
+
+function resolveGitHubMarkdownUrl(
+  href: string,
+  context: MarkdownRenderContext
+): string | null {
+  try {
+    const parsed =
+      context.kind === "marketplace"
+        ? new URL(href, buildMarketplaceMarkdownBaseUrl(context.source) || undefined)
+        : new URL(href);
+    return isGitHubMarkdownUrl(parsed) ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveWikiMarkdownLink(
+  href: string,
+  repoId: string,
+  currentPath: string
+): ResolvedMarkdownLink | null {
+  try {
+    const baseUrl = new URL("https://wiki.invalid/");
+    baseUrl.pathname = `/.wiki/${currentPath.replace(/^\/+/, "")}`;
+    const resolvedUrl = new URL(href, baseUrl);
+    if (resolvedUrl.origin !== baseUrl.origin) {
+      return null;
+    }
+
+    const normalizedPath = decodeURIComponent(resolvedUrl.pathname);
+    if (normalizedPath === "/.wiki" || normalizedPath === "/.wiki/") {
+      return null;
+    }
+
+    if (normalizedPath.startsWith("/.wiki/")) {
+      return {
+        kind: "wiki-file",
+        repoId,
+        relativePath: normalizedPath.slice("/.wiki/".length)
+      };
+    }
+
+    const relativePath = normalizedPath.replace(/^\/+/, "");
+    if (!relativePath) {
+      return null;
+    }
+
+    return { kind: "repo-file", repoId, relativePath };
+  } catch {
+    return null;
+  }
+}
+
+function resolveRepoMarkdownLink(href: string, repoId: string): ResolvedMarkdownLink | null {
+  try {
+    const baseUrl = new URL("https://repo.invalid/");
+    const resolvedUrl = new URL(href, baseUrl);
+    if (resolvedUrl.origin !== baseUrl.origin) {
+      return null;
+    }
+
+    const relativePath = decodeURIComponent(resolvedUrl.pathname).replace(/^\/+/, "");
+    if (!relativePath) {
+      return null;
+    }
+
+    return { kind: "repo-file", repoId, relativePath };
+  } catch {
+    return null;
+  }
+}
+
+function buildMarketplaceMarkdownBaseUrl(source: MarketplaceSkillSource): string | null {
+  const owner = typeof source.owner === "string" ? source.owner.trim() : "";
+  const repo = typeof source.repo === "string" ? source.repo.trim() : "";
+  const ref = typeof source.ref === "string" ? source.ref.trim() : "";
+  if (!owner || !repo || !ref) {
+    return null;
+  }
+
+  const pathSegments = String(source.path || "")
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment));
+  if (!pathSegments.length || pathSegments[pathSegments.length - 1] !== "SKILL.md") {
+    pathSegments.push("SKILL.md");
+  }
+
+  return `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/blob/${encodeURIComponent(ref)}/${pathSegments.join("/")}`;
+}
+
+function isGitHubMarkdownUrl(url: URL): boolean {
+  const hostname = url.hostname.toLowerCase();
+  return (
+    url.protocol === "https:" &&
+    (hostname === "github.com" || hostname === "www.github.com")
+  );
 }
 
 function escapeHtml(value) {

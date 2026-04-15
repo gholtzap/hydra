@@ -24,15 +24,20 @@ import type {
   WikiFileContents
 } from "../shared-types";
 
+const path = require("node:path");
+const { fileURLToPath } = require("node:url");
 const { contextBridge, ipcRenderer } = require("electron");
+
+const TRUSTED_RENDERER_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "renderer", "index.html"));
 
 type ClaudePathRevealRequest =
   | { scope: "repo-file"; repoId: string; filePath: string }
+  | { scope: "repo-relative-file"; repoId: string; relativePath: string }
   | { scope: "settings-file"; repoId: string | null; filePath: string }
   | { scope: "session-search-result"; repoId: string; filePath: string };
 
 type ClaudeExternalUrlRequest = {
-  scope: "marketplace-source";
+  scope: "github-url";
   url: string;
 };
 
@@ -70,6 +75,23 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): () => vo
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
+function currentRendererPath(): string | null {
+  try {
+    const locationUrl = new URL(window.location.href);
+    if (locationUrl.protocol !== "file:") {
+      return null;
+    }
+
+    return path.resolve(fileURLToPath(locationUrl));
+  } catch {
+    return null;
+  }
+}
+
+function isTrustedRendererDocument(): boolean {
+  return currentRendererPath() === TRUSTED_RENDERER_ENTRY_PATH;
+}
+
 async function getTrackedPortStatus(): Promise<TrackedPortStatus> {
   try {
     return await invoke<TrackedPortStatus>("status:ports");
@@ -92,100 +114,104 @@ async function getTrackedPortStatus(): Promise<TrackedPortStatus> {
   }
 }
 
-contextBridge.exposeInMainWorld("claudeWorkspace", {
-  getState: () => invoke<AppStateSnapshot>("state:get"),
-  openWorkspaceFolder: () => invoke<void>("workspace:open"),
-  createProjectFolder: () => invoke<void>("project:create"),
-  rescanWorkspace: (workspaceId: string) => invoke<void>("workspace:rescan", workspaceId),
-  createSession: (repoId: string, launchesClaudeOnStart: boolean) =>
-    invoke<string | null>("session:create", { repoId, launchesClaudeOnStart }),
-  reopenSession: (sessionId: string) => invoke<void>("session:reopen", sessionId),
-  closeSession: (sessionId: string) => invoke<void>("session:close", sessionId),
-  renameSession: (sessionId: string, title: string) =>
-    invoke<boolean>("session:rename", { sessionId, title }),
-  updateSessionOrganization: (sessionId: string, patch: SessionOrganizationPatch) =>
-    invoke<boolean>("session:organize", { sessionId, patch }),
-  importSessionIcon: (sessionId: string) =>
-    invoke<SessionSummary | null>("session:importIcon", sessionId),
-  clearSessionIcon: (sessionId: string) =>
-    invoke<boolean>("session:clearIcon", sessionId),
-  sendInput: (sessionId: string, data: string) =>
-    invoke<void>("session:input", { sessionId, data }),
-  sendBinaryInput: (sessionId: string, data: string) =>
-    invoke<void>("session:binaryInput", { sessionId, data }),
-  resizeSession: (sessionId: string, cols: number, rows: number) =>
-    invoke<void>("session:resize", { sessionId, cols, rows }),
-  setFocusedSession: (sessionId: string | null) => invoke<void>("session:focus", sessionId),
-  openRepoInFinder: (repoId: string) => invoke<void>("repo:reveal", repoId),
-  showRepoContextMenu: (repoId: string, position: Point) =>
-    invoke<void>("repo:contextMenu", { repoId, position }),
-  updateRepoAppLaunchConfig: (payload: RepoAppLaunchConfigRequest) =>
-    invoke<RepoAppLaunchConfig | null>("repo:updateAppLaunchConfig", payload),
-  buildAndRunApp: (repoId: string) => invoke<string | null>("repo:buildAndRunApp", repoId),
-  readClipboardText: () => invoke<string>("clipboard:readText"),
-  writeClipboardText: (text: string) => invoke<void>("clipboard:writeText", text),
-  revealPath: (payload: ClaudePathRevealRequest) => invoke<void>("path:reveal", payload),
-  openExternalUrl: (payload: ClaudeExternalUrlRequest) =>
-    invoke<void>("path:openExternal", payload),
-  nextUnreadSession: () => invoke<string | null>("session:nextUnread"),
-  updatePreferences: (patch: Partial<AppPreferences>) =>
-    invoke<void>("preferences:update", patch),
-  getTrackedPortStatus,
-  getClaudeSettingsContext: (repoId: string | null) =>
-    invoke<ClaudeSettingsContext>("settings:context", repoId),
-  loadSettingsFile: (payload: ClaudeSettingsFileRequest) =>
-    invoke<string>("settings:loadFile", payload),
-  saveSettingsFile: (payload: ClaudeSettingsSaveRequest) =>
-    invoke<void>("settings:saveFile", payload),
-  importSkillIcon: (payload: ClaudeSkillFileRequest) =>
-    invoke<string | null>("settings:importSkillIcon", payload),
-  clearSkillIcon: (payload: ClaudeSkillFileRequest) =>
-    invoke<boolean>("settings:clearSkillIcon", payload),
-  getMarketplaceSkillDetails: (payload: { source: MarketplaceSkillDetails["source"] & { tags?: string[] } }) =>
-    invoke<MarketplaceSkillDetails>("skillsMarketplace:details", payload),
-  inspectMarketplaceUrl: (payload: { url: string }) =>
-    invoke<MarketplaceInspectResponse>("skillsMarketplace:inspectUrl", payload),
-  installMarketplaceSkill: (payload: {
-    source: MarketplaceSkillDetails["source"];
-    scope: MarketplaceInstallScope;
-    repoPath?: string | null;
-  }) => invoke<MarketplaceInstallResponse>("skillsMarketplace:install", payload),
-  getWikiContext: (repoId: string) => invoke<WikiContext | null>("wiki:getContext", repoId),
-  readWikiFile: (repoId: string, relativePath: string) =>
-    invoke<WikiFileContents>("wiki:readFile", { repoId, relativePath }),
-  toggleWiki: (repoId: string, enabled: boolean) =>
-    invoke<WikiContext | null>("wiki:toggle", { repoId, enabled }),
-  revealWiki: (repoId: string) => invoke<void>("wiki:reveal", repoId),
-  querySessionSearch: (repoId: string | null, query: string) =>
-    invoke<SessionSearchResponse>("sessionSearch:query", { repoId, query }),
-  resumeFromClaudeSession: (repoId: string, claudeSessionId: string) =>
-    invoke<string | null>("session:resumeFromClaude", { repoId, claudeSessionId }),
-  resumeFromSessionSearchResult: (repoId: string, source: "claude" | "codex", sessionId: string) =>
-    invoke<string | null>("session:resumeFromSearchResult", { repoId, source, sessionId }),
-  readDirectory: (repoId: string) => invoke<DirectoryReadResult>("fs:readDir", repoId),
-  readFile: (payload: ClaudeRepoFileRequest) => invoke<ReadFileResult>("fs:readFile", payload),
-  onStateChanged: (callback: (payload: AppStateSnapshot) => void) =>
-    subscribe<AppStateSnapshot>("state:changed", callback),
-  onSessionOutput: (callback: (payload: SessionOutputPayload) => void) =>
-    subscribe<SessionOutputPayload>("session:output", callback),
-  onSessionUpdated: (callback: (payload: SessionUpdatedPayload) => void) =>
-    subscribe<SessionUpdatedPayload>("session:updated", callback),
-  onCommand: (callback: (payload: AppCommandPayload) => void) =>
-    subscribe<AppCommandPayload>("app:command", callback),
-  launchEphemeralTool: (toolId: EphemeralToolId, repoId: string) =>
-    invoke<string | null>("ephemeralTool:launch", { toolId, repoId }),
-  closeEphemeralTool: (toolId: EphemeralToolId, sessionId: string) =>
-    invoke<void>("ephemeralTool:close", { toolId, sessionId }),
-  sendEphemeralToolInput: (toolId: EphemeralToolId, sessionId: string, data: string) =>
-    invoke<void>("ephemeralTool:input", { toolId, sessionId, data }),
-  sendEphemeralToolBinaryInput: (toolId: EphemeralToolId, sessionId: string, data: string) =>
-    invoke<void>("ephemeralTool:binaryInput", { toolId, sessionId, data }),
-  resizeEphemeralTool: (toolId: EphemeralToolId, sessionId: string, cols: number, rows: number) =>
-    invoke<void>("ephemeralTool:resize", { toolId, sessionId, cols, rows }),
-  onEphemeralToolOutput: (callback: (payload: EphemeralToolOutputPayload) => void) =>
-    subscribe<EphemeralToolOutputPayload>("ephemeralTool:output", callback),
-  onEphemeralToolExit: (callback: (payload: EphemeralToolExitPayload) => void) =>
-    subscribe<EphemeralToolExitPayload>("ephemeralTool:exit", callback),
-  onPlanDetected: (callback: (payload: { sessionId: string; markdown: string }) => void) =>
-    subscribe<{ sessionId: string; markdown: string }>("plan:detected", callback)
-});
+if (isTrustedRendererDocument()) {
+  contextBridge.exposeInMainWorld("claudeWorkspace", {
+    getState: () => invoke<AppStateSnapshot>("state:get"),
+    openWorkspaceFolder: () => invoke<void>("workspace:open"),
+    createProjectFolder: () => invoke<void>("project:create"),
+    rescanWorkspace: (workspaceId: string) => invoke<void>("workspace:rescan", workspaceId),
+    createSession: (repoId: string, launchesClaudeOnStart: boolean) =>
+      invoke<string | null>("session:create", { repoId, launchesClaudeOnStart }),
+    reopenSession: (sessionId: string) => invoke<void>("session:reopen", sessionId),
+    closeSession: (sessionId: string) => invoke<void>("session:close", sessionId),
+    renameSession: (sessionId: string, title: string) =>
+      invoke<boolean>("session:rename", { sessionId, title }),
+    updateSessionOrganization: (sessionId: string, patch: SessionOrganizationPatch) =>
+      invoke<boolean>("session:organize", { sessionId, patch }),
+    importSessionIcon: (sessionId: string) =>
+      invoke<SessionSummary | null>("session:importIcon", sessionId),
+    clearSessionIcon: (sessionId: string) =>
+      invoke<boolean>("session:clearIcon", sessionId),
+    sendInput: (sessionId: string, data: string) =>
+      invoke<void>("session:input", { sessionId, data }),
+    sendBinaryInput: (sessionId: string, data: string) =>
+      invoke<void>("session:binaryInput", { sessionId, data }),
+    resizeSession: (sessionId: string, cols: number, rows: number) =>
+      invoke<void>("session:resize", { sessionId, cols, rows }),
+    setFocusedSession: (sessionId: string | null) => invoke<void>("session:focus", sessionId),
+    openRepoInFinder: (repoId: string) => invoke<void>("repo:reveal", repoId),
+    showRepoContextMenu: (repoId: string, position: Point) =>
+      invoke<void>("repo:contextMenu", { repoId, position }),
+    updateRepoAppLaunchConfig: (payload: RepoAppLaunchConfigRequest) =>
+      invoke<RepoAppLaunchConfig | null>("repo:updateAppLaunchConfig", payload),
+    buildAndRunApp: (repoId: string) => invoke<string | null>("repo:buildAndRunApp", repoId),
+    readClipboardText: () => invoke<string>("clipboard:readText"),
+    writeClipboardText: (text: string) => invoke<void>("clipboard:writeText", text),
+    revealPath: (payload: ClaudePathRevealRequest) => invoke<void>("path:reveal", payload),
+    openExternalUrl: (payload: ClaudeExternalUrlRequest) =>
+      invoke<void>("path:openExternal", payload),
+    nextUnreadSession: () => invoke<string | null>("session:nextUnread"),
+    updatePreferences: (patch: Partial<AppPreferences>) =>
+      invoke<void>("preferences:update", patch),
+    getTrackedPortStatus,
+    getClaudeSettingsContext: (repoId: string | null) =>
+      invoke<ClaudeSettingsContext>("settings:context", repoId),
+    loadSettingsFile: (payload: ClaudeSettingsFileRequest) =>
+      invoke<string>("settings:loadFile", payload),
+    saveSettingsFile: (payload: ClaudeSettingsSaveRequest) =>
+      invoke<void>("settings:saveFile", payload),
+    importSkillIcon: (payload: ClaudeSkillFileRequest) =>
+      invoke<string | null>("settings:importSkillIcon", payload),
+    clearSkillIcon: (payload: ClaudeSkillFileRequest) =>
+      invoke<boolean>("settings:clearSkillIcon", payload),
+    getMarketplaceSkillDetails: (payload: { source: MarketplaceSkillDetails["source"] & { tags?: string[] } }) =>
+      invoke<MarketplaceSkillDetails>("skillsMarketplace:details", payload),
+    inspectMarketplaceUrl: (payload: { url: string }) =>
+      invoke<MarketplaceInspectResponse>("skillsMarketplace:inspectUrl", payload),
+    installMarketplaceSkill: (payload: {
+      source: MarketplaceSkillDetails["source"];
+      scope: MarketplaceInstallScope;
+      repoPath?: string | null;
+    }) => invoke<MarketplaceInstallResponse>("skillsMarketplace:install", payload),
+    getWikiContext: (repoId: string) => invoke<WikiContext | null>("wiki:getContext", repoId),
+    readWikiFile: (repoId: string, relativePath: string) =>
+      invoke<WikiFileContents>("wiki:readFile", { repoId, relativePath }),
+    toggleWiki: (repoId: string, enabled: boolean) =>
+      invoke<WikiContext | null>("wiki:toggle", { repoId, enabled }),
+    revealWiki: (repoId: string) => invoke<void>("wiki:reveal", repoId),
+    querySessionSearch: (repoId: string | null, query: string) =>
+      invoke<SessionSearchResponse>("sessionSearch:query", { repoId, query }),
+    resumeFromClaudeSession: (repoId: string, claudeSessionId: string) =>
+      invoke<string | null>("session:resumeFromClaude", { repoId, claudeSessionId }),
+    resumeFromSessionSearchResult: (repoId: string, source: "claude" | "codex", sessionId: string) =>
+      invoke<string | null>("session:resumeFromSearchResult", { repoId, source, sessionId }),
+    readDirectory: (repoId: string) => invoke<DirectoryReadResult>("fs:readDir", repoId),
+    readFile: (payload: ClaudeRepoFileRequest) => invoke<ReadFileResult>("fs:readFile", payload),
+    onStateChanged: (callback: (payload: AppStateSnapshot) => void) =>
+      subscribe<AppStateSnapshot>("state:changed", callback),
+    onSessionOutput: (callback: (payload: SessionOutputPayload) => void) =>
+      subscribe<SessionOutputPayload>("session:output", callback),
+    onSessionUpdated: (callback: (payload: SessionUpdatedPayload) => void) =>
+      subscribe<SessionUpdatedPayload>("session:updated", callback),
+    onCommand: (callback: (payload: AppCommandPayload) => void) =>
+      subscribe<AppCommandPayload>("app:command", callback),
+    launchEphemeralTool: (toolId: EphemeralToolId, repoId: string) =>
+      invoke<string | null>("ephemeralTool:launch", { toolId, repoId }),
+    closeEphemeralTool: (toolId: EphemeralToolId, sessionId: string) =>
+      invoke<void>("ephemeralTool:close", { toolId, sessionId }),
+    sendEphemeralToolInput: (toolId: EphemeralToolId, sessionId: string, data: string) =>
+      invoke<void>("ephemeralTool:input", { toolId, sessionId, data }),
+    sendEphemeralToolBinaryInput: (toolId: EphemeralToolId, sessionId: string, data: string) =>
+      invoke<void>("ephemeralTool:binaryInput", { toolId, sessionId, data }),
+    resizeEphemeralTool: (toolId: EphemeralToolId, sessionId: string, cols: number, rows: number) =>
+      invoke<void>("ephemeralTool:resize", { toolId, sessionId, cols, rows }),
+    onEphemeralToolOutput: (callback: (payload: EphemeralToolOutputPayload) => void) =>
+      subscribe<EphemeralToolOutputPayload>("ephemeralTool:output", callback),
+    onEphemeralToolExit: (callback: (payload: EphemeralToolExitPayload) => void) =>
+      subscribe<EphemeralToolExitPayload>("ephemeralTool:exit", callback),
+    onPlanDetected: (callback: (payload: { sessionId: string; markdown: string }) => void) =>
+      subscribe<{ sessionId: string; markdown: string }>("plan:detected", callback)
+  });
+} else {
+  console.warn(`Blocked claudeWorkspace bridge exposure for untrusted document: ${window.location.href}`);
+}

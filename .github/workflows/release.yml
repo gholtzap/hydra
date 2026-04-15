@@ -51,15 +51,18 @@ jobs:
           dmg_path="release/Hydra-${TAG_NAME#v}-arm64.dmg"
           zip_path="release/Hydra-${TAG_NAME#v}-arm64.zip"
 
+          assets=(
+            "$dmg_path#Hydra macOS installer (Apple Silicon)"
+            "$zip_path#Hydra macOS app archive (Apple Silicon)"
+          )
+          for yml_file in release/latest-mac.yml release/latest-mac-arm64.yml; do
+            [ -f "$yml_file" ] && assets+=("$yml_file")
+          done
+
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" \
-              "$dmg_path#Hydra macOS installer (Apple Silicon)" \
-              "$zip_path#Hydra macOS app archive (Apple Silicon)" \
-              --clobber
+            gh release upload "$TAG_NAME" "${assets[@]}" --clobber
           else
-            gh release create "$TAG_NAME" \
-              "$dmg_path#Hydra macOS installer (Apple Silicon)" \
-              "$zip_path#Hydra macOS app archive (Apple Silicon)" \
+            gh release create "$TAG_NAME" "${assets[@]}" \
               --verify-tag \
               --generate-notes \
               --latest

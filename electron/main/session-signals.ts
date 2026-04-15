@@ -33,7 +33,11 @@ function detectSignal(chunk: string): { status: SessionStatus; blocker: SessionB
     };
   }
 
-  if (lowered.includes("merge conflict") || lowered.includes("git conflict")) {
+  if (
+    lowered.includes("fix conflicts and then commit") ||
+    lowered.includes("you have unmerged paths") ||
+    lowered.includes("cannot merge: you have unmerged files")
+  ) {
     return {
       status: "blocked",
       blocker: blocker("gitConflict", "Claude is blocked on a git conflict.")

@@ -1717,7 +1717,7 @@ class AppController {
     }
 
     if (toolId === "tokscale") {
-      return this.npxPath ? [this.npxPath, "--yes", "tokscale@latest"] : null;
+      return this.npxPath ? [this.npxPath, "--yes", "tokscale@latest", "tui"] : null;
     }
 
     return null;

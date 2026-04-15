@@ -15,7 +15,7 @@ extraResources:
 
 mac:
   category: public.app-category.developer-tools
-  icon: build/icon.icns
+  icon: build/hydra.icns
   artifactName: ${productName}-${version}-${arch}.${ext}
   target:
     - target: dmg

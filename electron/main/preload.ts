@@ -84,7 +84,7 @@ async function getTrackedPortStatus(): Promise<TrackedPortStatus> {
         ports: [],
         activePorts: [],
         groups: [],
-        error: "Dev Ports is available after a full app restart. Quit Claude Workspace and launch it again."
+        error: "Dev Ports is available after a full app restart. Quit Hydra and launch it again."
       };
     }
 

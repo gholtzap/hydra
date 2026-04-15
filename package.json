@@ -1,8 +1,8 @@
 {
-  "name": "claude-code-workspace",
+  "name": "hydra",
   "version": "0.1.0",
   "private": true,
-  "description": "Claude Code Workspace desktop shell built with Electron",
+  "description": "Hydra desktop shell built with Electron",
   "main": "dist-electron/main/main.js",
   "scripts": {
     "build": "npm run build:main && npm run build:renderer && npm run build:assets",

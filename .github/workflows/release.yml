@@ -24,12 +24,33 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build and publish macOS release
-        run: npm run dist:mac -- --publish always
+      - name: Build macOS release artifacts
+        run: npm run dist:mac
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          dmg_path="release/Hydra-${TAG_NAME#v}-arm64.dmg"
+          zip_path="release/Hydra-${TAG_NAME#v}-arm64.zip"
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" \
+              "$dmg_path#Hydra macOS installer (Apple Silicon)" \
+              "$zip_path#Hydra macOS app archive (Apple Silicon)" \
+              --clobber
+          else
+            gh release create "$TAG_NAME" \
+              "$dmg_path#Hydra macOS installer (Apple Silicon)" \
+              "$zip_path#Hydra macOS app archive (Apple Silicon)" \
+              --verify-tag \
+              --generate-notes \
+              --latest
+          fi

@@ -184,7 +184,7 @@ const { startMcpServer } = require("./mcp-server") as {
   startMcpServer: (appController: InstanceType<typeof AppController>) => Promise<any>;
 };
 
-app.setName("ClaudeWorkspace");
+app.setName("Hydra");
 
 const FILE_TREE_IGNORED = new Set([
   ".git", "node_modules", "dist", "build", ".next", "__pycache__",
@@ -361,7 +361,7 @@ class AppController {
       minWidth: 1100,
       minHeight: 720,
       backgroundColor: nativeTheme.shouldUseDarkColors ? "#2b2b2b" : "#ede6dc",
-      title: "Claude Workspace",
+      title: "Hydra",
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
@@ -607,7 +607,7 @@ class AppController {
     const kb = resolveKeybindings(this.state.preferences.keybindings);
     const template = [
       {
-        label: "Claude Workspace",
+        label: "Hydra",
         submenu: [
           { role: "about" },
           { type: "separator" },
@@ -2120,7 +2120,7 @@ class AppController {
       buttons: ["Cancel", "Quit and Terminate Sessions"],
       defaultId: 1,
       cancelId: 0,
-      title: "Quit Claude Workspace",
+      title: "Quit Hydra",
       message: `Quitting will terminate ${liveSessions.length} running session${liveSessions.length === 1 ? "" : "s"}.`
     });
 

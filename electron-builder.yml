@@ -1,5 +1,5 @@
-appId: com.gmh.claudeworkspace
-productName: Claude Workspace
+appId: com.gmh.hydra
+productName: Hydra
 
 directories:
   output: release

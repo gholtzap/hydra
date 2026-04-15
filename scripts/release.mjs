@@ -9,11 +9,17 @@ const VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 
 function run(command, args, options = {}) {
   const { capture = true } = options;
-  return execFileSync(command, args, {
+  const result = execFileSync(command, args, {
     cwd: repoRoot(),
     encoding: "utf8",
     stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit"
-  }).trim();
+  });
+
+  if (!capture) {
+    return "";
+  }
+
+  return result.trim();
 }
 
 function repoRoot() {
@@ -117,6 +123,31 @@ function isWorktreeClean() {
   return !status;
 }
 
+function worktreeEntries() {
+  const status = run("git", ["status", "--short"]);
+  if (!status) {
+    return [];
+  }
+
+  return status
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => ({
+      raw: line,
+      path: line.slice(3).trim()
+    }));
+}
+
+function isRecoverablePreparedReleaseState(entries) {
+  if (!entries.length) {
+    return false;
+  }
+
+  const allowedPaths = new Set(["package.json", "package-lock.json"]);
+  return entries.every((entry) => allowedPaths.has(entry.path));
+}
+
 function originReleaseUrl() {
   try {
     const remoteUrl = run("git", ["remote", "get-url", "origin"]);
@@ -160,7 +191,13 @@ function main() {
   const targetTag = `v${targetVersion.raw}`;
   const branchName = currentBranch();
   const shouldBumpPackageVersion = targetVersion.raw !== packageVersion.raw;
-  const worktreeClean = isWorktreeClean();
+  const entries = worktreeEntries();
+  const worktreeClean = entries.length === 0;
+  const preparedReleaseState =
+    latestTagVersion !== null &&
+    compareVersions(packageVersion, latestTagVersion) > 0 &&
+    isRecoverablePreparedReleaseState(entries);
+  const shouldCommitPreparedVersion = preparedReleaseState;
 
   if (tagExists(targetTag)) {
     throw new Error(`Tag ${targetTag} already exists.`);
@@ -172,17 +209,21 @@ function main() {
     console.log(`Latest tag: ${latestTag || "(none)"}`);
     console.log(`Next release version: ${targetVersion.raw}`);
     console.log(`Will bump package version: ${shouldBumpPackageVersion ? "yes" : "no"}`);
+    console.log(`Prepared release state: ${preparedReleaseState ? "yes" : "no"}`);
     console.log(`Worktree clean: ${worktreeClean ? "yes" : "no"}`);
     console.log(`Will push branch/tag: ${options.noPush ? "no" : "yes"}`);
     return;
   }
 
-  if (!worktreeClean) {
+  if (!worktreeClean && !preparedReleaseState) {
     throw new Error("Worktree is not clean. Commit or stash changes before running the release script.");
   }
 
   if (shouldBumpPackageVersion) {
     run("npm", ["version", targetVersion.raw, "--no-git-tag-version"], { capture: false });
+    run("git", ["add", "package.json", "package-lock.json"], { capture: false });
+    run("git", ["commit", "-m", `Release ${targetTag}`], { capture: false });
+  } else if (shouldCommitPreparedVersion) {
     run("git", ["add", "package.json", "package-lock.json"], { capture: false });
     run("git", ["commit", "-m", `Release ${targetTag}`], { capture: false });
   }

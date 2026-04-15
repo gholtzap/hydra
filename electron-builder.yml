@@ -1,0 +1,25 @@
+appId: com.gmh.claudeworkspace
+productName: Claude Workspace
+
+directories:
+  output: release
+
+files:
+  - dist-electron/**/*
+
+extraResources:
+  - from: dist-electron/main/pty_host.py
+    to: helpers/pty_host.py
+  - from: dist-electron/main/app-launch-runner.sh
+    to: helpers/app-launch-runner.sh
+
+mac:
+  category: public.app-category.developer-tools
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  target:
+    - target: dmg
+    - target: zip
+
+publish:
+  provider: github
+  releaseType: draft

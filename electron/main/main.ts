@@ -157,6 +157,9 @@ const { resolveKeybindings } = require("./keybindings");
 const { PtyHostClient } = require("./pty-host-client") as {
   PtyHostClient: PtyHostClientConstructor;
 };
+const { resolveBundledHelperPath } = require("./runtime-paths") as {
+  resolveBundledHelperPath: (fileName: string) => string;
+};
 const {
   disableWiki,
   enableWiki,
@@ -2334,7 +2337,7 @@ function resolvedAppLaunchCommand(preferences, repo) {
   return [
     shellPath,
     "-lc",
-    `${shellEscape(appLaunchRunnerPath())} ${shellEscape(config.buildCommand)} ${shellEscape(config.runCommand)}`
+    `${shellEscape("/bin/sh")} ${shellEscape(appLaunchRunnerPath())} ${shellEscape(config.buildCommand)} ${shellEscape(config.runCommand)}`
   ];
 }
 
@@ -2375,7 +2378,7 @@ function resolvedAgentCommand(preferences, agentId) {
 }
 
 function appLaunchRunnerPath() {
-  return path.join(__dirname, "app-launch-runner.sh");
+  return resolveBundledHelperPath("app-launch-runner.sh");
 }
 
 function shellEscape(value) {

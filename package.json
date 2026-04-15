@@ -10,7 +10,10 @@
     "build:renderer": "tsc -p tsconfig.renderer.json",
     "build:assets": "mkdir -p dist-electron/main dist-electron/renderer/vendor && cp electron/main/pty_host.py dist-electron/main/pty_host.py && cp electron/main/app-launch-runner.sh dist-electron/main/app-launch-runner.sh && chmod +x dist-electron/main/app-launch-runner.sh && cp electron/renderer/index.html dist-electron/renderer/index.html && cp electron/renderer/app.css dist-electron/renderer/app.css && cp electron/renderer/vendor/xterm.css dist-electron/renderer/vendor/xterm.css && cp electron/renderer/vendor/xterm.js dist-electron/renderer/vendor/xterm.js && cp electron/renderer/vendor/addon-fit.js dist-electron/renderer/vendor/addon-fit.js",
     "start": "npm run build && electron .",
-    "dev": "npm run build && electron ."
+    "dev": "npm run build && electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -19,6 +22,7 @@
   "devDependencies": {
     "@types/node": "^25.5.2",
     "electron": "^35.0.0",
+    "electron-builder": "^26.8.1",
     "typescript": "^6.0.2"
   }
 }

@@ -2,7 +2,9 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { PtyCreateSessionPayload, PtyHostMessage } from "../shared-types";
 
 const { spawn } = require("node:child_process");
-const path = require("node:path");
+const { resolveBundledHelperPath } = require("./runtime-paths") as {
+  resolveBundledHelperPath: (fileName: string) => string;
+};
 
 class PtyHostClient {
   child: ChildProcessWithoutNullStreams | null;
@@ -20,7 +22,7 @@ class PtyHostClient {
       return;
     }
 
-    const hostPath = path.join(__dirname, "pty_host.py");
+    const hostPath = resolveBundledHelperPath("pty_host.py");
     this.child = spawn("/usr/bin/env", ["python3", hostPath], {
       stdio: ["pipe", "pipe", "inherit"]
     }) as ChildProcessWithoutNullStreams;

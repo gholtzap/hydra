@@ -5,6 +5,7 @@
 /node_modules
 /electron/.tmp
 /dist-electron
+/release
 /Packages
 xcuserdata/
 DerivedData/
@@ -34,4 +35,3 @@ GEMINI.md
 .cursor/
 /LESSONS.md
 /.wiki
-

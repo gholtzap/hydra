@@ -20,7 +20,7 @@ I use Hydra for almost everything I code. It's an easy way for me to control man
 Hydra has a built-in memory system. Every directory will automatically create a .wiki/ with important information.
 
 Cool features coming soon:
-- Voice control
+- Voice control: Get on call with your hydra agents!
 - Skills marketplace
 - Obsidian Integration
 - Supermemory integration

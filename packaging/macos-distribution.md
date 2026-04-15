@@ -2,6 +2,8 @@
 
 ## Gatekeeper bypass for unsigned builds
 
+Unsigned macOS builds are suitable for local/manual testing only. They should not be published as Hydra releases because macOS auto-update requires a signed app.
+
 If macOS blocks `Hydra.app` with a message that Apple could not verify it:
 
 1. Try opening `Hydra.app` once so macOS shows the warning.
@@ -15,7 +17,7 @@ This only bypasses the warning on that Mac. It does not fix the warning for othe
 
 ## Shipping signed and notarized builds
 
-To avoid the Gatekeeper warning for downloaded builds, the release workflow needs both Apple signing and notarization credentials.
+To support Hydra auto-update on macOS, release builds must be code signed. Notarization is still recommended so downloaded builds do not trigger Gatekeeper warnings.
 
 Requirements:
 
@@ -41,7 +43,7 @@ Release flow:
    - `npm run release:minor`
    - `npm run release:major`
 2. GitHub Actions builds `Hydra.app`, `Hydra-<version>-arm64.dmg`, and `Hydra-<version>-arm64.zip`.
-3. If signing and notarization secrets are configured, Electron Builder signs and notarizes the build during the workflow.
-4. The workflow uploads the DMG and ZIP to the GitHub Release page.
+3. Electron Builder signs the build during the workflow. If notarization credentials are configured, it also notarizes the build.
+4. The workflow uploads the DMG, ZIP, and update metadata to the GitHub Release page.
 
-If the signing secrets are missing, the workflow still produces unsigned release artifacts, but macOS will warn users on first launch.
+If the signing secrets are missing, the tag workflow now fails instead of publishing an unsigned release that cannot auto-update.

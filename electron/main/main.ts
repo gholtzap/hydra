@@ -53,6 +53,7 @@ const {
   dialog,
   ipcMain,
   nativeTheme,
+  powerMonitor,
   shell
 } = require("electron");
 
@@ -2198,6 +2199,27 @@ class AppController {
     app.quit();
   }
 
+  async restartToInstallUpdate() {
+    const liveSessions = this.state.sessions.filter((session) => session.runtimeState === "live");
+    if (liveSessions.length > 0) {
+      const result = dialog.showMessageBoxSync(this.window, {
+        type: "warning",
+        buttons: ["Later", "Restart and Install Update"],
+        defaultId: 1,
+        cancelId: 0,
+        title: "Restart Hydra to Update",
+        message: `Restarting to install the update will terminate ${liveSessions.length} running session${liveSessions.length === 1 ? "" : "s"}.`
+      });
+
+      if (result === 0) {
+        return;
+      }
+    }
+
+    await this.shutdown();
+    autoUpdater.quitAndInstall();
+  }
+
   async shutdown() {
     this.allowQuit = true;
     for (const session of this.state.sessions) {
@@ -2572,6 +2594,67 @@ async function maybeStartMcpServer(controller: AppController): Promise<void> {
 }
 
 const controller = new AppController();
+const UPDATE_CHECK_STARTUP_DELAY_MS = 15_000;
+const UPDATE_CHECK_FOLLOW_UP_DELAY_MS = 10 * 60 * 1000;
+const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+const UPDATE_CHECK_MIN_GAP_MS = 5 * 60 * 1000;
+
+let updateCheckInFlight = false;
+let lastUpdateCheckAt = 0;
+
+function scheduleUpdateCheck(reason: string, delayMs: number): void {
+  const timer = setTimeout(() => {
+    void maybeCheckForUpdates(reason);
+  }, delayMs);
+  timer.unref?.();
+}
+
+async function maybeCheckForUpdates(reason: string): Promise<void> {
+  if (!app.isPackaged || updateCheckInFlight) {
+    return;
+  }
+
+  const nowMs = Date.now();
+  if (nowMs - lastUpdateCheckAt < UPDATE_CHECK_MIN_GAP_MS) {
+    return;
+  }
+
+  updateCheckInFlight = true;
+  lastUpdateCheckAt = nowMs;
+  console.log(`[updater] checking for updates (${reason})`);
+
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error: unknown) {
+    console.error(`[updater] check failed (${reason}):`, error);
+  } finally {
+    updateCheckInFlight = false;
+  }
+}
+
+function startAutoUpdateChecks(): void {
+  if (!app.isPackaged) {
+    return;
+  }
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  scheduleUpdateCheck("startup", UPDATE_CHECK_STARTUP_DELAY_MS);
+  scheduleUpdateCheck("startup-follow-up", UPDATE_CHECK_FOLLOW_UP_DELAY_MS);
+
+  const interval = setInterval(() => {
+    void maybeCheckForUpdates("interval");
+  }, UPDATE_CHECK_INTERVAL_MS);
+  interval.unref?.();
+
+  app.on("activate", () => {
+    void maybeCheckForUpdates("activate");
+  });
+  powerMonitor.on("resume", () => {
+    void maybeCheckForUpdates("resume");
+  });
+}
 
 app.whenReady().then(async () => {
   await controller.initialize();
@@ -2581,11 +2664,19 @@ app.whenReady().then(async () => {
   maybeStartMcpServer(controller).catch((err) =>
     console.error("[MCP] Server failed to start:", err)
   );
-  if (app.isPackaged) {
-    autoUpdater.checkForUpdates().catch((err) =>
-      console.error("[updater] check failed:", err)
-    );
-  }
+  startAutoUpdateChecks();
+});
+
+autoUpdater.on("update-available", (info: { version?: string }) => {
+  console.log(`[updater] update available${info.version ? `: ${info.version}` : ""}`);
+});
+
+autoUpdater.on("update-not-available", (info: { version?: string }) => {
+  console.log(`[updater] no update available${info.version ? `; current release: ${info.version}` : ""}`);
+});
+
+autoUpdater.on("error", (error: unknown) => {
+  console.error("[updater] error:", error);
 });
 
 autoUpdater.on("update-downloaded", () => {
@@ -2596,7 +2687,7 @@ autoUpdater.on("update-downloaded", () => {
     buttons: ["Restart now", "Later"]
   }).then(({ response }) => {
     if (response === 0) {
-      autoUpdater.quitAndInstall();
+      void controller.restartToInstallUpdate();
     }
   });
 });

@@ -6,6 +6,9 @@
 /electron/.tmp
 /dist-electron
 /release
+/build/icon.icns
+/build/icon.iconset/
+/build/icon-preview.png
 /Packages
 xcuserdata/
 DerivedData/

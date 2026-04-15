@@ -24,11 +24,7 @@ import type {
   WikiFileContents
 } from "../shared-types";
 
-const path = require("node:path");
-const { fileURLToPath } = require("node:url");
 const { contextBridge, ipcRenderer } = require("electron");
-
-const TRUSTED_RENDERER_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "renderer", "index.html"));
 
 type ClaudePathRevealRequest =
   | { scope: "repo-file"; repoId: string; filePath: string }
@@ -75,22 +71,6 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): () => vo
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
-function currentRendererPath(): string | null {
-  try {
-    const locationUrl = new URL(window.location.href);
-    if (locationUrl.protocol !== "file:") {
-      return null;
-    }
-
-    return path.resolve(fileURLToPath(locationUrl));
-  } catch {
-    return null;
-  }
-}
-
-function isTrustedRendererDocument(): boolean {
-  return currentRendererPath() === TRUSTED_RENDERER_ENTRY_PATH;
-}
 
 async function getTrackedPortStatus(): Promise<TrackedPortStatus> {
   try {
@@ -114,8 +94,7 @@ async function getTrackedPortStatus(): Promise<TrackedPortStatus> {
   }
 }
 
-if (isTrustedRendererDocument()) {
-  contextBridge.exposeInMainWorld("claudeWorkspace", {
+contextBridge.exposeInMainWorld("claudeWorkspace", {
     getState: () => invoke<AppStateSnapshot>("state:get"),
     openWorkspaceFolder: () => invoke<void>("workspace:open"),
     createProjectFolder: () => invoke<void>("project:create"),
@@ -212,6 +191,3 @@ if (isTrustedRendererDocument()) {
     onPlanDetected: (callback: (payload: { sessionId: string; markdown: string }) => void) =>
       subscribe<{ sessionId: string; markdown: string }>("plan:detected", callback)
   });
-} else {
-  console.warn(`Blocked claudeWorkspace bridge exposure for untrusted document: ${window.location.href}`);
-}

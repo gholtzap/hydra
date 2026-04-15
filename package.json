@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "electron-updater": "^6.8.3",
     "node-pty": "^1.0.0"
   },
   "devDependencies": {

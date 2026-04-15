@@ -42,6 +42,7 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path");
 const { randomUUID, randomBytes } = require("node:crypto");
+const { autoUpdater } = require("electron-updater");
 const { fileURLToPath, pathToFileURL, URL } = require("node:url");
 const {
   app,
@@ -2580,6 +2581,24 @@ app.whenReady().then(async () => {
   maybeStartMcpServer(controller).catch((err) =>
     console.error("[MCP] Server failed to start:", err)
   );
+  if (app.isPackaged) {
+    autoUpdater.checkForUpdates().catch((err) =>
+      console.error("[updater] check failed:", err)
+    );
+  }
+});
+
+autoUpdater.on("update-downloaded", () => {
+  dialog.showMessageBox({
+    type: "info",
+    title: "Update ready",
+    message: "A new version of Hydra has been downloaded. Restart to install it.",
+    buttons: ["Restart now", "Later"]
+  }).then(({ response }) => {
+    if (response === 0) {
+      autoUpdater.quitAndInstall();
+    }
+  });
 });
 
 app.on("before-quit", (event) => {

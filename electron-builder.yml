@@ -23,4 +23,4 @@ mac:
 
 publish:
   provider: github
-  releaseType: draft
+  releaseType: release

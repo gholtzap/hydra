@@ -9,12 +9,11 @@
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "tsc -p tsconfig.renderer.json",
     "build:assets": "mkdir -p dist-electron/main dist-electron/renderer/vendor && cp electron/main/pty_host.py dist-electron/main/pty_host.py && cp electron/main/app-launch-runner.sh dist-electron/main/app-launch-runner.sh && chmod +x dist-electron/main/app-launch-runner.sh && cp electron/renderer/index.html dist-electron/renderer/index.html && cp electron/renderer/app.css dist-electron/renderer/app.css && cp electron/renderer/vendor/xterm.css dist-electron/renderer/vendor/xterm.css && cp electron/renderer/vendor/xterm.js dist-electron/renderer/vendor/xterm.js && cp electron/renderer/vendor/addon-fit.js dist-electron/renderer/vendor/addon-fit.js",
-    "build:icon": "./build/generate-mac-icon.sh",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
-    "pack": "npm run build && npm run build:icon && electron-builder --dir",
-    "dist": "npm run build && npm run build:icon && electron-builder",
-    "dist:mac": "npm run build && npm run build:icon && electron-builder --mac"
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

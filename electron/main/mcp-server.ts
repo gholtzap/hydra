@@ -14,7 +14,7 @@ import type { IncomingMessage, ServerResponse, Server as HttpServer } from "node
 import type { AppControllerHandle } from "./internal-api.js";
 
 const http = require("node:http") as typeof import("node:http");
-const { randomUUID } = require("node:crypto") as typeof import("node:crypto");
+const { randomUUID, timingSafeEqual } = require("node:crypto") as typeof import("node:crypto");
 
 const {
   McpServer,
@@ -35,14 +35,23 @@ interface SessionEntry {
   transport: InstanceType<typeof StreamableHTTPServerTransport>;
 }
 
+interface HydraMcpServerOptions {
+  authToken: string;
+}
+
 export class HydraMcpServer {
   private appController: AppControllerHandle;
+  private authToken: string;
   private httpServer: HttpServer | null = null;
   /** Active sessions keyed by mcp-session-id */
   private sessions = new Map<string, SessionEntry>();
 
-  constructor(appController: AppControllerHandle) {
+  constructor(appController: AppControllerHandle, options: HydraMcpServerOptions) {
     this.appController = appController;
+    this.authToken = options.authToken.trim();
+    if (!this.authToken) {
+      throw new Error("MCP auth token is required.");
+    }
   }
 
   // ── Per-session server factory ─────────────────────────────────
@@ -99,15 +108,10 @@ export class HydraMcpServer {
   async start(): Promise<void> {
     this.httpServer = http.createServer(
       async (req: IncomingMessage, res: ServerResponse) => {
-        // CORS headers for local clients
-        res.setHeader("Access-Control-Allow-Origin", "*");
-        res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type, mcp-session-id");
-        res.setHeader("Access-Control-Expose-Headers", "mcp-session-id");
+        res.setHeader("Cache-Control", "no-store");
 
-        if (req.method === "OPTIONS") {
-          res.writeHead(204);
-          res.end();
+        if (!this.isAuthorizedRequest(req)) {
+          this.writeUnauthorized(res);
           return;
         }
 
@@ -152,14 +156,40 @@ export class HydraMcpServer {
 
       this.httpServer!.on("error", (err: NodeJS.ErrnoException) => {
         if (err.code === "EADDRINUSE") {
+          this.httpServer = null;
           console.warn(`[MCP] Port ${MCP_PORT} is in use, MCP server not started.`);
           resolve(); // Don't crash the app
         } else {
+          this.httpServer = null;
           console.error("[MCP] HTTP server error:", err);
           reject(err);
         }
       });
     });
+  }
+
+  private isAuthorizedRequest(req: IncomingMessage): boolean {
+    const authorization = singleHeaderValue(req.headers.authorization);
+    const bearerPrefix = "Bearer ";
+    if (!authorization.startsWith(bearerPrefix)) {
+      return false;
+    }
+
+    const token = authorization.slice(bearerPrefix.length).trim();
+    return safeTextEqual(token, this.authToken);
+  }
+
+  private writeUnauthorized(res: ServerResponse): void {
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
+
+    res.writeHead(401, {
+      "Content-Type": "application/json",
+      "WWW-Authenticate": 'Bearer realm="hydra-mcp"',
+    });
+    res.end(JSON.stringify({ error: "Unauthorized" }));
   }
 
   private async handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -205,6 +235,7 @@ export class HydraMcpServer {
     if (this.httpServer) {
       return new Promise<void>((resolve) => {
         this.httpServer!.close(() => {
+          this.httpServer = null;
           console.log("[MCP] Server stopped.");
           resolve();
         });
@@ -213,11 +244,29 @@ export class HydraMcpServer {
   }
 }
 
+function singleHeaderValue(headerValue: string | string[] | undefined): string {
+  if (Array.isArray(headerValue)) {
+    return headerValue.length === 1 ? headerValue[0] : "";
+  }
+
+  return typeof headerValue === "string" ? headerValue.trim() : "";
+}
+
+function safeTextEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
 /**
  * Start the MCP server. Call this after AppController is initialized.
  */
-export async function startMcpServer(appController: AppControllerHandle): Promise<HydraMcpServer> {
-  const server = new HydraMcpServer(appController);
+export async function startMcpServer(
+  appController: AppControllerHandle,
+  options: HydraMcpServerOptions
+): Promise<HydraMcpServer> {
+  const server = new HydraMcpServer(appController, options);
   await server.start();
   return server;
 }

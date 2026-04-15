@@ -41,7 +41,7 @@ import type {
 const fs = require("node:fs");
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path");
-const { randomUUID } = require("node:crypto");
+const { randomUUID, randomBytes } = require("node:crypto");
 const { pathToFileURL, URL } = require("node:url");
 const {
   app,
@@ -181,10 +181,17 @@ const { resolveCommandPath } = require("./command-path") as {
   resolveCommandPath: (command: string) => Promise<string | null>;
 };
 const { startMcpServer } = require("./mcp-server") as {
-  startMcpServer: (appController: InstanceType<typeof AppController>) => Promise<any>;
+  startMcpServer: (
+    appController: InstanceType<typeof AppController>,
+    options: { authToken: string }
+  ) => Promise<any>;
 };
 
 app.setName("Hydra");
+
+const MCP_SERVER_ENABLE_ENV = "HYDRA_ENABLE_MCP_SERVER";
+const MCP_SERVER_TOKEN_ENV = "HYDRA_MCP_AUTH_TOKEN";
+const MCP_SERVER_TOKEN_FILE_NAME = "mcp-auth-token";
 
 const FILE_TREE_IGNORED = new Set([
   ".git", "node_modules", "dist", "build", ".next", "__pycache__",
@@ -2448,6 +2455,65 @@ function timestampLabel() {
   });
 }
 
+function isEnabledFlag(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function mcpServerTokenPath() {
+  return path.join(app.getPath("userData"), MCP_SERVER_TOKEN_FILE_NAME);
+}
+
+async function resolveMcpServerAuthToken(): Promise<{ token: string; source: "env" | "file"; path?: string }> {
+  const configuredToken = process.env[MCP_SERVER_TOKEN_ENV]?.trim();
+  if (configuredToken) {
+    return { token: configuredToken, source: "env" };
+  }
+
+  const tokenPath = mcpServerTokenPath();
+
+  try {
+    const existingToken = (await fsp.readFile(tokenPath, "utf8")).trim();
+    if (existingToken) {
+      return { token: existingToken, source: "file", path: tokenPath };
+    }
+  } catch {
+    // Generate a new token below when no persisted token exists yet.
+  }
+
+  const generatedToken = randomBytes(32).toString("hex");
+  await fsp.mkdir(path.dirname(tokenPath), { recursive: true });
+  await fsp.writeFile(tokenPath, `${generatedToken}\n`, {
+    encoding: "utf8",
+    mode: 0o600
+  });
+
+  try {
+    await fsp.chmod(tokenPath, 0o600);
+  } catch {
+    // chmod can fail on platforms that do not honor POSIX file modes.
+  }
+
+  return { token: generatedToken, source: "file", path: tokenPath };
+}
+
+async function maybeStartMcpServer(controller: AppController): Promise<void> {
+  if (!isEnabledFlag(process.env[MCP_SERVER_ENABLE_ENV])) {
+    console.log(`[MCP] Server disabled. Set ${MCP_SERVER_ENABLE_ENV}=1 to enable.`);
+    return;
+  }
+
+  const auth = await resolveMcpServerAuthToken();
+  controller.mcpServer = await startMcpServer(controller, { authToken: auth.token });
+
+  if (auth.source === "env") {
+    console.log(`[MCP] Authentication enabled via ${MCP_SERVER_TOKEN_ENV}.`);
+    return;
+  }
+
+  console.log(`[MCP] Authentication enabled with token file ${auth.path}.`);
+}
+
 const controller = new AppController();
 
 app.whenReady().then(async () => {
@@ -2455,9 +2521,7 @@ app.whenReady().then(async () => {
   controller.setupIpc();
   controller.setupMenu();
   controller.createWindow();
-  startMcpServer(controller).then((server) => {
-    controller.mcpServer = server;
-  }).catch((err) =>
+  maybeStartMcpServer(controller).catch((err) =>
     console.error("[MCP] Server failed to start:", err)
   );
 });

@@ -28,7 +28,7 @@ print_build_spinner() {
 
 printf '\033[2J\033[H'
 
-(eval "$BUILD_COMMAND") >/dev/null 2>&1 &
+(/bin/sh -lc "$BUILD_COMMAND") >/dev/null 2>&1 &
 build_pid=$!
 print_build_spinner "$build_pid"
 wait "$build_pid"
@@ -40,5 +40,4 @@ if [ "$build_status" -ne 0 ]; then
 fi
 
 printf '\r\033[KBuilding\nBuilt\nNow running...\n'
-eval "$RUN_COMMAND"
-exit $?
+exec /bin/sh -lc "$RUN_COMMAND"

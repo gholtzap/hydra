@@ -42,6 +42,7 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path");
 const { randomUUID, randomBytes } = require("node:crypto");
+const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { autoUpdater } = require("electron-updater");
 const { fileURLToPath, pathToFileURL, URL } = require("node:url");
 const {
@@ -85,6 +86,10 @@ type QueuedSessionLaunch = {
   input: string;
 };
 type UpdaterLogLevel = "debug" | "info" | "warn" | "error";
+type AutoUpdateSupport = {
+  enabled: boolean;
+  reason: string;
+};
 
 const { scanWorkspace } = require("./workspace-scanner") as {
   scanWorkspace: (rootPath: string, workspaceId: string) => Promise<RepoRecord[]>;
@@ -274,6 +279,43 @@ const updaterLogger = {
   warn: (message: unknown) => logUpdater("warn", message),
   error: (message: unknown) => logUpdater("error", message)
 };
+
+function resolveMacAutoUpdateSupport(): AutoUpdateSupport {
+  if (process.platform !== "darwin") {
+    return { enabled: true, reason: "non-macOS build" };
+  }
+
+  const result = spawnSync("/usr/bin/codesign", ["-dv", "--verbose=4", process.execPath], {
+    encoding: "utf8"
+  });
+  if (result.error) {
+    return {
+      enabled: false,
+      reason: `codesign inspection failed: ${formatUpdaterLogMessage(result.error)}`
+    };
+  }
+  if (typeof result.status === "number" && result.status !== 0) {
+    const details = `${result.stdout || ""}\n${result.stderr || ""}`.trim();
+    return {
+      enabled: false,
+      reason: `codesign inspection exited with status ${result.status}${details ? `: ${details}` : ""}`
+    };
+  }
+
+  const details = `${result.stdout || ""}\n${result.stderr || ""}`;
+  const teamIdentifier = details.match(/^TeamIdentifier=(.+)$/m)?.[1]?.trim() || "";
+  if (!teamIdentifier || teamIdentifier === "not set") {
+    return {
+      enabled: false,
+      reason: `macOS bundle is not signed for auto-update (execPath=${process.execPath})`
+    };
+  }
+
+  return {
+    enabled: true,
+    reason: `signed macOS bundle detected (team=${teamIdentifier})`
+  };
+}
 
 function normalizeAbsolutePath(input: unknown, label = "path") {
   const value = typeof input === "string" ? input.trim() : "";
@@ -2850,6 +2892,13 @@ function startAutoUpdateChecks(): void {
     return;
   }
 
+  const support = resolveMacAutoUpdateSupport();
+  if (!support.enabled) {
+    logUpdater("warn", `auto-update disabled: ${support.reason}`);
+    return;
+  }
+
+  logUpdater("info", `auto-update enabled: ${support.reason}`);
   autoUpdater.logger = updaterLogger;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;

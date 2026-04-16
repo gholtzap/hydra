@@ -123,6 +123,13 @@ function summarizePort(port: number, listeners: PortListener[]): PortStatusItem 
 }
 
 function loadListeningPorts(): Promise<Map<number, PortListener[]>> {
+  if (process.platform === "win32") {
+    return loadListeningPortsWindows();
+  }
+  return loadListeningPortsUnix();
+}
+
+function loadListeningPortsUnix(): Promise<Map<number, PortListener[]>> {
   return new Promise<Map<number, PortListener[]>>((resolve, reject) => {
     execFile(
       "lsof",
@@ -135,15 +142,47 @@ function loadListeningPorts(): Promise<Map<number, PortListener[]>> {
             resolve(new Map());
             return;
           }
-
           reject(error);
           return;
         }
-
         resolve(parseLsofListeners(stdout));
       }
     );
   });
+}
+
+function loadListeningPortsWindows(): Promise<Map<number, PortListener[]>> {
+  return new Promise<Map<number, PortListener[]>>((resolve, reject) => {
+    execFile(
+      "netstat",
+      ["-ano"],
+      { maxBuffer: 1024 * 1024 },
+      (error: (NodeJS.ErrnoException & { code?: number | string }) | null, stdout: string) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(parseNetstatListeners(stdout));
+      }
+    );
+  });
+}
+
+function parseNetstatListeners(output: string): Map<number, PortListener[]> {
+  const listenersByPort = new Map<number, PortListener[]>();
+  for (const rawLine of String(output || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    // Match TCP LISTENING lines: "TCP  0.0.0.0:8080  0.0.0.0:0  LISTENING  1234"
+    const match = /^TCP\s+[\d.*[\]:]+:(\d+)\s+[\d.*[\]:]+:\d+\s+LISTENING\s+(\d+)/i.exec(line);
+    if (!match) continue;
+    const port = Number.parseInt(match[1], 10);
+    const pid = Number.parseInt(match[2], 10);
+    if (!Number.isFinite(port)) continue;
+    const listeners = listenersByPort.get(port) || [];
+    listeners.push({ pid, command: String(pid), address: `*:${port}` });
+    listenersByPort.set(port, listeners);
+  }
+  return listenersByPort;
 }
 
 function parseLsofListeners(output: string): Map<number, PortListener[]> {
@@ -209,7 +248,9 @@ function parsePort(value: string): number | null {
 
 function humanizePortInspectionError(error: unknown): string {
   if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-    return "Port inspection requires lsof, but it is not available on this system.";
+    return process.platform === "win32"
+      ? "Port inspection requires netstat, but it is not available on this system."
+      : "Port inspection requires lsof, but it is not available on this system.";
   }
 
   if (error instanceof Error && error.message) {

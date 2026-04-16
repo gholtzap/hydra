@@ -9,12 +9,15 @@ files:
 
 asarUnpack:
   - node_modules/@tokscale/cli-*/bin/*
+  - node_modules/node-pty/**/*
 
 extraResources:
   - from: dist-electron/main/pty_host.py
     to: helpers/pty_host.py
   - from: dist-electron/main/app-launch-runner.sh
     to: helpers/app-launch-runner.sh
+  - from: dist-electron/main/app-launch-runner.ps1
+    to: helpers/app-launch-runner.ps1
 
 mac:
   category: public.app-category.developer-tools
@@ -23,6 +26,23 @@ mac:
   target:
     - target: dmg
     - target: zip
+
+win:
+  icon: build/hydra.ico
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/hydra.ico
+  uninstallerIcon: build/hydra.ico
 
 publish:
   provider: github

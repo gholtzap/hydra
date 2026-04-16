@@ -33,7 +33,7 @@ const AGENT_DEFINITIONS: AgentDefinition[] = [
   { id: "warp", label: "Warp", defaultCommand: "warp" }
 ];
 const DEFAULT_AGENT_ID: AgentId = "claude";
-const LEGACY_CLAUDE_EXECUTABLE_PATH = "/opt/homebrew/bin/claude";
+const LEGACY_CLAUDE_EXECUTABLE_PATH = process.platform === "darwin" ? "/opt/homebrew/bin/claude" : "";
 const KNOWN_AGENT_IDS = new Set(AGENT_DEFINITIONS.map((agent) => agent.id));
 const DEFAULT_AGENT_COMMANDS: Record<AgentId, string> = Object.fromEntries(
   AGENT_DEFINITIONS.map((agent) => [agent.id, agent.defaultCommand])
@@ -43,7 +43,7 @@ const DEFAULT_PREFERENCES: AppPreferences = {
   defaultAgentId: DEFAULT_AGENT_ID,
   agentCommandOverrides: { ...DEFAULT_AGENT_COMMANDS },
   claudeExecutablePath: DEFAULT_AGENT_COMMANDS.claude,
-  shellExecutablePath: process.env.SHELL || "/bin/zsh",
+  shellExecutablePath: process.platform === "win32" ? (process.env.COMSPEC || "cmd.exe") : (process.env.SHELL || "/bin/sh"),
   notificationsEnabled: true,
   showInAppBadges: true,
   showNativeNotifications: true,

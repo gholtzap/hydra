@@ -34,6 +34,8 @@ const MANAGED_SKILLS_ROOT =
         ".claude",
         "skills"
       )
+    : process.platform === "win32"
+    ? path.join(process.env["PROGRAMDATA"] || "C:\\ProgramData", "ClaudeCode", ".claude", "skills")
     : null;
 const PLUGIN_ROOT = path.join(os.homedir(), ".claude", "plugins");
 

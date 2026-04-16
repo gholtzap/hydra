@@ -113,7 +113,7 @@ export function matchesAccelerator(event: KeyboardEvent, accelerator: string): b
   for (const part of parts) {
     if (part === "cmdorctrl" || part === "commandorcontrol") {
       // On Mac, CmdOrCtrl maps to Meta; on others, Ctrl
-      if (typeof navigator !== "undefined" && /mac/i.test(navigator.platform)) {
+      if (process.platform === "darwin") {
         needsMeta = true;
       } else {
         needsCtrl = true;

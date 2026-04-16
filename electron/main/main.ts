@@ -1484,7 +1484,7 @@ class AppController {
       return {
         ok: false,
         error: "Select a project before searching session files.",
-        installCommand: "brew install fzf ripgrep",
+        installCommand: process.platform === "win32" ? "scoop install fzf ripgrep" : "brew install fzf ripgrep",
         missingTools: [],
         results: []
       };
@@ -2451,13 +2451,27 @@ function rebuildTranscript(session) {
 
 function resolvedShellPath(preferences) {
   const candidate = preferences.shellExecutablePath?.trim();
-  return candidate || process.env.SHELL || "/bin/zsh";
+  if (candidate) return candidate;
+  if (process.platform === "win32") {
+    return process.env.COMSPEC || "cmd.exe";
+  }
+  return process.env.SHELL || "/bin/sh";
 }
 
 function resolvedAppLaunchCommand(preferences, repo) {
   const config = repo?.appLaunchConfig;
   if (!config) {
     return null;
+  }
+
+  if (process.platform === "win32") {
+    return [
+      "powershell.exe",
+      "-ExecutionPolicy", "Bypass",
+      "-File", appLaunchRunnerPath(),
+      "-BuildCommand", config.buildCommand,
+      "-RunCommand", config.runCommand
+    ];
   }
 
   const shellPath = resolvedShellPath(preferences);
@@ -2505,6 +2519,9 @@ function resolvedAgentCommand(preferences, agentId) {
 }
 
 function appLaunchRunnerPath() {
+  if (process.platform === "win32") {
+    return resolveBundledHelperPath("app-launch-runner.ps1");
+  }
   return resolveBundledHelperPath("app-launch-runner.sh");
 }
 

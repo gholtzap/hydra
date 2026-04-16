@@ -87,7 +87,7 @@ function matchesAccelerator(event: KeyboardEvent, accelerator: string): boolean 
 
   for (const part of parts) {
     if (part === "cmdorctrl" || part === "commandorcontrol") {
-      if (/mac/i.test(navigator.platform)) {
+      if (process.platform === "darwin") {
         needsMeta = true;
       } else {
         needsCtrl = true;
@@ -127,7 +127,7 @@ function matchesAccelerator(event: KeyboardEvent, accelerator: string): boolean 
 }
 
 function acceleratorDisplayParts(accelerator: string): { isMac: boolean; parts: string[] } {
-  const isMac = /mac/i.test(navigator.platform);
+  const isMac = process.platform === "darwin";
   const acceleratorParts = accelerator.split("+");
   const display: string[] = [];
 
@@ -7714,9 +7714,27 @@ function unavailableEphemeralToolMarkup(toolId: EphemeralToolId): string | null 
       return null;
     }
 
+    const ua = navigator.userAgent;
+    let installLines: string[];
+    if (ua.includes("Windows")) {
+      installLines = [
+        "winget install -e --id JesseBartlett.lazygit",
+        "scoop install lazygit"
+      ];
+    } else if (ua.includes("Linux")) {
+      installLines = [
+        "pacman -S lazygit",
+        "dnf install lazygit",
+        "go install github.com/jesseduffield/lazygit@latest"
+      ];
+    } else {
+      installLines = ["brew install lazygit"];
+    }
+    const codeStyle = "color:var(--text);background:var(--surface);padding:4px 10px;border-radius:6px;font-size:13px;";
+    const codesHtml = installLines.map((cmd) => `<code style="${codeStyle}">${cmd}</code>`).join("\n      ");
     return `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-family:var(--font-mono);font-size:14px;flex-direction:column;gap:8px;">
       <span>lazygit is not installed. Install lazygit and launch app again.</span>
-      <code style="color:var(--text);background:var(--surface);padding:4px 10px;border-radius:6px;font-size:13px;">brew install lazygit</code>
+      ${codesHtml}
     </div>`;
   }
 
@@ -11193,7 +11211,11 @@ function previewTranscript(transcript) {
 }
 
 function abbreviateHome(value) {
-  return value.replace(/^\/Users\/[^/]+/, "~");
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  if (home && value.startsWith(home)) {
+    return "~" + value.slice(home.length);
+  }
+  return value;
 }
 
 function trimRawTranscript(value) {

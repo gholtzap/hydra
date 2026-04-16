@@ -70,3 +70,59 @@ jobs:
               --generate-notes \
               --latest
           fi
+
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Windows icon
+        shell: bash
+        run: |
+          magick build/icon-source.png \
+            -define icon:auto-resize="256,128,96,64,48,32,16" \
+            build/hydra.ico
+
+      - name: Build Windows release artifacts
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: npm run dist:win -- --publish never
+
+      - name: Publish GitHub release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          version="${TAG_NAME#v}"
+          exe_path="release/Hydra-${version}-x64-setup.exe"
+          zip_path="release/Hydra-${version}-x64.zip"
+          yml_path="release/latest.yml"
+
+          assets=()
+          [ -f "$exe_path" ] && assets+=("$exe_path#Hydra Windows installer (x64)")
+          [ -f "$zip_path" ] && assets+=("$zip_path#Hydra Windows app archive (x64)")
+          [ -f "$yml_path" ] && assets+=("$yml_path")
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG_NAME" "${assets[@]}" \
+              --verify-tag \
+              --generate-notes \
+              --latest
+          fi

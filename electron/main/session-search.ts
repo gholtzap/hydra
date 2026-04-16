@@ -9,7 +9,9 @@ const { resolveCommandPath } = require("./command-path") as {
 };
 
 const REQUIRED_TOOLS = ["fzf", "rg"];
-const INSTALL_COMMAND = "brew install fzf ripgrep";
+const INSTALL_COMMAND = process.platform === "win32"
+  ? "scoop install fzf ripgrep"
+  : "brew install fzf ripgrep";
 const MAX_RESULTS = 50;
 const MAX_CODEX_METADATA_BYTES = 64 * 1024;
 const COMMAND_OUTPUT_MAX_BUFFER = 8 * 1024 * 1024;

@@ -42,6 +42,7 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path");
 const { randomUUID, randomBytes } = require("node:crypto");
+const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const { autoUpdater } = require("electron-updater");
 const { fileURLToPath, pathToFileURL, URL } = require("node:url");
 const {
@@ -83,6 +84,11 @@ type EphemeralSessionRecord = {
 type QueuedSessionLaunch = {
   title?: string;
   input: string;
+};
+type UpdaterLogLevel = "debug" | "info" | "warn" | "error";
+type AutoUpdateSupport = {
+  enabled: boolean;
+  reason: string;
 };
 
 const { scanWorkspace } = require("./workspace-scanner") as {
@@ -220,6 +226,96 @@ const TRUSTED_RENDERER_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "ren
 const AGENT_LABELS: Record<AgentId, string> = Object.fromEntries(
   AGENT_DEFINITIONS.map((agent) => [agent.id, agent.label])
 ) as Record<AgentId, string>;
+
+function formatUpdaterLogMessage(message: unknown): string {
+  if (message instanceof Error) {
+    return message.stack || message.message;
+  }
+  if (typeof message === "string") {
+    return message;
+  }
+
+  try {
+    const serialized = JSON.stringify(message);
+    return serialized ?? String(message);
+  } catch {
+    return String(message);
+  }
+}
+
+function updaterLogFilePath(): string {
+  return path.join(app.getPath("userData"), "logs", "updater.log");
+}
+
+function logUpdater(level: UpdaterLogLevel, message: unknown): void {
+  const text = formatUpdaterLogMessage(message);
+  const prefix = `[updater] ${text}`;
+
+  switch (level) {
+    case "debug":
+    case "info":
+      console.log(prefix);
+      break;
+    case "warn":
+      console.warn(prefix);
+      break;
+    case "error":
+      console.error(prefix);
+      break;
+  }
+
+  try {
+    const logPath = updaterLogFilePath();
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.appendFileSync(logPath, `[${new Date().toISOString()}] [${level}] ${text}\n`, "utf8");
+  } catch (error: unknown) {
+    console.error("[updater] failed to write updater log:", error);
+  }
+}
+
+const updaterLogger = {
+  debug: (message: unknown) => logUpdater("debug", message),
+  info: (message: unknown) => logUpdater("info", message),
+  warn: (message: unknown) => logUpdater("warn", message),
+  error: (message: unknown) => logUpdater("error", message)
+};
+
+function resolveMacAutoUpdateSupport(): AutoUpdateSupport {
+  if (process.platform !== "darwin") {
+    return { enabled: true, reason: "non-macOS build" };
+  }
+
+  const result = spawnSync("/usr/bin/codesign", ["-dv", "--verbose=4", process.execPath], {
+    encoding: "utf8"
+  });
+  if (result.error) {
+    return {
+      enabled: false,
+      reason: `codesign inspection failed: ${formatUpdaterLogMessage(result.error)}`
+    };
+  }
+  if (typeof result.status === "number" && result.status !== 0) {
+    const details = `${result.stdout || ""}\n${result.stderr || ""}`.trim();
+    return {
+      enabled: false,
+      reason: `codesign inspection exited with status ${result.status}${details ? `: ${details}` : ""}`
+    };
+  }
+
+  const details = `${result.stdout || ""}\n${result.stderr || ""}`;
+  const teamIdentifier = details.match(/^TeamIdentifier=(.+)$/m)?.[1]?.trim() || "";
+  if (!teamIdentifier || teamIdentifier === "not set") {
+    return {
+      enabled: false,
+      reason: `macOS bundle is not signed for auto-update (execPath=${process.execPath})`
+    };
+  }
+
+  return {
+    enabled: true,
+    reason: `signed macOS bundle detected (team=${teamIdentifier})`
+  };
+}
 
 function normalizeAbsolutePath(input: unknown, label = "path") {
   const value = typeof input === "string" ? input.trim() : "";
@@ -367,6 +463,9 @@ class AppController {
   focusedSessionId: string | null;
   saveTimer: NodeJS.Timeout | null;
   allowQuit: boolean;
+  downloadedUpdateVersion: string | null;
+  updateInstallWatchdog: NodeJS.Timeout | null;
+  updateInstallInProgress: boolean;
   pendingAgentLaunch: Set<string>;
   pendingAgentLaunchTimers: Map<string, NodeJS.Timeout>;
   sessionSizes: Map<string, { cols: number; rows: number }>;
@@ -389,6 +488,9 @@ class AppController {
     this.focusedSessionId = null;
     this.saveTimer = null;
     this.allowQuit = false;
+    this.downloadedUpdateVersion = null;
+    this.updateInstallWatchdog = null;
+    this.updateInstallInProgress = false;
     this.pendingAgentLaunch = new Set();
     this.pendingAgentLaunchTimers = new Map();
     this.sessionSizes = new Map();
@@ -405,6 +507,103 @@ class AppController {
     this.mcpServer = null;
     this.ptyHost = new PtyHostClient();
     this.ptyHost.onMessage((message) => this.handlePtyMessage(message));
+  }
+
+  describeDownloadedUpdate(version?: string | null): string {
+    const normalizedVersion = typeof version === "string" ? version.trim() : "";
+    return normalizedVersion ? `Hydra ${normalizedVersion}` : "the downloaded update";
+  }
+
+  noteDownloadedUpdate(version?: string | null): void {
+    const normalizedVersion = typeof version === "string" ? version.trim() : "";
+    this.downloadedUpdateVersion = normalizedVersion || null;
+    this.updateInstallInProgress = false;
+    this.clearUpdateInstallWatchdog();
+  }
+
+  clearUpdateInstallWatchdog(): void {
+    if (!this.updateInstallWatchdog) {
+      return;
+    }
+
+    clearTimeout(this.updateInstallWatchdog);
+    this.updateInstallWatchdog = null;
+  }
+
+  scheduleUpdateInstallWatchdog(version?: string | null): void {
+    const targetVersion = typeof version === "string" && version.trim()
+      ? version.trim()
+      : this.downloadedUpdateVersion;
+
+    this.clearUpdateInstallWatchdog();
+    this.updateInstallWatchdog = setTimeout(() => {
+      this.updateInstallWatchdog = null;
+      this.updateInstallInProgress = false;
+
+      const currentVersion = app.getVersion();
+      const targetUpdate = this.describeDownloadedUpdate(targetVersion);
+      logUpdater(
+        "warn",
+        `restart-to-install stalled; current=${currentVersion}, target=${targetVersion || "unknown"}`
+      );
+
+      const detailParts = [
+        `Hydra is still running on version ${currentVersion}.`,
+        "The downloaded update is still staged and may install the next time Hydra fully quits.",
+        process.platform === "darwin"
+          ? "Unsigned macOS builds do not reliably support auto-update install."
+          : "Quit Hydra fully and reopen it to try again.",
+        `Updater log: ${updaterLogFilePath()}`
+      ];
+
+      void dialog.showMessageBox({
+        type: "warning",
+        title: "Update restart did not finish",
+        message: `Hydra did not restart to install ${targetUpdate}.`,
+        detail: detailParts.join(" "),
+        buttons: ["Quit Hydra", "Later"],
+        defaultId: 0,
+        cancelId: 1
+      }).then(({ response }) => {
+        if (response === 0) {
+          this.allowQuit = true;
+          app.quit();
+        }
+      }).catch((error: unknown) => {
+        logUpdater("error", `failed to show stalled update dialog: ${formatUpdaterLogMessage(error)}`);
+      });
+    }, UPDATE_INSTALL_RESTART_TIMEOUT_MS);
+    this.updateInstallWatchdog.unref?.();
+  }
+
+  async handleUpdaterError(error: unknown, version?: string | null): Promise<void> {
+    logUpdater("error", error);
+
+    if (!this.updateInstallInProgress) {
+      return;
+    }
+
+    this.updateInstallInProgress = false;
+    this.clearUpdateInstallWatchdog();
+
+    const currentVersion = app.getVersion();
+    const targetUpdate = this.describeDownloadedUpdate(version || this.downloadedUpdateVersion);
+    const detailParts = [
+      `Hydra is still running on version ${currentVersion}.`,
+      process.platform === "darwin"
+        ? "Quit Hydra fully and reopen it to try again. Unsigned macOS builds do not reliably support auto-update install."
+        : "Quit Hydra fully and reopen it to try again.",
+      `Error: ${formatUpdaterLogMessage(error)}`,
+      `Updater log: ${updaterLogFilePath()}`
+    ];
+
+    await dialog.showMessageBox({
+      type: "error",
+      title: "Update failed",
+      message: `Hydra could not restart to install ${targetUpdate}.`,
+      detail: detailParts.join(" "),
+      buttons: ["OK"]
+    });
   }
 
   async initialize() {
@@ -2240,7 +2439,7 @@ class AppController {
     app.quit();
   }
 
-  async restartToInstallUpdate() {
+  async restartToInstallUpdate(version?: string | null) {
     const liveSessions = this.state.sessions.filter((session) => session.runtimeState === "live");
     if (liveSessions.length > 0) {
       const result = dialog.showMessageBoxSync(this.window, {
@@ -2257,8 +2456,22 @@ class AppController {
       }
     }
 
-    await this.shutdown();
-    autoUpdater.quitAndInstall();
+    const targetVersion = typeof version === "string" && version.trim()
+      ? version.trim()
+      : this.downloadedUpdateVersion;
+
+    try {
+      await this.shutdown();
+      this.updateInstallInProgress = true;
+      this.scheduleUpdateInstallWatchdog(targetVersion);
+      logUpdater(
+        "info",
+        `restart requested to install ${this.describeDownloadedUpdate(targetVersion)} from ${app.getVersion()}`
+      );
+      autoUpdater.quitAndInstall();
+    } catch (error: unknown) {
+      await this.handleUpdaterError(error, targetVersion);
+    }
   }
 
   async shutdown() {
@@ -2656,6 +2869,7 @@ const UPDATE_CHECK_STARTUP_DELAY_MS = 15_000;
 const UPDATE_CHECK_FOLLOW_UP_DELAY_MS = 10 * 60 * 1000;
 const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 const UPDATE_CHECK_MIN_GAP_MS = 5 * 60 * 1000;
+const UPDATE_INSTALL_RESTART_TIMEOUT_MS = 15_000;
 
 let updateCheckInFlight = false;
 let lastUpdateCheckAt = 0;
@@ -2679,12 +2893,12 @@ async function maybeCheckForUpdates(reason: string): Promise<void> {
 
   updateCheckInFlight = true;
   lastUpdateCheckAt = nowMs;
-  console.log(`[updater] checking for updates (${reason})`);
+  logUpdater("info", `checking for updates (${reason})`);
 
   try {
     await autoUpdater.checkForUpdates();
   } catch (error: unknown) {
-    console.error(`[updater] check failed (${reason}):`, error);
+    logUpdater("error", `check failed (${reason}): ${formatUpdaterLogMessage(error)}`);
   } finally {
     updateCheckInFlight = false;
   }
@@ -2695,6 +2909,14 @@ function startAutoUpdateChecks(): void {
     return;
   }
 
+  const support = resolveMacAutoUpdateSupport();
+  if (!support.enabled) {
+    logUpdater("warn", `auto-update disabled: ${support.reason}`);
+    return;
+  }
+
+  logUpdater("info", `auto-update enabled: ${support.reason}`);
+  autoUpdater.logger = updaterLogger;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
@@ -2726,26 +2948,29 @@ app.whenReady().then(async () => {
 });
 
 autoUpdater.on("update-available", (info: { version?: string }) => {
-  console.log(`[updater] update available${info.version ? `: ${info.version}` : ""}`);
+  logUpdater("info", `update available${info.version ? `: ${info.version}` : ""}`);
 });
 
 autoUpdater.on("update-not-available", (info: { version?: string }) => {
-  console.log(`[updater] no update available${info.version ? `; current release: ${info.version}` : ""}`);
+  logUpdater("info", `no update available${info.version ? `; current release: ${info.version}` : ""}`);
 });
 
 autoUpdater.on("error", (error: unknown) => {
-  console.error("[updater] error:", error);
+  void controller.handleUpdaterError(error);
 });
 
-autoUpdater.on("update-downloaded", () => {
+autoUpdater.on("update-downloaded", (info: { version?: string }) => {
+  controller.noteDownloadedUpdate(info.version);
+  const targetUpdate = controller.describeDownloadedUpdate(info.version);
   dialog.showMessageBox({
     type: "info",
     title: "Update ready",
-    message: "A new version of Hydra has been downloaded. Restart to install it.",
+    message: `${targetUpdate} has been downloaded. Restart to install it.`,
+    detail: `Current version: ${app.getVersion()}. Updater log: ${updaterLogFilePath()}`,
     buttons: ["Restart now", "Later"]
   }).then(({ response }) => {
     if (response === 0) {
-      void controller.restartToInstallUpdate();
+      void controller.restartToInstallUpdate(info.version);
     }
   });
 });

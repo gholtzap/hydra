@@ -4,7 +4,6 @@
   "private": true,
   "description": "Hydra desktop shell built with Electron",
   "main": "dist-electron/main/main.js",
-  "build": {},
   "scripts": {
     "build": "npm run build:main && npm run build:renderer && npm run build:assets",
     "build:icon": "./scripts/build-icon.sh build/icon-source.png",

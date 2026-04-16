@@ -106,7 +106,7 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           version="${TAG_NAME#v}"
-          exe_path="release/Hydra-${version}-x64-setup.exe"
+          exe_path="release/Hydra-${version}-x64.exe"
           zip_path="release/Hydra-${version}-x64.zip"
           yml_path="release/latest.yml"
 

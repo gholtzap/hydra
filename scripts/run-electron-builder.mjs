@@ -33,6 +33,10 @@ const result = spawnSync(
   }
 );
 
+if (result.error) {
+  process.stderr.write(`run-electron-builder: failed to spawn electron-builder: ${result.error.message}\n`);
+}
+
 if (typeof result.status === "number") {
   process.exit(result.status);
 }

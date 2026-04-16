@@ -96,6 +96,7 @@ jobs:
             build/hydra.ico
 
       - name: Build Windows release artifacts
+        shell: bash
         run: npm run dist:win -- --publish never
 
       - name: Publish GitHub release assets

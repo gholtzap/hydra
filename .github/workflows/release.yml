@@ -54,10 +54,9 @@ jobs:
           dmg_path="release/Hydra-${TAG_NAME#v}-arm64.dmg"
           zip_path="release/Hydra-${TAG_NAME#v}-arm64.zip"
 
-          assets=(
-            "$dmg_path#Hydra macOS installer (Apple Silicon)"
-            "$zip_path#Hydra macOS app archive (Apple Silicon)"
-          )
+          assets=()
+          [ -f "$dmg_path" ] && assets+=("$dmg_path#Hydra macOS installer (Apple Silicon)")
+          [ -f "$zip_path" ] && assets+=("$zip_path#Hydra macOS app archive (Apple Silicon)")
           for yml_file in release/latest-mac.yml release/latest-mac-arm64.yml; do
             [ -f "$yml_file" ] && assets+=("$yml_file")
           done

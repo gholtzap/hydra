@@ -26,11 +26,14 @@ mac:
   artifactName: ${productName}-${version}-${arch}.${ext}
   target:
     - target: dmg
+      arch:
+        - arm64
     - target: zip
+      arch:
+        - arm64
 
 win:
   icon: build/hydra.ico
-  sign: false
   artifactName: ${productName}-${version}-${arch}.${ext}
   target:
     - target: nsis

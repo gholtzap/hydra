@@ -2,9 +2,10 @@
 // Cross-platform replacement for the shell-based build:assets script.
 import { cpSync, mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { platform } from "node:process";
 
-const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const root = fileURLToPath(new URL("..", import.meta.url)).replace(/[/\\]$/, "");
 
 function mkdir(dir) {
   mkdirSync(dir, { recursive: true });

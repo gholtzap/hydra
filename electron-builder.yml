@@ -1,6 +1,7 @@
 appId: com.gmh.hydra
 productName: Hydra
 
+
 directories:
   output: release
 
@@ -29,6 +30,7 @@ mac:
 
 win:
   icon: build/hydra.ico
+  sign: false
   artifactName: ${productName}-${version}-${arch}.${ext}
   target:
     - target: nsis

@@ -97,9 +97,6 @@ jobs:
             build/hydra.ico
 
       - name: Build Windows release artifacts
-        env:
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: npm run dist:win -- --publish never
 
       - name: Publish GitHub release assets

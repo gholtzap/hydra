@@ -87,7 +87,7 @@ function matchesAccelerator(event: KeyboardEvent, accelerator: string): boolean 
 
   for (const part of parts) {
     if (part === "cmdorctrl" || part === "commandorcontrol") {
-      if (process.platform === "darwin") {
+      if (navigator.platform.includes("Mac")) {
         needsMeta = true;
       } else {
         needsCtrl = true;
@@ -127,7 +127,7 @@ function matchesAccelerator(event: KeyboardEvent, accelerator: string): boolean 
 }
 
 function acceleratorDisplayParts(accelerator: string): { isMac: boolean; parts: string[] } {
-  const isMac = process.platform === "darwin";
+  const isMac = navigator.platform.includes("Mac");
   const acceleratorParts = accelerator.split("+");
   const display: string[] = [];
 
@@ -284,7 +284,7 @@ const INITIAL_PREFERENCES: AppPreferences = {
   defaultAgentId: DEFAULT_AGENT_ID,
   agentCommandOverrides: { ...DEFAULT_AGENT_COMMANDS },
   claudeExecutablePath: DEFAULT_AGENT_COMMANDS.claude,
-  shellExecutablePath: "/bin/zsh",
+  shellExecutablePath: navigator.platform.startsWith("Win") ? "cmd.exe" : "/bin/sh",
   notificationsEnabled: true,
   showInAppBadges: true,
   showNativeNotifications: true,
@@ -11211,11 +11211,10 @@ function previewTranscript(transcript) {
 }
 
 function abbreviateHome(value) {
-  const home = process.env.HOME || process.env.USERPROFILE || "";
-  if (home && value.startsWith(home)) {
-    return "~" + value.slice(home.length);
-  }
-  return value;
+  // Replace Unix home dirs (/Users/name or /home/name) and Windows home dirs (C:\Users\name)
+  return value
+    .replace(/^\/(?:Users|home)\/[^/]+/, "~")
+    .replace(/^[A-Za-z]:[/\\]Users[/\\][^/\\]+/, "~");
 }
 
 function trimRawTranscript(value) {

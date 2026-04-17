@@ -151,14 +151,24 @@ async function getWikiContext(rootPath: string, enabled: boolean): Promise<WikiC
 
 async function readWikiFile(rootPath: string, relativePath: string): Promise<WikiFileContents> {
   const wikiPath = wikiDirectoryPath(rootPath);
+  const resolvedWikiPath = path.resolve(wikiPath);
   const resolvedPath = path.resolve(wikiPath, relativePath || "");
-  const normalizedWikiPath = `${path.resolve(wikiPath)}${path.sep}`;
+  const normalizedWikiPath = `${resolvedWikiPath}${path.sep}`;
 
   if (
-    resolvedPath !== path.resolve(wikiPath) &&
+    resolvedPath !== resolvedWikiPath &&
     !resolvedPath.startsWith(normalizedWikiPath)
   ) {
     throw new Error("Wiki file path must stay inside .wiki.");
+  }
+
+  if (resolvedPath === resolvedWikiPath) {
+    throw new Error("Wiki file path must point to a file inside .wiki.");
+  }
+
+  const stat = await fsp.stat(resolvedPath);
+  if (stat.isDirectory()) {
+    throw new Error("Wiki file path must point to a file inside .wiki.");
   }
 
   return {

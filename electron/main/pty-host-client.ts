@@ -116,7 +116,11 @@ class PtyHostClient {
       return;
     }
 
-    this.child.stdin.write(`${JSON.stringify(payload)}\n`);
+    try {
+      this.child.stdin.write(`${JSON.stringify(payload)}\n`);
+    } catch {
+      // EPIPE: pty host process exited between the writable check and the write.
+    }
   }
 }
 

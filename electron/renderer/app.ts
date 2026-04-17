@@ -3314,12 +3314,6 @@ function mountSessionWorkspaceTerminals(layout: WorkspaceLayoutNode) {
     terminal.loadAddon(fitAddon);
     terminal.open(terminalElement);
     terminal.attachCustomKeyEventHandler((event) => handleTerminalCustomKeyEvent(event));
-    terminal.onData((data) => {
-      api.sendInput(session.id, data);
-    });
-    terminal.onBinary((data) => {
-      api.sendBinaryInput(session.id, data);
-    });
     terminal.onResize((size) => {
       api.resizeSession(session.id, size.cols, size.rows);
     });
@@ -3337,6 +3331,15 @@ function mountSessionWorkspaceTerminals(layout: WorkspaceLayoutNode) {
 
     terminal.reset();
     terminal.write(terminalReplayText(session));
+    // Replay can contain terminal queries (OSC/CSI) that trigger xterm
+    // responses. Wire stdin forwarding only after replay to avoid sending
+    // those protocol responses into the live shell as commands.
+    terminal.onData((data) => {
+      api.sendInput(session.id, data);
+    });
+    terminal.onBinary((data) => {
+      api.sendBinaryInput(session.id, data);
+    });
     syncSessionTerminalLiveState(session);
     fitAddon.fit();
     api.resizeSession(session.id, terminal.cols, terminal.rows);

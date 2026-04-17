@@ -37,6 +37,7 @@ import type {
   SessionRecord,
   SessionSearchSource,
   SessionSearchResponse,
+  SessionRuntimeState,
   SessionStatus,
   SessionSummary,
   SessionTagColor,
@@ -119,6 +120,26 @@ type ResolvedCommandPayload = {
 };
 type PersistStateOptions = {
   throwOnError?: boolean;
+};
+type PackagedSmokeTestConfig = {
+  agentId: AgentId;
+  agentCommand: string | null;
+  expectedOutput: string;
+  resultPath: string | null;
+  timeoutMs: number;
+  userDataDir: string | null;
+  workspacePath: string;
+};
+type PackagedSmokeTestResult = {
+  elapsedMs: number;
+  expectedOutput: string;
+  message: string;
+  ok: boolean;
+  runtimeState: SessionRuntimeState | null;
+  sessionId: string | null;
+  stage: string;
+  status: SessionStatus | null;
+  transcriptPreview: string;
 };
 
 const { scanWorkspace } = require("./workspace-scanner") as {
@@ -250,6 +271,22 @@ app.setName("Hydra");
 const MCP_SERVER_ENABLE_ENV = "HYDRA_ENABLE_MCP_SERVER";
 const MCP_SERVER_TOKEN_ENV = "HYDRA_MCP_AUTH_TOKEN";
 const MCP_SERVER_TOKEN_FILE_NAME = "mcp-auth-token";
+const SMOKE_TEST_ENABLE_ENV = "HYDRA_SMOKE_TEST";
+const SMOKE_TEST_AGENT_ID_ENV = "HYDRA_SMOKE_AGENT_ID";
+const SMOKE_TEST_AGENT_COMMAND_ENV = "HYDRA_SMOKE_AGENT_COMMAND";
+const SMOKE_TEST_EXPECTED_OUTPUT_ENV = "HYDRA_SMOKE_EXPECTED_OUTPUT";
+const SMOKE_TEST_RESULT_PATH_ENV = "HYDRA_SMOKE_RESULT_PATH";
+const SMOKE_TEST_TIMEOUT_MS_ENV = "HYDRA_SMOKE_TIMEOUT_MS";
+const SMOKE_TEST_USER_DATA_DIR_ENV = "HYDRA_SMOKE_USER_DATA_DIR";
+const SMOKE_TEST_WORKSPACE_PATH_ENV = "HYDRA_SMOKE_WORKSPACE_PATH";
+const SMOKE_TEST_ENABLE_FLAG = "--hydra-smoke-test";
+const SMOKE_TEST_AGENT_ID_FLAG = "--hydra-smoke-agent-id";
+const SMOKE_TEST_AGENT_COMMAND_FLAG = "--hydra-smoke-agent-command";
+const SMOKE_TEST_EXPECTED_OUTPUT_FLAG = "--hydra-smoke-expected-output";
+const SMOKE_TEST_RESULT_PATH_FLAG = "--hydra-smoke-result-path";
+const SMOKE_TEST_TIMEOUT_MS_FLAG = "--hydra-smoke-timeout-ms";
+const SMOKE_TEST_USER_DATA_DIR_FLAG = "--hydra-smoke-user-data-dir";
+const SMOKE_TEST_WORKSPACE_PATH_FLAG = "--hydra-smoke-workspace-path";
 
 const FILE_TREE_IGNORED = new Set([
   ".git", "node_modules", "dist", "build", ".next", "__pycache__",
@@ -262,6 +299,10 @@ const TRUSTED_RENDERER_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "ren
 const AGENT_LABELS: Record<AgentId, string> = Object.fromEntries(
   AGENT_DEFINITIONS.map((agent) => [agent.id, agent.label])
 ) as Record<AgentId, string>;
+const smokeTestConfig = resolvePackagedSmokeTestConfig();
+if (smokeTestConfig?.userDataDir) {
+  app.setPath("userData", smokeTestConfig.userDataDir);
+}
 
 function formatUpdaterLogMessage(message: unknown): string {
   if (message instanceof Error) {
@@ -3250,6 +3291,258 @@ async function maybeStartMcpServer(controller: AppController): Promise<void> {
   console.log(`[MCP] Authentication enabled with token file ${auth.path}.`);
 }
 
+function delayMs(durationMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, durationMs);
+  });
+}
+
+function smokeTranscriptPreview(transcript: string | null | undefined): string {
+  const normalized = typeof transcript === "string" ? transcript.replace(/\s+/g, " ").trim() : "";
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized.length > 240 ? normalized.slice(-240) : normalized;
+}
+
+function resolvePackagedSmokeTestConfig(): PackagedSmokeTestConfig | null {
+  if (!hasCommandLineFlag(SMOKE_TEST_ENABLE_FLAG) && !isEnabledFlag(process.env[SMOKE_TEST_ENABLE_ENV])) {
+    return null;
+  }
+
+  const workspacePath = resolveCommandLineValue(SMOKE_TEST_WORKSPACE_PATH_FLAG) ||
+    process.env[SMOKE_TEST_WORKSPACE_PATH_ENV]?.trim() ||
+    "";
+  if (!workspacePath) {
+    throw new Error(`${SMOKE_TEST_WORKSPACE_PATH_ENV} is required when ${SMOKE_TEST_ENABLE_ENV}=1.`);
+  }
+
+  const agentId =
+    normalizeAgentId(
+      resolveCommandLineValue(SMOKE_TEST_AGENT_ID_FLAG) ||
+      process.env[SMOKE_TEST_AGENT_ID_ENV],
+      null
+    ) ||
+    normalizeAgentId("codex", null) ||
+    DEFAULT_AGENT_ID;
+  const agentCommand =
+    resolveCommandLineValue(SMOKE_TEST_AGENT_COMMAND_FLAG) ||
+    process.env[SMOKE_TEST_AGENT_COMMAND_ENV]?.trim() ||
+    null;
+  const expectedOutput =
+    resolveCommandLineValue(SMOKE_TEST_EXPECTED_OUTPUT_FLAG) ||
+    process.env[SMOKE_TEST_EXPECTED_OUTPUT_ENV]?.trim() ||
+    "HYDRA_SMOKE_OK";
+  const timeoutMsRaw =
+    resolveCommandLineValue(SMOKE_TEST_TIMEOUT_MS_FLAG) ||
+    process.env[SMOKE_TEST_TIMEOUT_MS_ENV] ||
+    "";
+  const timeoutMsValue = Number(timeoutMsRaw);
+  const timeoutMs =
+    Number.isFinite(timeoutMsValue) && timeoutMsValue >= 1000
+      ? Math.min(timeoutMsValue, 120_000)
+      : 20_000;
+  const userDataDir =
+    resolveCommandLineValue(SMOKE_TEST_USER_DATA_DIR_FLAG) ||
+    process.env[SMOKE_TEST_USER_DATA_DIR_ENV]?.trim() ||
+    null;
+  const resultPath =
+    resolveCommandLineValue(SMOKE_TEST_RESULT_PATH_FLAG) ||
+    process.env[SMOKE_TEST_RESULT_PATH_ENV]?.trim() ||
+    null;
+
+  return {
+    agentId,
+    agentCommand,
+    expectedOutput,
+    resultPath,
+    timeoutMs,
+    userDataDir,
+    workspacePath
+  };
+}
+
+function hasCommandLineFlag(flag: string): boolean {
+  return process.argv.includes(flag);
+}
+
+function resolveCommandLineValue(flag: string): string | null {
+  const index = process.argv.indexOf(flag);
+  if (index < 0 || index + 1 >= process.argv.length) {
+    return null;
+  }
+
+  const value = process.argv[index + 1]?.trim();
+  return value || null;
+}
+
+function buildPackagedSmokeTestResult(
+  ok: boolean,
+  stage: string,
+  message: string,
+  expectedOutput: string,
+  startedAtMs: number,
+  session: SessionRecord | null
+): PackagedSmokeTestResult {
+  return {
+    elapsedMs: Date.now() - startedAtMs,
+    expectedOutput,
+    message,
+    ok,
+    runtimeState: session?.runtimeState || null,
+    sessionId: session?.id || null,
+    stage,
+    status: session?.status || null,
+    transcriptPreview: smokeTranscriptPreview(session?.transcript || "")
+  };
+}
+
+async function runPackagedSmokeTest(
+  controller: AppController,
+  config: PackagedSmokeTestConfig
+): Promise<PackagedSmokeTestResult> {
+  const startedAtMs = Date.now();
+  const normalizedWorkspacePath = path.resolve(config.workspacePath);
+
+  await fsp.mkdir(normalizedWorkspacePath, { recursive: true });
+  await controller.addWorkspace(normalizedWorkspacePath);
+  controller.updatePreferences({
+    agentCommandOverrides: config.agentCommand
+      ? { [config.agentId]: config.agentCommand }
+      : undefined,
+    defaultAgentId: config.agentId,
+    notificationsEnabled: false,
+    showInAppBadges: false,
+    showNativeNotifications: false
+  });
+
+  const repo = controller.state.repos.find(
+    (candidate) => path.resolve(candidate.path) === normalizedWorkspacePath
+  ) || null;
+  if (!repo) {
+    return buildPackagedSmokeTestResult(
+      false,
+      "workspace",
+      `Smoke workspace ${normalizedWorkspacePath} was not added as a repo.`,
+      config.expectedOutput,
+      startedAtMs,
+      null
+    );
+  }
+
+  const sessionId = controller.createSession(repo.id, true);
+  if (!sessionId) {
+    return buildPackagedSmokeTestResult(
+      false,
+      "launch",
+      `Failed to create a session for repo ${repo.id}.`,
+      config.expectedOutput,
+      startedAtMs,
+      null
+    );
+  }
+
+  while (Date.now() - startedAtMs < config.timeoutMs) {
+    const session = controller.sessionById(sessionId);
+    if (!session) {
+      return buildPackagedSmokeTestResult(
+        false,
+        "launch",
+        "Smoke session disappeared before producing output.",
+        config.expectedOutput,
+        startedAtMs,
+        null
+      );
+    }
+
+    if ((session.transcript || "").includes(config.expectedOutput)) {
+      return buildPackagedSmokeTestResult(
+        true,
+        "output",
+        `Observed expected session output: ${config.expectedOutput}`,
+        config.expectedOutput,
+        startedAtMs,
+        session
+      );
+    }
+
+    if (session.runtimeState === "stopped") {
+      return buildPackagedSmokeTestResult(
+        false,
+        "output",
+        `Session stopped before expected output appeared (status: ${session.status}).`,
+        config.expectedOutput,
+        startedAtMs,
+        session
+      );
+    }
+
+    await delayMs(100);
+  }
+
+  return buildPackagedSmokeTestResult(
+    false,
+    "timeout",
+    `Timed out waiting ${config.timeoutMs}ms for session output.`,
+    config.expectedOutput,
+    startedAtMs,
+    controller.sessionById(sessionId)
+  );
+}
+
+async function writePackagedSmokeTestResult(
+  config: PackagedSmokeTestConfig,
+  result: PackagedSmokeTestResult
+): Promise<void> {
+  if (!config.resultPath) {
+    return;
+  }
+
+  const normalizedResultPath = path.resolve(config.resultPath);
+  await fsp.mkdir(path.dirname(normalizedResultPath), { recursive: true });
+  await fsp.writeFile(`${normalizedResultPath}`, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+}
+
+async function finalizePackagedSmokeTest(
+  controller: AppController,
+  config: PackagedSmokeTestConfig,
+  result: PackagedSmokeTestResult
+): Promise<void> {
+  let finalResult = result;
+
+  try {
+    await controller.shutdown();
+  } catch (error: unknown) {
+    finalResult = {
+      ...finalResult,
+      elapsedMs: finalResult.elapsedMs,
+      message: `Smoke test cleanup failed: ${formatUpdaterLogMessage(error)}`,
+      ok: false,
+      stage: "cleanup"
+    };
+  }
+
+  try {
+    await writePackagedSmokeTestResult(config, finalResult);
+  } catch (error: unknown) {
+    console.error("[SMOKE] Failed to write result:", error);
+    finalResult = {
+      ...finalResult,
+      message: `Smoke test result write failed: ${formatUpdaterLogMessage(error)}`,
+      ok: false,
+      stage: "result"
+    };
+  }
+
+  console.log(`[SMOKE] ${finalResult.ok ? "PASS" : "FAIL"} ${finalResult.stage}: ${finalResult.message}`);
+  if (finalResult.transcriptPreview) {
+    console.log(`[SMOKE] transcript: ${finalResult.transcriptPreview}`);
+  }
+
+  app.exit(finalResult.ok ? 0 : 1);
+}
+
 const controller = new AppController();
 const UPDATE_CHECK_STARTUP_DELAY_MS = 15_000;
 const UPDATE_CHECK_FOLLOW_UP_DELAY_MS = 10 * 60 * 1000;
@@ -3323,14 +3616,39 @@ function startAutoUpdateChecks(): void {
 }
 
 app.whenReady().then(async () => {
-  await controller.initialize();
-  controller.setupIpc();
-  controller.setupMenu();
-  controller.createWindow();
-  maybeStartMcpServer(controller).catch((err) =>
-    console.error("[MCP] Server failed to start:", err)
-  );
-  startAutoUpdateChecks();
+  try {
+    await controller.initialize();
+
+    if (smokeTestConfig) {
+      const result = await runPackagedSmokeTest(controller, smokeTestConfig);
+      await finalizePackagedSmokeTest(controller, smokeTestConfig, result);
+      return;
+    }
+
+    controller.setupIpc();
+    controller.setupMenu();
+    controller.createWindow();
+    maybeStartMcpServer(controller).catch((err) =>
+      console.error("[MCP] Server failed to start:", err)
+    );
+    startAutoUpdateChecks();
+  } catch (error: unknown) {
+    if (smokeTestConfig) {
+      const result = buildPackagedSmokeTestResult(
+        false,
+        "startup",
+        `Smoke test failed during startup: ${formatUpdaterLogMessage(error)}`,
+        smokeTestConfig.expectedOutput,
+        Date.now(),
+        null
+      );
+      await finalizePackagedSmokeTest(controller, smokeTestConfig, result);
+      return;
+    }
+
+    console.error("Hydra failed to start:", error);
+    app.exit(1);
+  }
 });
 
 autoUpdater.on("update-available", (info: { version?: string }) => {

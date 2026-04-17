@@ -34,6 +34,12 @@ jobs:
             exit 1
           fi
 
+      - name: Build unpacked macOS app for smoke test
+        run: node scripts/run-electron-builder.mjs --dir --mac
+
+      - name: Smoke test packaged macOS app
+        run: npm run smoke:packaged:mac -- release/mac-arm64/Hydra.app
+
       - name: Build macOS release artifacts
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}

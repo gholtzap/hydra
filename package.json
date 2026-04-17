@@ -13,6 +13,7 @@
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
     "pack": "npm run build && npm run build:icon && node scripts/run-electron-builder.mjs --dir",
+    "smoke:packaged:mac": "node scripts/smoke-packaged-mac.mjs",
     "dist": "npm run build && npm run build:icon && node scripts/run-electron-builder.mjs",
     "dist:mac": "npm run build && node scripts/run-electron-builder.mjs --mac",
     "dist:win": "npm run build && node scripts/run-electron-builder.mjs --win",

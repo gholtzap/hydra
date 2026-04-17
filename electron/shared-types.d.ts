@@ -189,7 +189,21 @@ export type AppPreferences = {
   themeAppearance: ThemeAppearance;
   themeActiveId: string;
   themeCustomThemes: ThemeDefinition[];
-  [key: string]: unknown;
+};
+
+export type AppPreferencesPatch = {
+  defaultAgentId?: AgentId;
+  agentCommandOverrides?: Partial<Record<AgentId, string>>;
+  claudeExecutablePath?: string;
+  shellExecutablePath?: string;
+  notificationsEnabled?: boolean;
+  showInAppBadges?: boolean;
+  showNativeNotifications?: boolean;
+  sessionWorkspaceLayout?: WorkspaceLayoutNode | null;
+  keybindings?: KeybindingOverrides;
+  themeAppearance?: ThemeAppearance;
+  themeActiveId?: string;
+  themeCustomThemes?: ThemeDefinition[];
 };
 
 export type StoredAppState = {

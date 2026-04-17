@@ -149,12 +149,57 @@ function normalizePreferences(preferences: Record<string, unknown>): AppPreferen
     nextAgentCommands[agent.id] = normalizeAgentCommand(savedValue, agent.id);
   }
 
+  const themeAppearance =
+    preferences.themeAppearance === "system" ||
+    preferences.themeAppearance === "light" ||
+    preferences.themeAppearance === "dark"
+      ? preferences.themeAppearance
+      : DEFAULT_PREFERENCES.themeAppearance;
+  const shellExecutablePath =
+    typeof preferences.shellExecutablePath === "string"
+      ? preferences.shellExecutablePath
+      : DEFAULT_PREFERENCES.shellExecutablePath;
+  const notificationsEnabled =
+    typeof preferences.notificationsEnabled === "boolean"
+      ? preferences.notificationsEnabled
+      : DEFAULT_PREFERENCES.notificationsEnabled;
+  const showInAppBadges =
+    typeof preferences.showInAppBadges === "boolean"
+      ? preferences.showInAppBadges
+      : DEFAULT_PREFERENCES.showInAppBadges;
+  const showNativeNotifications =
+    typeof preferences.showNativeNotifications === "boolean"
+      ? preferences.showNativeNotifications
+      : DEFAULT_PREFERENCES.showNativeNotifications;
+  const sessionWorkspaceLayout =
+    preferences.sessionWorkspaceLayout === null ||
+    isPlainObject(preferences.sessionWorkspaceLayout)
+      ? preferences.sessionWorkspaceLayout as AppPreferences["sessionWorkspaceLayout"]
+      : DEFAULT_PREFERENCES.sessionWorkspaceLayout;
+  const keybindings = isPlainObject(preferences.keybindings)
+    ? preferences.keybindings as AppPreferences["keybindings"]
+    : DEFAULT_PREFERENCES.keybindings;
+  const themeActiveId =
+    typeof preferences.themeActiveId === "string"
+      ? preferences.themeActiveId
+      : DEFAULT_PREFERENCES.themeActiveId;
+  const themeCustomThemes = Array.isArray(preferences.themeCustomThemes)
+    ? preferences.themeCustomThemes as AppPreferences["themeCustomThemes"]
+    : DEFAULT_PREFERENCES.themeCustomThemes;
+
   return {
-    ...DEFAULT_PREFERENCES,
-    ...preferences,
     defaultAgentId: defaultAgentId || DEFAULT_AGENT_ID,
     agentCommandOverrides: nextAgentCommands,
-    claudeExecutablePath: nextAgentCommands.claude
+    claudeExecutablePath: nextAgentCommands.claude,
+    shellExecutablePath,
+    notificationsEnabled,
+    showInAppBadges,
+    showNativeNotifications,
+    sessionWorkspaceLayout,
+    keybindings,
+    themeAppearance,
+    themeActiveId,
+    themeCustomThemes
   };
 }
 

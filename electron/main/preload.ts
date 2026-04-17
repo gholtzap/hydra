@@ -1,6 +1,6 @@
 import type {
   AppCommandPayload,
-  AppPreferences,
+  AppPreferencesPatch,
   AppStateSnapshot,
   ClaudeExternalUrlRequest,
   ClaudePathRevealRequest,
@@ -108,7 +108,7 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     openExternalUrl: (payload: ClaudeExternalUrlRequest) =>
       invoke<void>("path:openExternal", payload),
     nextUnreadSession: () => invoke<string | null>("session:nextUnread"),
-    updatePreferences: (patch: Partial<AppPreferences>) =>
+    updatePreferences: (patch: AppPreferencesPatch) =>
       invoke<void>("preferences:update", patch),
     getTrackedPortStatus,
     getClaudeSettingsContext: (repoId: string | null) =>

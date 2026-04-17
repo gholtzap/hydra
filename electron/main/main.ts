@@ -1,11 +1,17 @@
-import type { BrowserWindow as ElectronBrowserWindow } from "electron";
+import type {
+  BrowserWindow as ElectronBrowserWindow,
+  Event as ElectronEvent
+} from "electron";
 import type { ParsedCommandSpec } from "./command-parser";
 import type {
   AgentDefinition,
   AgentId,
   AppCommandPayload,
   AppPreferences,
+  AppPreferencesPatch,
   AppStateSnapshot,
+  ClaudeExternalUrlRequest,
+  ClaudePathRevealRequest,
   ClaudeSettingsContext,
   DirectoryReadResult,
   EphemeralToolExitPayload,
@@ -158,9 +164,11 @@ const { inspectTrackedPorts } = require("./port-inspector") as {
   inspectTrackedPorts: () => Promise<TrackedPortStatus>;
 };
 const {
+  isPlainObject,
   isPathWithinRoot,
   normalizeSessionTagColor
 } = require("./shared-utils") as {
+  isPlainObject: <T extends Record<string, unknown> = Record<string, unknown>>(value: unknown) => value is T;
   isPathWithinRoot: (filePath: string, rootPath: string) => boolean;
   normalizeSessionTagColor: (value: unknown) => SessionTagColor | null;
 };
@@ -385,6 +393,60 @@ function assertTrustedGitHubUrl(input: unknown) {
   }
 
   return parsed.toString();
+}
+
+function sanitizePreferencesPatch(patch: unknown): AppPreferencesPatch {
+  if (!isPlainObject(patch)) {
+    return {};
+  }
+
+  const nextPatch: AppPreferencesPatch = {};
+
+  if (Object.prototype.hasOwnProperty.call(patch, "defaultAgentId")) {
+    nextPatch.defaultAgentId = patch.defaultAgentId as AppPreferencesPatch["defaultAgentId"];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "agentCommandOverrides") && isPlainObject(patch.agentCommandOverrides)) {
+    nextPatch.agentCommandOverrides =
+      patch.agentCommandOverrides as AppPreferencesPatch["agentCommandOverrides"];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "claudeExecutablePath")) {
+    nextPatch.claudeExecutablePath =
+      patch.claudeExecutablePath as AppPreferencesPatch["claudeExecutablePath"];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "shellExecutablePath")) {
+    nextPatch.shellExecutablePath =
+      patch.shellExecutablePath as AppPreferencesPatch["shellExecutablePath"];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "notificationsEnabled")) {
+    nextPatch.notificationsEnabled =
+      patch.notificationsEnabled as AppPreferencesPatch["notificationsEnabled"];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "showInAppBadges")) {
+    nextPatch.showInAppBadges = patch.showInAppBadges as AppPreferencesPatch["showInAppBadges"];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "showNativeNotifications")) {
+    nextPatch.showNativeNotifications =
+      patch.showNativeNotifications as AppPreferencesPatch["showNativeNotifications"];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "sessionWorkspaceLayout")) {
+    nextPatch.sessionWorkspaceLayout =
+      patch.sessionWorkspaceLayout as AppPreferencesPatch["sessionWorkspaceLayout"];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "keybindings") && isPlainObject(patch.keybindings)) {
+    nextPatch.keybindings = patch.keybindings as AppPreferencesPatch["keybindings"];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "themeAppearance")) {
+    nextPatch.themeAppearance = patch.themeAppearance as AppPreferencesPatch["themeAppearance"];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "themeActiveId")) {
+    nextPatch.themeActiveId = patch.themeActiveId as AppPreferencesPatch["themeActiveId"];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "themeCustomThemes") && Array.isArray(patch.themeCustomThemes)) {
+    nextPatch.themeCustomThemes =
+      patch.themeCustomThemes as AppPreferencesPatch["themeCustomThemes"];
+  }
+
+  return nextPatch;
 }
 
 function tokscaleBinaryPackageName(): string | null {
@@ -623,7 +685,7 @@ class AppController {
     });
   }
 
-  async initialize() {
+  async initialize(): Promise<void> {
     const [state, lazygitPath] = await Promise.all([
       loadState(),
       resolveCommandPath("lazygit")
@@ -637,7 +699,7 @@ class AppController {
     this.watchPlansDir();
   }
 
-  createWindow() {
+  createWindow(): void {
     this.window = new BrowserWindow({
       width: 1500,
       height: 960,
@@ -676,7 +738,7 @@ class AppController {
     window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
   }
 
-  setupIpc() {
+  setupIpc(): void {
     ipcMain.handle("state:get", () => this.snapshot());
     ipcMain.handle("workspace:open", async () => this.openWorkspaceFolder());
     ipcMain.handle("project:create", async () => this.createProjectFolder());
@@ -845,7 +907,7 @@ class AppController {
     });
   }
 
-  settingsRepoPaths(repoId) {
+  settingsRepoPaths(repoId: string | null | undefined): string[] {
     if (!repoId) {
       return [];
     }
@@ -854,7 +916,7 @@ class AppController {
     return repo?.path ? [repo.path] : [];
   }
 
-  assertRepoFilePath(repoId, filePath) {
+  assertRepoFilePath(repoId: string | null | undefined, filePath: string | null | undefined): string {
     const repo = this.repoById(repoId);
     if (!repo?.path) {
       throw new Error("Project not found.");
@@ -869,7 +931,10 @@ class AppController {
     return normalizedFilePath;
   }
 
-  assertRepoRelativeFilePath(repoId, relativePath) {
+  assertRepoRelativeFilePath(
+    repoId: string | null | undefined,
+    relativePath: string | null | undefined
+  ): string {
     const repo = this.repoById(repoId);
     if (!repo?.path) {
       throw new Error("Project not found.");
@@ -890,18 +955,21 @@ class AppController {
     return normalizedFilePath;
   }
 
-  async revealTrustedPath(payload) {
+  async revealTrustedPath(payload: ClaudePathRevealRequest): Promise<void> {
     switch (payload?.scope) {
       case "repo-file":
-        return shell.showItemInFolder(this.assertRepoFilePath(payload.repoId, payload.filePath));
+        shell.showItemInFolder(this.assertRepoFilePath(payload.repoId, payload.filePath));
+        return;
       case "repo-relative-file":
-        return shell.showItemInFolder(
+        shell.showItemInFolder(
           this.assertRepoRelativeFilePath(payload.repoId, payload.relativePath)
         );
+        return;
       case "settings-file":
-        return shell.showItemInFolder(
+        shell.showItemInFolder(
           assertReadableClaudeSettingsFilePath(payload.filePath, this.settingsRepoPaths(payload.repoId))
         );
+        return;
       case "session-search-result": {
         const repo = this.repoById(payload.repoId);
         if (
@@ -911,23 +979,25 @@ class AppController {
           throw new Error("Session search reveal denied for the requested path.");
         }
 
-        return shell.showItemInFolder(normalizeAbsolutePath(payload.filePath, "file path"));
+        shell.showItemInFolder(normalizeAbsolutePath(payload.filePath, "file path"));
+        return;
       }
       default:
         throw new Error("Unsupported reveal request.");
     }
   }
 
-  openTrustedExternalUrl(payload) {
+  async openTrustedExternalUrl(payload: ClaudeExternalUrlRequest): Promise<void> {
     switch (payload?.scope) {
       case "github-url":
-        return shell.openExternal(assertTrustedGitHubUrl(payload.url));
+        await shell.openExternal(assertTrustedGitHubUrl(payload.url));
+        return;
       default:
         throw new Error("Unsupported external URL request.");
     }
   }
 
-  setupMenu() {
+  setupMenu(): void {
     const kb = resolveKeybindings(this.state.preferences.keybindings);
     const template = [
       {
@@ -1269,7 +1339,7 @@ class AppController {
     throw new Error(`Unknown MCP action: ${String(action)}`);
   }
 
-  snapshot() {
+  snapshot(): AppStateSnapshot {
     return structuredClone({
       ...this.state,
       lazygitInstalled: this.lazygitPath !== null,
@@ -1296,7 +1366,7 @@ class AppController {
     });
   }
 
-  broadcastState() {
+  broadcastState(): void {
     if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send("state:changed", this.snapshot());
     }
@@ -1307,7 +1377,7 @@ class AppController {
     }
   }
 
-  sendSessionUpdated(sessionId) {
+  sendSessionUpdated(sessionId: string): void {
     const session = this.sessionById(sessionId);
     if (!this.window || this.window.isDestroyed() || !session) {
       return;
@@ -1318,7 +1388,7 @@ class AppController {
     });
   }
 
-  sendSessionOutput(sessionId, data) {
+  sendSessionOutput(sessionId: string, data: string): void {
     const session = this.sessionById(sessionId);
     if (this.window && !this.window.isDestroyed() && session) {
       this.window.webContents.send("session:output", {
@@ -1334,7 +1404,7 @@ class AppController {
     }
   }
 
-  sendCommand(command, payload = {}) {
+  sendCommand(command: string, payload: Omit<AppCommandPayload, "command"> = {}): void {
     if (!this.window || this.window.isDestroyed()) {
       return;
     }
@@ -1342,17 +1412,17 @@ class AppController {
     this.window.webContents.send("app:command", { command, ...payload });
   }
 
-  sendEphemeralToolOutput(payload: EphemeralToolOutputPayload) {
+  sendEphemeralToolOutput(payload: EphemeralToolOutputPayload): void {
     if (!this.window || this.window.isDestroyed()) return;
     this.window.webContents.send("ephemeralTool:output", payload);
   }
 
-  sendEphemeralToolExit(payload: EphemeralToolExitPayload) {
+  sendEphemeralToolExit(payload: EphemeralToolExitPayload): void {
     if (!this.window || this.window.isDestroyed()) return;
     this.window.webContents.send("ephemeralTool:exit", payload);
   }
 
-  sendPlanDetected(sessionId: string, markdown: string) {
+  sendPlanDetected(sessionId: string, markdown: string): void {
     if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send("plan:detected", { sessionId, markdown });
     }
@@ -1362,7 +1432,7 @@ class AppController {
     }
   }
 
-  watchPlansDir() {
+  watchPlansDir(): void {
     const os = require("node:os");
     const plansDir = path.join(os.homedir(), ".claude", "plans");
 
@@ -1409,7 +1479,7 @@ class AppController {
     );
   }
 
-  scheduleSave() {
+  scheduleSave(): void {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
     }
@@ -1420,7 +1490,7 @@ class AppController {
     }, 200);
   }
 
-  async persistNow() {
+  async persistNow(): Promise<void> {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
@@ -1429,7 +1499,7 @@ class AppController {
     await this.flushStateSave();
   }
 
-  flushStateSave() {
+  flushStateSave(): Promise<void> {
     this.saveChain = this.saveChain
       .catch(() => undefined)
       .then(() => saveState(this.state));
@@ -1439,7 +1509,7 @@ class AppController {
     });
   }
 
-  async openWorkspaceFolder() {
+  async openWorkspaceFolder(): Promise<void> {
     const result = await dialog.showOpenDialog(this.window, {
       properties: ["openDirectory", "createDirectory"],
       buttonLabel: "Open Folder"
@@ -1452,7 +1522,7 @@ class AppController {
     await this.addWorkspace(result.filePaths[0]);
   }
 
-  async createProjectFolder() {
+  async createProjectFolder(): Promise<void> {
     const result = await dialog.showSaveDialog(this.window, {
       title: "Create Empty Project Folder",
       buttonLabel: "Create Folder",
@@ -1468,7 +1538,7 @@ class AppController {
     await this.addWorkspace(result.filePath);
   }
 
-  async addWorkspace(rootPath) {
+  async addWorkspace(rootPath: string): Promise<void> {
     const normalizedPath = path.resolve(rootPath);
     const existing = this.state.workspaces.find((workspace) => workspace.rootPath === normalizedPath);
 
@@ -1488,7 +1558,7 @@ class AppController {
     await this.rescanWorkspace(workspace.id);
   }
 
-  async rescanWorkspace(workspaceId) {
+  async rescanWorkspace(workspaceId: string): Promise<void> {
     const workspace = this.state.workspaces.find((item) => item.id === workspaceId);
     if (!workspace) {
       return;
@@ -1519,7 +1589,7 @@ class AppController {
     this.broadcastState();
   }
 
-  createSession(repoId, launchesClaudeOnStart) {
+  createSession(repoId: string, launchesClaudeOnStart?: boolean): string | null {
     const repo = this.repoById(repoId);
     if (!repo) {
       return null;
@@ -1565,7 +1635,7 @@ class AppController {
     return session.id;
   }
 
-  renameSession(sessionId, title) {
+  renameSession(sessionId: string, title: string): boolean {
     const session = this.sessionById(sessionId);
     if (!session) {
       return false;
@@ -1583,7 +1653,10 @@ class AppController {
     return true;
   }
 
-  updateSessionOrganization(sessionId, patch) {
+  updateSessionOrganization(
+    sessionId: string,
+    patch: SessionOrganizationPatch | null | undefined
+  ): boolean {
     const session = this.sessionById(sessionId);
     if (!session || !patch || typeof patch !== "object") {
       return false;
@@ -1625,7 +1698,7 @@ class AppController {
     return true;
   }
 
-  async importSessionIcon(sessionId) {
+  async importSessionIcon(sessionId: string): Promise<SessionSummary | null> {
     const session = this.sessionById(sessionId);
     if (!session || !this.window || this.window.isDestroyed()) {
       return null;
@@ -1667,7 +1740,7 @@ class AppController {
     return summarizeSession(session);
   }
 
-  async clearSessionIcon(sessionId) {
+  async clearSessionIcon(sessionId: string): Promise<boolean> {
     const session = this.sessionById(sessionId);
     if (!session || !session.sessionIconPath) {
       return false;
@@ -1682,7 +1755,7 @@ class AppController {
     return true;
   }
 
-  reopenSession(sessionId) {
+  reopenSession(sessionId: string): void {
     const session = this.sessionById(sessionId);
     const repo = session ? this.repoById(session.repoID) : null;
     if (!session || !repo) {
@@ -1729,7 +1802,7 @@ class AppController {
     this.startRestartedSession(sessionId);
   }
 
-  closeSession(sessionId) {
+  closeSession(sessionId: string): void {
     const session = this.sessionById(sessionId);
     this.pendingSessionRestarts.delete(sessionId);
     this.cancelPendingAgentLaunch(sessionId);
@@ -1747,7 +1820,7 @@ class AppController {
     this.broadcastState();
   }
 
-  setFocusedSession(sessionId) {
+  setFocusedSession(sessionId: string | null): void {
     this.focusedSessionId = sessionId || null;
 
     if (sessionId) {
@@ -1761,7 +1834,7 @@ class AppController {
     }
   }
 
-  revealRepo(repoId) {
+  revealRepo(repoId: string): void {
     const repo = this.repoById(repoId);
     if (!repo) {
       return;
@@ -1770,7 +1843,7 @@ class AppController {
     shell.showItemInFolder(repo.path);
   }
 
-  showRepoContextMenu(repoId, position) {
+  showRepoContextMenu(repoId: string, position: Point | null | undefined): void {
     const repo = this.repoById(repoId);
     if (!repo || !this.window || this.window.isDestroyed()) {
       return;
@@ -1810,19 +1883,22 @@ class AppController {
       }
     ]);
 
+    const x = Number.isFinite(position?.x) ? position?.x : undefined;
+    const y = Number.isFinite(position?.y) ? position?.y : undefined;
+
     menu.popup({
       window: this.window,
-      x: Number.isFinite(position?.x) ? position.x : undefined,
-      y: Number.isFinite(position?.y) ? position.y : undefined
+      x,
+      y
     });
   }
 
-  nextUnreadSession() {
+  nextUnreadSession(): string | null {
     const next = this.inboxSessions()[0];
     return next ? next.id : null;
   }
 
-  async querySessionFiles(repoId, query): Promise<SessionSearchResponse> {
+  async querySessionFiles(repoId: string | null, query: string): Promise<SessionSearchResponse> {
     const repo = this.repoById(repoId);
     if (!repo) {
       return {
@@ -1852,7 +1928,7 @@ class AppController {
     };
   }
 
-  resumeFromClaudeSession(repoId, claudeSessionId) {
+  resumeFromClaudeSession(repoId: string, claudeSessionId: string): string | null {
     return this.resumeFromSearchResult(repoId, "claude", claudeSessionId);
   }
 
@@ -1860,7 +1936,7 @@ class AppController {
     repoId: string,
     source: SessionSearchSource,
     externalSessionId: string | null
-  ) {
+  ): string | null {
     const repo = this.repoById(repoId);
     const startupAgentId = normalizeAgentId(source, null);
     if (!repo || !startupAgentId || !externalSessionId) {
@@ -1903,7 +1979,7 @@ class AppController {
     return session.id;
   }
 
-  normalizeFolderRepos() {
+  normalizeFolderRepos(): void {
     const reposByWorkspaceId = new Map<string, RepoRecord[]>();
 
     for (const repo of this.state.repos) {
@@ -1962,18 +2038,19 @@ class AppController {
     this.state.repos = normalizedRepos;
   }
 
-  updatePreferences(patch) {
+  updatePreferences(patch: unknown): void {
+    const sanitizedPatch = sanitizePreferencesPatch(patch);
     const nextPreferences = normalizePreferences({
       ...this.state.preferences,
-      ...patch,
+      ...sanitizedPatch,
       agentCommandOverrides: {
         ...(this.state.preferences.agentCommandOverrides || {}),
-        ...(patch?.agentCommandOverrides || {})
+        ...(sanitizedPatch.agentCommandOverrides || {})
       }
     });
     this.state.preferences = nextPreferences;
 
-    if (patch.keybindings) {
+    if (sanitizedPatch.keybindings) {
       this.setupMenu();
     }
 
@@ -2052,7 +2129,7 @@ class AppController {
     repoId: string,
     source: SessionSearchSource,
     externalSessionId: string | null
-  ) {
+  ): string | null {
     if (!externalSessionId) {
       return null;
     }
@@ -2125,7 +2202,7 @@ class AppController {
     return null;
   }
 
-  createEphemeralToolSession(toolId: EphemeralToolId, repoId: string) {
+  createEphemeralToolSession(toolId: EphemeralToolId, repoId: string): string | null {
     const repo = this.repoById(repoId);
     const command = this.ephemeralToolCommand(toolId);
     if (!repo || !command) return null;
@@ -2143,13 +2220,13 @@ class AppController {
     return this.ephemeralSessions.get(sessionId)?.toolId === toolId;
   }
 
-  closeEphemeralToolSession(toolId: EphemeralToolId, sessionId: string) {
+  closeEphemeralToolSession(toolId: EphemeralToolId, sessionId: string): void {
     if (!this.isEphemeralToolSession(sessionId, toolId)) return;
     this.ephemeralSessions.delete(sessionId);
     this.ptyHost.killSession(sessionId);
   }
 
-  handleEphemeralToolInput(toolId: EphemeralToolId, sessionId: string, data: string) {
+  handleEphemeralToolInput(toolId: EphemeralToolId, sessionId: string, data: string): void {
     if (this.isEphemeralToolSession(sessionId, toolId)) {
       this.ptyHost.sendInput(sessionId, data);
     }
@@ -2160,18 +2237,18 @@ class AppController {
     sessionId: string,
     cols: number,
     rows: number
-  ) {
+  ): void {
     if (this.isEphemeralToolSession(sessionId, toolId)) {
       this.ptyHost.resizeSession(sessionId, cols, rows);
     }
   }
 
-  handleSessionInput(sessionId, data) {
+  handleSessionInput(sessionId: string, data: string): void {
     this.ptyHost.sendInput(sessionId, data);
     this.resolveInteractiveBlockerFromInput(sessionId, data);
   }
 
-  handlePtyMessage(message) {
+  handlePtyMessage(message: PtyHostMessage): void {
     const ephemeralSession = this.ephemeralSessions.get(message.sessionId);
     if (ephemeralSession) {
       if (message.type === "data") {
@@ -2213,7 +2290,7 @@ class AppController {
     this.flushQueuedSessionLaunch(sessionId);
   }
 
-  handleHostData(sessionId, rawChunk) {
+  handleHostData(sessionId: string, rawChunk: string): void {
     const session = this.sessionById(sessionId);
     if (!session) {
       return;
@@ -2270,7 +2347,7 @@ class AppController {
     this.sendSessionOutput(sessionId, rawChunk);
   }
 
-  handleHostExit(sessionId, exitCode) {
+  handleHostExit(sessionId: string, exitCode: number): void {
     const session = this.sessionById(sessionId);
     if (!session) {
       return;
@@ -2349,7 +2426,7 @@ class AppController {
     this.broadcastState();
   }
 
-  terminalBuffer(sessionId, seedText = "") {
+  terminalBuffer(sessionId: string, seedText = ""): TerminalTranscriptBufferInstance {
     let buffer = this.terminalBuffers.get(sessionId);
 
     if (!buffer) {
@@ -2360,7 +2437,7 @@ class AppController {
     return buffer;
   }
 
-  createShellSession(repoId: string, title?: string, queuedInput?: string) {
+  createShellSession(repoId: string, title?: string, queuedInput?: string): string | null {
     const repo = this.repoById(repoId);
     if (!repo) {
       return null;
@@ -2405,7 +2482,7 @@ class AppController {
     return session.id;
   }
 
-  createAppLaunchSession(repoId: string, title?: string) {
+  createAppLaunchSession(repoId: string, title?: string): string | null {
     const repo = this.repoById(repoId);
     if (!repo) {
       return null;
@@ -2447,14 +2524,14 @@ class AppController {
     return session.id;
   }
 
-  queueSessionLaunch(sessionId: string, input: string, title?: string) {
+  queueSessionLaunch(sessionId: string, input: string, title?: string): void {
     this.queuedSessionLaunches.set(sessionId, {
       input,
       title
     });
   }
 
-  flushQueuedSessionLaunch(sessionId: string) {
+  flushQueuedSessionLaunch(sessionId: string): void {
     const queued = this.queuedSessionLaunches.get(sessionId);
     if (!queued) {
       return;
@@ -2472,7 +2549,7 @@ class AppController {
     this.ptyHost.sendInput(sessionId, queued.input);
   }
 
-  repairStoredTranscripts() {
+  repairStoredTranscripts(): void {
     let changed = false;
 
     for (const session of this.state.sessions) {
@@ -2490,7 +2567,7 @@ class AppController {
     }
   }
 
-  notifyBlocker(session) {
+  notifyBlocker(session: SessionRecord): void {
     if (!Notification.isSupported()) {
       return;
     }
@@ -2510,14 +2587,14 @@ class AppController {
     notification.show();
   }
 
-  appendSignalBuffer(sessionId, visibleChunk) {
+  appendSignalBuffer(sessionId: string, visibleChunk: string): string {
     const next = `${this.signalBuffers.get(sessionId) || ""}${visibleChunk || ""}`;
     const trimmed = next.length > 1600 ? next.slice(-1600) : next;
     this.signalBuffers.set(sessionId, trimmed);
     return trimmed;
   }
 
-  resolveInteractiveBlockerFromInput(sessionId, data) {
+  resolveInteractiveBlockerFromInput(sessionId: string, data: string): void {
     if (!/[\r\n]/.test(data || "")) {
       return;
     }
@@ -2537,16 +2614,16 @@ class AppController {
     this.sendSessionUpdated(sessionId);
   }
 
-  resetSignalTracking(sessionId) {
+  resetSignalTracking(sessionId: string): void {
     this.signalBuffers.delete(sessionId);
     this.blockerClearStreaks.delete(sessionId);
   }
 
-  repoById(repoId) {
+  repoById(repoId: string | null | undefined): RepoRecord | null {
     return this.state.repos.find((repo) => repo.id === repoId) || null;
   }
 
-  async projectWikiContext(repoId) {
+  async projectWikiContext(repoId: string): Promise<WikiContext | null> {
     const repo = this.repoById(repoId);
     if (!repo) {
       return null;
@@ -2555,7 +2632,7 @@ class AppController {
     return getWikiContext(repo.path, repo.wikiEnabled);
   }
 
-  async projectWikiFile(repoId, relativePath) {
+  async projectWikiFile(repoId: string, relativePath: string): Promise<WikiFileContents> {
     const repo = this.repoById(repoId);
     if (!repo) {
       throw new Error("Folder not found.");
@@ -2564,7 +2641,7 @@ class AppController {
     return readWikiFile(repo.path, relativePath);
   }
 
-  async toggleProjectWiki(repoId, enabled) {
+  async toggleProjectWiki(repoId: string, enabled: boolean): Promise<WikiContext | null> {
     const repo = this.repoById(repoId);
     if (!repo) {
       return null;
@@ -2583,7 +2660,7 @@ class AppController {
     return this.projectWikiContext(repoId);
   }
 
-  async revealProjectWiki(repoId) {
+  async revealProjectWiki(repoId: string): Promise<void> {
     const repo = this.repoById(repoId);
     if (!repo) {
       return;
@@ -2593,17 +2670,17 @@ class AppController {
     shell.showItemInFolder(targetPath);
   }
 
-  sessionById(sessionId) {
+  sessionById(sessionId: string | null | undefined): SessionRecord | null {
     return this.state.sessions.find((session) => session.id === sessionId) || null;
   }
 
-  inboxSessions() {
+  inboxSessions(): SessionRecord[] {
     return [...this.state.sessions]
       .filter((session) => session.blocker || session.unreadCount > 0)
       .sort(compareInboxSessions);
   }
 
-  async confirmQuit(event) {
+  async confirmQuit(event: ElectronEvent): Promise<void> {
     if (this.allowQuit) {
       return;
     }
@@ -2635,7 +2712,7 @@ class AppController {
     app.quit();
   }
 
-  async restartToInstallUpdate(version?: string | null) {
+  async restartToInstallUpdate(version?: string | null): Promise<void> {
     const liveSessions = this.state.sessions.filter((session) => session.runtimeState === "live");
     if (liveSessions.length > 0) {
       const result = dialog.showMessageBoxSync(this.window, {
@@ -2670,7 +2747,7 @@ class AppController {
     }
   }
 
-  async shutdown() {
+  async shutdown(): Promise<void> {
     this.allowQuit = true;
     for (const session of this.state.sessions) {
       if (session.runtimeState === "live") {
@@ -2700,7 +2777,7 @@ class AppController {
     this.ptyHost.resizeSession(sessionId, safeCols, safeRows);
   }
 
-  cancelPendingAgentLaunch(sessionId) {
+  cancelPendingAgentLaunch(sessionId: string): void {
     this.pendingAgentLaunch.delete(sessionId);
 
     const timer = this.pendingAgentLaunchTimers.get(sessionId);
@@ -2711,11 +2788,12 @@ class AppController {
   }
 }
 
-function summarizeSession(session) {
+function summarizeSession(session: SessionRecord): SessionSummary {
   return {
     id: session.id,
     repoID: session.repoID,
     title: session.title,
+    launchProfile: session.launchProfile,
     initialPrompt: session.initialPrompt,
     launchesClaudeOnStart: session.launchesClaudeOnStart,
     startupAgentId: session.startupAgentId,
@@ -2734,7 +2812,8 @@ function summarizeSession(session) {
     lastActivityAt: session.lastActivityAt,
     stoppedAt: session.stoppedAt,
     launchCount: session.launchCount,
-    transcript: session.transcript
+    transcript: session.transcript,
+    rawTranscript: session.rawTranscript
   };
 }
 

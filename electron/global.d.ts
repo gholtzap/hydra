@@ -1,6 +1,6 @@
 import type {
   AppCommandPayload,
-  AppPreferences,
+  AppPreferencesPatch,
   AppStateSnapshot,
   ClaudeExternalUrlRequest,
   ClaudePathRevealRequest,
@@ -67,7 +67,7 @@ interface ClaudeWorkspaceApi {
   revealPath: (payload: ClaudePathRevealRequest) => Promise<void>;
   openExternalUrl: (payload: ClaudeExternalUrlRequest) => Promise<void>;
   nextUnreadSession: () => Promise<string | null>;
-  updatePreferences: (patch: Partial<AppPreferences>) => Promise<void>;
+  updatePreferences: (patch: AppPreferencesPatch) => Promise<void>;
   getTrackedPortStatus: () => Promise<TrackedPortStatus>;
   getClaudeSettingsContext: (repoId: string | null) => Promise<ClaudeSettingsContext>;
   loadSettingsFile: (payload: ClaudeSettingsFileRequest) => Promise<string>;

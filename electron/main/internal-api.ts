@@ -6,6 +6,7 @@
  */
 
 import type {
+  AppPreferencesPatch,
   AppStateSnapshot,
   ClaudeSettingsContext,
   DirectoryReadResult,
@@ -190,7 +191,7 @@ export class InternalApi {
     return this.ctrl.handleMcpAction("build_and_run_app", { repoId });
   }
 
-  async updatePreferences(patch: Record<string, unknown>): Promise<McpActionResult<"update_preferences">> {
+  async updatePreferences(patch: AppPreferencesPatch): Promise<McpActionResult<"update_preferences">> {
     return this.ctrl.handleMcpAction("update_preferences", { patch });
   }
 

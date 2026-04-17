@@ -803,6 +803,19 @@ textarea {
   box-shadow: 0 0 0 2px var(--focus-ring);
 }
 
+.inbox-card {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+.inbox-card .row-title,
+.inbox-card .row-subtitle,
+.inbox-card .row-meta {
+  width: 100%;
+}
+
 .sidebar-item-title,
 .row-title {
   display: flex;

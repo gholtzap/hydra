@@ -28,6 +28,11 @@ class PtyHostClient {
       stdio: ["pipe", "pipe", "inherit"]
     }) as ChildProcessWithoutNullStreams;
 
+    this.child.stdin.on("error", () => {
+      // Swallow EPIPE / write-after-close errors on stdin.
+      // The pty host process may exit at any time; writes are best-effort.
+    });
+
     this.child.stdout.setEncoding("utf8");
     this.child.stdout.on("data", (chunk: string) => {
       this.pending += chunk;
@@ -48,6 +53,10 @@ class PtyHostClient {
 
         newlineIndex = this.pending.indexOf("\n");
       }
+    });
+
+    this.child.on("error", () => {
+      // Swallow spawn / process-level errors (e.g. ENOENT if python3 disappears).
     });
 
     this.child.on("exit", () => {
@@ -116,11 +125,7 @@ class PtyHostClient {
       return;
     }
 
-    try {
-      this.child.stdin.write(`${JSON.stringify(payload)}\n`);
-    } catch {
-      // EPIPE: pty host process exited between the writable check and the write.
-    }
+    this.child.stdin.write(`${JSON.stringify(payload)}\n`);
   }
 }
 

@@ -7871,7 +7871,7 @@ function unavailableEphemeralToolMarkup(toolId: EphemeralToolId): string | null 
     let installLines: string[];
     if (ua.includes("Windows")) {
       installLines = [
-        "winget install -e --id JesseBartlett.lazygit",
+        "winget install -e --id=JesseDuffield.lazygit",
         "scoop install lazygit"
       ];
     } else if (ua.includes("Linux")) {

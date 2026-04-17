@@ -233,8 +233,10 @@ const {
   wikiExists: (rootPath: string) => Promise<boolean>;
   wikiExistsSync: (rootPath: string) => boolean;
 };
-const { resolveCommandPath } = require("./command-path") as {
-  resolveCommandPath: (command: string) => Promise<string | null>;
+const { mergeCommandPath, resolveCommandPath, resolveCommandPathSync } = require("./command-path") as {
+  mergeCommandPath: (envPath?: string | null) => string;
+  resolveCommandPath: (command: string, envPath?: string | null) => Promise<string | null>;
+  resolveCommandPathSync: (command: string, envPath?: string | null) => string | null;
 };
 const { startMcpServer } = require("./mcp-server") as {
   startMcpServer: (
@@ -3048,9 +3050,25 @@ function resolvedAgentCommand(preferences: AppPreferences, agentId: AgentId): Pa
   const candidate = preferences?.agentCommandOverrides?.[agentId];
   const normalized = typeof candidate === "string" ? candidate.trim() : "";
   const fallbackCommand = DEFAULT_AGENT_COMMANDS[agentId] || DEFAULT_AGENT_COMMANDS[DEFAULT_AGENT_ID];
-  return parseCommandSpec(normalized) || parseCommandSpec(fallbackCommand) || {
+  const commandSpec = parseCommandSpec(normalized) || parseCommandSpec(fallbackCommand) || {
     env: {},
     argv: [fallbackCommand]
+  };
+
+  const argv = [...commandSpec.argv];
+  if (argv.length > 0) {
+    const resolvedExecutablePath = resolveCommandPathSync(argv[0], commandSpec.env.PATH);
+    if (resolvedExecutablePath) {
+      argv[0] = resolvedExecutablePath;
+    }
+  }
+
+  return {
+    env: {
+      ...commandSpec.env,
+      PATH: mergeCommandPath(commandSpec.env.PATH)
+    },
+    argv
   };
 }
 

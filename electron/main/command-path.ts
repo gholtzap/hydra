@@ -16,7 +16,11 @@ const WELL_KNOWN_COMMAND_DIRECTORIES = [
     : [])
 ];
 
-async function resolveCommandPath(command: string): Promise<string | null> {
+async function resolveCommandPath(command: string, envPath?: string | null): Promise<string | null> {
+  return resolveCommandPathSync(command, envPath);
+}
+
+function resolveCommandPathSync(command: string, envPath?: string | null): string | null {
   const normalizedCommand = typeof command === "string" ? command.trim() : "";
   if (!normalizedCommand) {
     return null;
@@ -26,7 +30,7 @@ async function resolveCommandPath(command: string): Promise<string | null> {
     return isExecutableFile(normalizedCommand) ? normalizedCommand : null;
   }
 
-  for (const directoryPath of commandSearchPaths()) {
+  for (const directoryPath of commandSearchPaths(envPath)) {
     const candidatePath = path.join(directoryPath, normalizedCommand);
     if (isExecutableFile(candidatePath)) {
       return candidatePath;
@@ -44,16 +48,22 @@ async function resolveCommandPath(command: string): Promise<string | null> {
   return null;
 }
 
-function commandSearchPaths(): string[] {
-  const envPath = typeof process.env.PATH === "string" ? process.env.PATH : "";
+function commandSearchPaths(envPath?: string | null): string[] {
+  const configuredPath = typeof envPath === "string" ? envPath : "";
+  const processPath = typeof process.env.PATH === "string" ? process.env.PATH : "";
   const directories = [
-    ...envPath.split(path.delimiter),
+    ...configuredPath.split(path.delimiter),
+    ...processPath.split(path.delimiter),
     ...WELL_KNOWN_COMMAND_DIRECTORIES
   ]
     .map((value) => value.trim())
     .filter(Boolean);
 
   return Array.from(new Set(directories));
+}
+
+function mergeCommandPath(envPath?: string | null): string {
+  return commandSearchPaths(envPath).join(path.delimiter);
 }
 
 function isExecutableFile(filePath: string): boolean {
@@ -73,5 +83,7 @@ function isExecutableFile(filePath: string): boolean {
 
 module.exports = {
   isExecutableFile,
-  resolveCommandPath
+  mergeCommandPath,
+  resolveCommandPath,
+  resolveCommandPathSync
 };

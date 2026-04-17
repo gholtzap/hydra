@@ -48,34 +48,76 @@ def create_session(message):
     cols = int(message.get("cols") or 140)
     rows = int(message.get("rows") or 42)
     command = message.get("command")
+    master_fd = None
+    slave_fd = None
 
-    master_fd, slave_fd = pty.openpty()
-    set_window_size(slave_fd, cols, rows)
+    try:
+        master_fd, slave_fd = pty.openpty()
+        set_window_size(slave_fd, cols, rows)
 
-    environment = dict(os.environ)
-    environment["TERM"] = "xterm-256color"
-    provided_environment = message.get("env")
-    if isinstance(provided_environment, dict):
-        for key, value in provided_environment.items():
-            if isinstance(key, str) and isinstance(value, str):
-                environment[key] = value
+        environment = dict(os.environ)
+        environment["TERM"] = "xterm-256color"
+        provided_environment = message.get("env")
+        if isinstance(provided_environment, dict):
+            for key, value in provided_environment.items():
+                if isinstance(key, str) and isinstance(value, str):
+                    environment[key] = value
 
-    argv = command if command else [shell_path, "-il"]
+        argv = command if command else [shell_path, "-il"]
 
-    def set_ctty():
-        fcntl.ioctl(slave_fd, TIOCSCTTY, 0)
+        def set_ctty():
+            fcntl.ioctl(slave_fd, TIOCSCTTY, 0)
 
-    proc = subprocess.Popen(
-        argv,
-        cwd=cwd,
-        stdin=slave_fd,
-        stdout=slave_fd,
-        stderr=slave_fd,
-        env=environment,
-        close_fds=True,
-        start_new_session=True,
-        preexec_fn=set_ctty
-    )
+        proc = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            env=environment,
+            close_fds=True,
+            start_new_session=True,
+            preexec_fn=set_ctty
+        )
+    except Exception as error:
+        if slave_fd is not None:
+            try:
+                os.close(slave_fd)
+            except OSError:
+                pass
+
+        if master_fd is not None:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+
+        failed_command = command[0] if isinstance(command, list) and len(command) > 0 else shell_path
+        if isinstance(error, FileNotFoundError):
+            send({
+                "type": "data",
+                "sessionId": session_id,
+                "data": (
+                    f"Hydra could not launch '{failed_command}' because it was not found on PATH.\r\n"
+                    "Use an absolute agent command path in Settings when launching the installed app.\r\n"
+                )
+            })
+            exit_code = 127
+        else:
+            send({
+                "type": "data",
+                "sessionId": session_id,
+                "data": f"Hydra failed to launch the session: {error}\r\n"
+            })
+            exit_code = 1
+
+        send({
+            "type": "exit",
+            "sessionId": session_id,
+            "exitCode": exit_code,
+            "signal": None
+        })
+        return
 
     os.close(slave_fd)
 

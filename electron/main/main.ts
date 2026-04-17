@@ -1,4 +1,5 @@
 import type { BrowserWindow as ElectronBrowserWindow } from "electron";
+import type { ParsedCommandSpec } from "./command-parser";
 import type {
   AgentDefinition,
   AgentId,
@@ -106,6 +107,10 @@ type AutoUpdateSupport = {
   enabled: boolean;
   reason: string;
 };
+type ResolvedCommandPayload = {
+  command: string[];
+  env?: Record<string, string>;
+};
 
 const { scanWorkspace } = require("./workspace-scanner") as {
   scanWorkspace: (rootPath: string, workspaceId: string) => Promise<RepoRecord[]>;
@@ -176,6 +181,10 @@ const {
   normalizeRepoAppLaunchConfig: (value: unknown) => RepoAppLaunchConfig | null;
   normalizePreferences: (preferences: Record<string, unknown>) => AppPreferences;
   saveState: (state: StoredAppState) => Promise<void>;
+};
+const { commandSpecToHelperArgs, parseCommandSpec } = require("./command-parser") as {
+  commandSpecToHelperArgs: (prefix: "build" | "run", spec: ParsedCommandSpec) => string[];
+  parseCommandSpec: (value: unknown) => ParsedCommandSpec | null;
 };
 const { resolveKeybindings } = require("./keybindings");
 const { PtyHostClient } = require("./pty-host-client") as {
@@ -1990,7 +1999,7 @@ class AppController {
 
     const normalizedConfig = normalizeRepoAppLaunchConfig(config);
     if (!normalizedConfig) {
-      throw new Error("Build and run commands are required.");
+      throw new Error("Build and run commands must each be a single command with optional quoted arguments.");
     }
 
     repo.appLaunchConfig = normalizedConfig;
@@ -2075,18 +2084,34 @@ class AppController {
     return match ? match.id : null;
   }
 
-  launchRuntime(session, repo) {
+  launchRuntime(session: SessionRecord, repo: RepoRecord): void {
     this.cancelPendingAgentLaunch(session.id);
     const appLaunchCommand =
       session.launchProfile === "appLaunch"
-        ? resolvedAppLaunchCommand(this.state.preferences, repo)
+        ? resolvedAppLaunchCommand(repo)
         : null;
 
     if (appLaunchCommand) {
       this.ptyHost.createSession({
         sessionId: session.id,
         cwd: repo.path,
-        command: appLaunchCommand
+        command: appLaunchCommand.command,
+        env: appLaunchCommand.env
+      });
+      return;
+    }
+
+    const agentLaunchCommand =
+      session.launchProfile === "agent"
+        ? resolvedSessionLaunchCommand(this.state.preferences, session)
+        : null;
+
+    if (agentLaunchCommand) {
+      this.ptyHost.createSession({
+        sessionId: session.id,
+        cwd: repo.path,
+        command: agentLaunchCommand.command,
+        env: agentLaunchCommand.env
       });
       return;
     }
@@ -2189,20 +2214,13 @@ class AppController {
     }
   }
 
-  handleHostCreated(sessionId) {
+  handleHostCreated(sessionId: string): void {
     const session = this.sessionById(sessionId);
     if (!session) {
       return;
     }
 
     this.flushQueuedSessionLaunch(sessionId);
-
-    if (!session.startupAgentId) {
-      return;
-    }
-
-    this.pendingAgentLaunch.add(sessionId);
-    this.maybeLaunchAgent(sessionId);
   }
 
   handleHostData(sessionId, rawChunk) {
@@ -2681,7 +2699,7 @@ class AppController {
     await this.persistNow();
   }
 
-  handleSessionResize(sessionId, cols, rows) {
+  handleSessionResize(sessionId: string, cols: number, rows: number): void {
     const safeCols = Math.max(1, Number(cols) || 1);
     const safeRows = Math.max(1, Number(rows) || 1);
 
@@ -2690,42 +2708,6 @@ class AppController {
       rows: safeRows
     });
     this.ptyHost.resizeSession(sessionId, safeCols, safeRows);
-    this.maybeLaunchAgent(sessionId);
-  }
-
-  maybeLaunchAgent(sessionId) {
-    if (!this.pendingAgentLaunch.has(sessionId) || this.pendingAgentLaunchTimers.has(sessionId)) {
-      return;
-    }
-
-    const session = this.sessionById(sessionId);
-    const size = this.sessionSizes.get(sessionId);
-    if (!session || session.runtimeState !== "live" || !size || size.cols < 2 || size.rows < 2) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      this.pendingAgentLaunchTimers.delete(sessionId);
-
-      const currentSession = this.sessionById(sessionId);
-      if (
-        !currentSession ||
-        currentSession.runtimeState !== "live" ||
-        !this.pendingAgentLaunch.has(sessionId)
-      ) {
-        return;
-      }
-
-      const launchCommand = resolvedSessionLaunchCommand(this.state.preferences, currentSession);
-      this.pendingAgentLaunch.delete(sessionId);
-      if (!launchCommand) {
-        return;
-      }
-
-      this.ptyHost.sendInput(sessionId, `${launchCommand}\r`);
-    }, 120);
-
-    this.pendingAgentLaunchTimers.set(sessionId, timer);
   }
 
   cancelPendingAgentLaunch(sessionId) {
@@ -2859,64 +2841,106 @@ function resolvedShellPath(preferences) {
   return process.env.SHELL || "/bin/sh";
 }
 
-function resolvedAppLaunchCommand(preferences, repo) {
+function resolvedAppLaunchCommand(repo: RepoRecord | null | undefined): ResolvedCommandPayload | null {
   const config = repo?.appLaunchConfig;
   if (!config) {
     return null;
   }
 
-  if (process.platform === "win32") {
-    return [
-      "powershell.exe",
-      "-ExecutionPolicy", "Bypass",
-      "-File", appLaunchRunnerPath(),
-      "-BuildCommand", config.buildCommand,
-      "-RunCommand", config.runCommand
-    ];
+  const buildCommand = parseCommandSpec(config.buildCommand);
+  const runCommand = parseCommandSpec(config.runCommand);
+  if (!buildCommand || !runCommand) {
+    return null;
   }
 
-  const shellPath = resolvedShellPath(preferences);
-  return [
-    shellPath,
-    "-lc",
-    `${shellEscape("/bin/sh")} ${shellEscape(appLaunchRunnerPath())} ${shellEscape(config.buildCommand)} ${shellEscape(config.runCommand)}`
+  const helperArgs = [
+    ...commandSpecToHelperArgs("build", buildCommand),
+    ...commandSpecToHelperArgs("run", runCommand)
   ];
+
+  if (process.platform === "win32") {
+    return {
+      command: [
+        "powershell.exe",
+        "-ExecutionPolicy", "Bypass",
+        "-File", appLaunchRunnerPath(),
+        ...helperArgs
+      ]
+    };
+  }
+
+  return {
+    command: [
+      "/usr/bin/env",
+      "bash",
+      appLaunchRunnerPath(),
+      ...helperArgs
+    ]
+  };
 }
 
-function resolvedSessionLaunchCommand(preferences, session) {
+function resolvedSessionLaunchCommand(
+  preferences: AppPreferences,
+  session: SessionRecord
+): ResolvedCommandPayload | null {
   const startupAgentId = normalizeAgentId(session?.startupAgentId, null);
   if (!session?.launchesClaudeOnStart || !startupAgentId) {
-    return "";
+    return null;
   }
 
-  const command = resolvedAgentCommand(preferences, startupAgentId);
+  const commandSpec = resolvedAgentCommand(preferences, startupAgentId);
+  const command = [...commandSpec.argv];
+  const env = Object.keys(commandSpec.env).length ? { ...commandSpec.env } : undefined;
+
   if (startupAgentId === "codex" && session.agentSessionId) {
-    return `${command} resume ${shellEscape(session.agentSessionId)}`;
+    return {
+      command: [...command, "resume", session.agentSessionId],
+      env
+    };
   }
 
   if (startupAgentId !== DEFAULT_AGENT_ID) {
-    return command;
+    return {
+      command,
+      env
+    };
   }
 
   if (session.launchCount > 1) {
     if (session.claudeSessionId) {
-      return `${command} --resume ${shellEscape(session.claudeSessionId)}`;
+      return {
+        command: [...command, "--resume", session.claudeSessionId],
+        env
+      };
     }
 
-    return `${command} --continue`;
+    return {
+      command: [...command, "--continue"],
+      env
+    };
   }
 
   if (session.claudeSessionId) {
-    return `${command} --session-id ${shellEscape(session.claudeSessionId)}`;
+    return {
+      command: [...command, "--session-id", session.claudeSessionId],
+      env
+    };
   }
 
-  return command;
+  return {
+    command,
+    env
+  };
 }
 
-function resolvedAgentCommand(preferences, agentId) {
+function resolvedAgentCommand(preferences: AppPreferences, agentId: AgentId): ParsedCommandSpec {
   const candidate = preferences?.agentCommandOverrides?.[agentId];
   const normalized = typeof candidate === "string" ? candidate.trim() : "";
-  return normalized || DEFAULT_AGENT_COMMANDS[agentId] || DEFAULT_AGENT_COMMANDS[DEFAULT_AGENT_ID];
+  const fallbackCommand = DEFAULT_AGENT_COMMANDS[agentId] || DEFAULT_AGENT_COMMANDS[DEFAULT_AGENT_ID];
+  return parseCommandSpec(normalized) || parseCommandSpec(fallbackCommand) || {
+    env: {},
+    argv: [fallbackCommand]
+  };
 }
 
 function appLaunchRunnerPath() {
@@ -2924,10 +2948,6 @@ function appLaunchRunnerPath() {
     return resolveBundledHelperPath("app-launch-runner.ps1");
   }
   return resolveBundledHelperPath("app-launch-runner.sh");
-}
-
-function shellEscape(value) {
-  return `'${String(value || "").replace(/'/g, `'\\''`)}'`;
 }
 
 function blockerKey(blocker) {

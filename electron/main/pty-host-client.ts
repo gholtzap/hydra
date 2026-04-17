@@ -148,7 +148,7 @@ class WindowsPtyHostClient {
   }
 
   createSession(payload: PtyCreateSessionPayload) {
-    const { sessionId, cwd } = payload;
+    const { sessionId, cwd, env: sessionEnv } = payload;
     const nodePty = require("node-pty") as typeof import("node-pty");
 
     let shell: string;
@@ -166,7 +166,7 @@ class WindowsPtyHostClient {
       cols: 140,
       rows: 42,
       cwd,
-      env: { ...process.env, TERM: "xterm-256color" } as NodeJS.ProcessEnv
+      env: { ...process.env, ...sessionEnv, TERM: "xterm-256color" } as NodeJS.ProcessEnv
     });
 
     this.sessions.set(sessionId, ptyProcess);

@@ -54,6 +54,11 @@ def create_session(message):
 
     environment = dict(os.environ)
     environment["TERM"] = "xterm-256color"
+    provided_environment = message.get("env")
+    if isinstance(provided_environment, dict):
+        for key, value in provided_environment.items():
+            if isinstance(key, str) and isinstance(value, str):
+                environment[key] = value
 
     argv = command if command else [shell_path, "-il"]
 

@@ -492,12 +492,14 @@ export type PtyCreateSessionPayload =
       sessionId: string;
       cwd: string;
       shellPath: string;
+      env?: Record<string, string>;
       command?: never;
     }
   | {
       sessionId: string;
       cwd: string;
       command: string[];
+      env?: Record<string, string>;
       shellPath?: never;
     };
 

@@ -17,6 +17,9 @@ const { app } = require("electron");
 const { isExecutableFile } = require("./command-path") as {
   isExecutableFile: (filePath: string) => boolean;
 };
+const { normalizeCommandLine } = require("./command-parser") as {
+  normalizeCommandLine: (value: unknown) => string;
+};
 
 const AGENT_DEFINITIONS: AgentDefinition[] = [
   { id: "claude", label: "Claude Code", defaultCommand: "claude" },
@@ -227,8 +230,8 @@ function normalizeRepoAppLaunchConfig(value: unknown): RepoAppLaunchConfig | nul
     return null;
   }
 
-  const buildCommand = typeof value.buildCommand === "string" ? value.buildCommand.trim() : "";
-  const runCommand = typeof value.runCommand === "string" ? value.runCommand.trim() : "";
+  const buildCommand = normalizeCommandLine(value.buildCommand);
+  const runCommand = normalizeCommandLine(value.runCommand);
 
   if (!buildCommand || !runCommand) {
     return null;
@@ -246,7 +249,7 @@ function normalizeAgentId(value: unknown, fallback: AgentId | null = DEFAULT_AGE
 }
 
 function normalizeAgentCommand(value: unknown, agentId: AgentId): string {
-  const normalized = typeof value === "string" ? value.trim() : "";
+  const normalized = normalizeCommandLine(value);
   if (!normalized) {
     return DEFAULT_AGENT_COMMANDS[agentId] || "";
   }

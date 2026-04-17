@@ -4,11 +4,14 @@ class TerminalTranscriptBuffer {
   currentLine: string[];
   cursorColumn: number;
 
+  pendingEscape: boolean;
+
   constructor(seedText = "", maxLength = 160000) {
     this.maxLength = maxLength;
     this.committedText = "";
     this.currentLine = [];
     this.cursorColumn = 0;
+    this.pendingEscape = false;
     this.replaceSeed(seedText);
   }
 
@@ -39,6 +42,18 @@ class TerminalTranscriptBuffer {
   apply(rawText: string): void {
     const chars = Array.from(rawText);
     let index = 0;
+
+    // If the previous chunk ended with a bare ESC, treat this chunk's first
+    // character as the escape introducer so split-across-chunk sequences
+    // (e.g. ESC | ]10;rgb:…) are correctly consumed.
+    if (this.pendingEscape && chars.length > 0) {
+      this.pendingEscape = false;
+      const synthetic = ["\u001b", ...chars];
+      index = this.parseEscapeSequence(synthetic, 0);
+      // parseEscapeSequence returns an index into `synthetic`; offset by -1
+      // to translate back to the `chars` array.
+      index = Math.max(index - 1, 0);
+    }
 
     while (index < chars.length) {
       const char = chars[index];
@@ -84,6 +99,7 @@ class TerminalTranscriptBuffer {
   parseEscapeSequence(chars: string[], startIndex: number): number {
     const nextIndex = startIndex + 1;
     if (nextIndex >= chars.length) {
+      this.pendingEscape = true;
       return startIndex + 1;
     }
 

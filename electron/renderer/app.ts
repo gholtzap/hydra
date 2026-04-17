@@ -11206,8 +11206,21 @@ function blockerLabel(kind) {
 }
 
 function previewTranscript(transcript) {
-  const normalized = (transcript || "").trim().split("\n").filter(Boolean).slice(-1)[0];
-  return normalized || "No transcript yet.";
+  const lines = (transcript || "").trim().split("\n").filter(Boolean);
+  // Walk backwards to find the last line that looks like meaningful text,
+  // skipping lines dominated by terminal escape artifacts (e.g. OSC color
+  // responses like "rgb:f4f4/f7f7/fbfb") or lines that are mostly
+  // non-alphanumeric noise.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const cleaned = lines[i]
+      .replace(/\d{1,3};rgb:[0-9a-f/]+/gi, "")
+      .replace(/rgb:[0-9a-f/]+/gi, "")
+      .trim();
+    if (cleaned.length >= 2 && /[a-zA-Z]/.test(cleaned)) {
+      return cleaned.length > 200 ? `${cleaned.slice(0, 200)}…` : cleaned;
+    }
+  }
+  return "No transcript yet.";
 }
 
 function abbreviateHome(value) {

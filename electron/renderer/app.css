@@ -828,6 +828,13 @@ textarea {
   line-height: 1.5;
 }
 
+.inbox-card .row-meta,
+.session-row .row-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar-inbox-item {
   background: var(--surface-soft);
 }

@@ -33,7 +33,7 @@ mac:
         - arm64
 
 win:
-  icon: build/hydra.ico
+  icon: build/icon-source.png
   artifactName: ${productName}-${version}-${arch}.${ext}
   target:
     - target: nsis
@@ -46,8 +46,6 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  installerIcon: build/hydra.ico
-  uninstallerIcon: build/hydra.ico
 
 publish:
   provider: github

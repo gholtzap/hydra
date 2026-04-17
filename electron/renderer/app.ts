@@ -2906,7 +2906,7 @@ function updateSessionPane(session) {
 
   const isRenaming = ui.renamingSessionId === session.id;
   const planFingerprint = planReviewForSession(session.id)?.fingerprint || "";
-  const headerSig = `${session.title}|${session.status}|${session.runtimeState}|${isRenaming}|${session.isPinned}|${session.tagColor || ""}|${session.sessionIconUrl || ""}|${session.sessionIconUpdatedAt || ""}|${planFingerprint}`;
+  const headerSig = `${session.title}|${session.status}|${session.runtimeState}|${isRenaming}|${session.isPinned}|${session.tagColor || ""}|${session.sessionIconUrl || ""}|${session.sessionIconUpdatedAt || ""}|${planFingerprint}|${ui.navbarCollapsed}`;
   if (header.dataset.sig !== headerSig) {
     header.dataset.sig = headerSig;
     replaceDomChildren(header, renderSessionPaneHeader(session, isRenaming));
@@ -2979,6 +2979,20 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
     dom(
       "div",
       { className: "pane-bar-right" },
+      ui.navbarCollapsed
+        ? dom(
+            "button",
+            {
+              className: "pane-action-btn pane-show-navbar-btn",
+              attrs: {
+                "data-action": "expand-navbar",
+                "data-no-drag": "true",
+                title: "Show toolbar"
+              }
+            },
+            "Show Bar"
+          )
+        : null,
       isRenaming
         ? dom(
             "button",
@@ -8005,6 +8019,13 @@ async function startSessionForRepo(
 
   const sessionId = await api.createSession(repoId, launchesClaudeOnStart);
   if (sessionId) {
+    // Flush state before selecting: the invoke response and the broadcastState
+    // "state:changed" event travel on separate IPC channels with no ordering
+    // guarantee. Fetching state here ensures the new session is in state.sessions
+    // before selectSession tries to look it up.
+    if (!sessionById(sessionId)) {
+      replaceState(await api.getState());
+    }
     await selectSession(sessionId, focusSection);
   }
 
@@ -10278,14 +10299,12 @@ function syncSectionFocusUi(options: { preserveCurrentFocus?: boolean } = {}) {
   normalizeFocusSection();
 
   const expanded = !!expandedSidebarRepo();
-  const navbarHandleVisible = ui.navbarCollapsed && ui.selection.type === "session";
   appShellElement.classList.toggle("sidebar-expanded", expanded);
   appShellElement.classList.toggle("sidebar-collapsed", ui.sidebarCollapsed);
-  appShellElement.classList.toggle("navbar-collapsed", navbarHandleVisible);
   sidebarElement.classList.toggle("sidebar-expanded", expanded);
   detailElement.classList.toggle("navbar-collapsed", ui.navbarCollapsed);
   sidebarRevealHandleElement.disabled = !ui.sidebarCollapsed;
-  navbarRevealHandleElement.disabled = !navbarHandleVisible;
+  navbarRevealHandleElement.disabled = true;
 
   sidebarElement.classList.toggle("section-focused", ui.focusSection === "sidebar");
   const sidebarDrawer = sidebarElement.querySelector(".sidebar-project-drawer") as HTMLElement | null;
@@ -10516,6 +10535,7 @@ function collapseWorkspaceNavbar() {
 
   ui.navbarCollapsed = true;
   syncSectionFocusUi({ preserveCurrentFocus: true });
+  updateAllSessionPanes();
 }
 
 function expandWorkspaceNavbar(options: { focusToolbarControl?: boolean } = {}) {
@@ -10525,6 +10545,7 @@ function expandWorkspaceNavbar(options: { focusToolbarControl?: boolean } = {}) 
 
   ui.navbarCollapsed = false;
   syncSectionFocusUi({ preserveCurrentFocus: true });
+  updateAllSessionPanes();
 
   if (!options.focusToolbarControl) {
     return;
@@ -11419,7 +11440,7 @@ function isTerminalLineKillShortcut(event) {
 
 function isOpenLauncherShortcut(event) {
   const kb = getKeybindings();
-  return matchesAccelerator(event, kb["new-session"]);
+  return matchesAccelerator(event, kb["new-session"]) || matchesAccelerator(event, kb["new-session-alt"]);
 }
 
 function statusLabel(status) {

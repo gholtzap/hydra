@@ -366,18 +366,10 @@ textarea {
 }
 
 #navbar-reveal-handle {
-  left: 50%;
-  top: 4px;
-  width: 28px;
-  height: 14px;
-  transform: translateX(-50%);
-  border-radius: 999px;
-  font-size: 9px;
-  text-transform: lowercase;
+  display: none;
 }
 
-#app-shell.sidebar-collapsed #sidebar-reveal-handle,
-#app-shell.navbar-collapsed #navbar-reveal-handle {
+#app-shell.sidebar-collapsed #sidebar-reveal-handle {
   opacity: 0.72;
   visibility: visible;
   pointer-events: auto;
@@ -1853,6 +1845,15 @@ textarea {
   line-height: 1;
   opacity: 0;
   transition: opacity 80ms, background 80ms, color 80ms;
+}
+
+.pane-show-navbar-btn {
+  opacity: 0.7;
+  transition: opacity 80ms, background 80ms, color 80ms;
+}
+
+.pane-show-navbar-btn:hover {
+  opacity: 1;
 }
 
 .session-pin-indicator {

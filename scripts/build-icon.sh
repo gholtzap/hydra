@@ -12,7 +12,7 @@ pad_color="${2:-AAD8C9}"
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 build_dir="$repo_root/build"
 icon_source="$build_dir/icon-source.png"
-icon_file="$build_dir/icon.icns"
+icon_file="$build_dir/hydra.icns"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/hydra-icon.XXXXXX")"
 tmp_square="$tmp_dir/icon-square.png"
 

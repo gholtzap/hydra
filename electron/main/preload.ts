@@ -1,6 +1,7 @@
 import type {
   AppCommandPayload,
   AppPreferencesPatch,
+  AppUpdateCheckResult,
   AppStateSnapshot,
   ClaudeExternalUrlRequest,
   ClaudePathRevealRequest,
@@ -104,6 +105,7 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     buildAndRunApp: (repoId: string) => invoke<string | null>("repo:buildAndRunApp", repoId),
     readClipboardText: () => invoke<string>("clipboard:readText"),
     writeClipboardText: (text: string) => invoke<void>("clipboard:writeText", text),
+    checkForUpdates: () => invoke<AppUpdateCheckResult>("app:checkForUpdates"),
     revealPath: (payload: ClaudePathRevealRequest) => invoke<void>("path:reveal", payload),
     openExternalUrl: (payload: ClaudeExternalUrlRequest) =>
       invoke<void>("path:openExternal", payload),

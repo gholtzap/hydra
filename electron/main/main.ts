@@ -9,6 +9,7 @@ import type {
   AppCommandPayload,
   AppPreferences,
   AppPreferencesPatch,
+  AppUpdateCheckResult,
   AppStateSnapshot,
   ClaudeExternalUrlRequest,
   ClaudePathRevealRequest,
@@ -114,6 +115,12 @@ type AutoUpdateSupport = {
   enabled: boolean;
   reason: string;
 };
+type AutoUpdaterCheckForUpdatesResult = {
+  updateInfo?: {
+    version?: string | null;
+  } | null;
+  downloadPromise?: Promise<unknown> | null;
+} | null;
 type ResolvedCommandPayload = {
   command: string[];
   env?: Record<string, string>;
@@ -392,6 +399,11 @@ function resolveMacAutoUpdateSupport(): AutoUpdateSupport {
     enabled: true,
     reason: `signed macOS bundle detected (team=${teamIdentifier})`
   };
+}
+
+function normalizeUpdateVersion(version: unknown): string | null {
+  const normalizedVersion = typeof version === "string" ? version.trim() : "";
+  return normalizedVersion || null;
 }
 
 function normalizeAbsolutePath(input: unknown, label = "path") {
@@ -733,6 +745,114 @@ class AppController {
     });
   }
 
+  async checkForUpdates(): Promise<AppUpdateCheckResult> {
+    const currentVersion = app.getVersion();
+    if (!app.isPackaged) {
+      return {
+        status: "unsupported",
+        canUpdate: false,
+        currentVersion,
+        latestVersion: null,
+        message: "This build cannot update itself.",
+        detail: `Current version: ${currentVersion}. Hydra is running from a local development build, so self-updates are only available in packaged releases.`
+      };
+    }
+
+    const support = resolveMacAutoUpdateSupport();
+    if (!support.enabled) {
+      return {
+        status: "unsupported",
+        canUpdate: false,
+        currentVersion,
+        latestVersion: null,
+        message: "This build cannot update itself.",
+        detail: `Current version: ${currentVersion}. ${support.reason}`
+      };
+    }
+
+    autoUpdater.logger = updaterLogger;
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    if (this.downloadedUpdateVersion) {
+      return {
+        status: "downloaded",
+        canUpdate: true,
+        currentVersion,
+        latestVersion: this.downloadedUpdateVersion,
+        message: `Hydra ${this.downloadedUpdateVersion} is ready to install.`,
+        detail: `Current version: ${currentVersion}. Restart Hydra to install the downloaded update.`
+      };
+    }
+
+    if (updateCheckInFlight) {
+      return {
+        status: "in-progress",
+        canUpdate: true,
+        currentVersion,
+        latestVersion: null,
+        message: "An update check is already in progress.",
+        detail: `Current version: ${currentVersion}. Wait for the current check to finish and try again if needed.`
+      };
+    }
+
+    updateCheckInFlight = true;
+    lastUpdateCheckAt = Date.now();
+    logUpdater("info", "checking for updates (manual)");
+
+    try {
+      const result = await autoUpdater.checkForUpdates() as AutoUpdaterCheckForUpdatesResult;
+      const availableVersion = normalizeUpdateVersion(result?.updateInfo?.version);
+      const hasDifferentVersion = availableVersion !== null && availableVersion !== currentVersion;
+
+      if (this.downloadedUpdateVersion) {
+        return {
+          status: "downloaded",
+          canUpdate: true,
+          currentVersion,
+          latestVersion: this.downloadedUpdateVersion,
+          message: `Hydra ${this.downloadedUpdateVersion} is ready to install.`,
+          detail: `Current version: ${currentVersion}. Restart Hydra to install the downloaded update.`
+        };
+      }
+
+      if (hasDifferentVersion || result?.downloadPromise) {
+        return {
+          status: "available",
+          canUpdate: true,
+          currentVersion,
+          latestVersion: availableVersion,
+          message: availableVersion
+            ? `Hydra ${availableVersion} is available.`
+            : "An update is available.",
+          detail: `Current version: ${currentVersion}. The update is downloading in the background and Hydra will prompt you to restart when it is ready.`
+        };
+      }
+
+      return {
+        status: "current",
+        canUpdate: true,
+        currentVersion,
+        latestVersion: availableVersion,
+        message: "Hydra is up to date.",
+        detail: `Current version: ${currentVersion}. ${support.reason}`
+      };
+    } catch (error: unknown) {
+      const detail = formatUpdaterLogMessage(error);
+      logUpdater("error", `check failed (manual): ${detail}`);
+      return {
+        status: "error",
+        canUpdate: true,
+        currentVersion,
+        latestVersion: null,
+        message: "The update check failed.",
+        detail: `Current version: ${currentVersion}. Error: ${detail}`
+      };
+    } finally {
+      updateCheckInFlight = false;
+    }
+  }
+
   async initialize(): Promise<void> {
     const [state, lazygitPath] = await Promise.all([
       loadState(),
@@ -790,6 +910,7 @@ class AppController {
     ipcMain.handle("state:get", () => this.snapshot());
     ipcMain.handle("workspace:open", async () => this.openWorkspaceFolder());
     ipcMain.handle("project:create", async () => this.createProjectFolder());
+    ipcMain.handle("app:checkForUpdates", async () => this.checkForUpdates());
     ipcMain.handle("workspace:rescan", (_event, workspaceId) => this.rescanWorkspace(workspaceId));
     ipcMain.handle("session:create", (_event, payload) =>
       this.createSession(payload.repoId, payload.launchesClaudeOnStart)

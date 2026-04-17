@@ -222,6 +222,23 @@ export type AppStateSnapshot = {
   tokscaleInstalled: boolean;
 };
 
+export type AppUpdateCheckStatus =
+  | "unsupported"
+  | "in-progress"
+  | "current"
+  | "available"
+  | "downloaded"
+  | "error";
+
+export type AppUpdateCheckResult = {
+  status: AppUpdateCheckStatus;
+  canUpdate: boolean;
+  currentVersion: string;
+  latestVersion: string | null;
+  message: string;
+  detail: string;
+};
+
 export type EphemeralToolId = "lazygit" | "tokscale";
 
 export type EphemeralToolLaunchRequest = {

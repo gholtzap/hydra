@@ -1,6 +1,7 @@
 import type {
   AgentId,
   AppPreferences,
+  AppUpdateCheckResult,
   AppStateSnapshot,
   ClaudeSettingsContext,
   EphemeralToolId,
@@ -327,6 +328,8 @@ type UiState = {
   commandPaletteQuery: string;
   settingsTab: string;
   settingsClaudeView: ClaudeSettingsView;
+  settingsUpdateCheckInFlight: boolean;
+  settingsUpdateCheckResult: AppUpdateCheckResult | null;
   settingsContext: ClaudeSettingsContext | null;
   settingsSelectedFilePath: string | null;
   settingsJsonCategoryId: string;
@@ -422,6 +425,8 @@ const ui: UiState = {
   commandPaletteQuery: "",
   settingsTab: "general",
   settingsClaudeView: "files" as ClaudeSettingsView,
+  settingsUpdateCheckInFlight: false,
+  settingsUpdateCheckResult: null,
   settingsContext: null,
   settingsSelectedFilePath: null,
   settingsJsonCategoryId: "",
@@ -4291,6 +4296,14 @@ function renderThemeColorField(
 function renderGeneralSettingsPane() {
   const selectedAgentId = defaultSessionAgentId();
   const selectedAgent = agentOption(selectedAgentId) || AGENT_OPTIONS[0];
+  const updateResult = ui.settingsUpdateCheckResult;
+  const updateStatusClass = updateResult
+    ? ` settings-update-status-${escapeAttribute(updateResult.status)}`
+    : "";
+  const updateMeta = [
+    updateResult ? renderSettingsMetaPill(`Current ${updateResult.currentVersion}`) : "",
+    updateResult?.latestVersion ? renderSettingsMetaPill(`Latest ${updateResult.latestVersion}`) : ""
+  ].filter(Boolean).join("");
   return `
     <div class="dialog-panel">
       <section class="settings-field-card agent-default-card">
@@ -4333,8 +4346,55 @@ function renderGeneralSettingsPane() {
         <input type="checkbox" id="pref-in-app-badges" ${state.preferences.showInAppBadges ? "checked" : ""} />
         <span>Show In-App Badges</span>
       </label>
+
+      <section class="settings-field-card settings-update-card">
+        <div class="settings-update-header">
+          <div class="settings-field-copy">
+            <div class="row-title">App Updates</div>
+            <div class="muted">Check whether this Hydra build can update itself and whether a newer release is available.</div>
+          </div>
+          <button
+            type="button"
+            class="primary"
+            data-action="check-for-updates"
+            ${ui.settingsUpdateCheckInFlight ? "disabled" : ""}
+          >${ui.settingsUpdateCheckInFlight ? "Checking..." : "Check for Updates"}</button>
+        </div>
+        ${updateMeta ? `<div class="settings-meta-row">${updateMeta}</div>` : ""}
+        <div class="settings-update-status${updateStatusClass}">
+          <div class="row-title">${escapeHtml(updateResult?.message || "No update check has been run yet.")}</div>
+          <div class="muted">${escapeHtml(updateResult?.detail || "Local development builds and unsigned macOS bundles report that updates are unavailable.")}</div>
+        </div>
+      </section>
     </div>
   `;
+}
+
+function stateVersionOrFallback(fallback: string): string {
+  const result = ui.settingsUpdateCheckResult;
+  const currentVersion = typeof result?.currentVersion === "string" ? result.currentVersion.trim() : "";
+  return currentVersion || fallback;
+}
+
+async function checkForUpdatesFromSettings() {
+  ui.settingsUpdateCheckInFlight = true;
+  await renderSettingsDialog();
+
+  try {
+    ui.settingsUpdateCheckResult = await api.checkForUpdates();
+  } catch (error) {
+    ui.settingsUpdateCheckResult = {
+      status: "error",
+      canUpdate: false,
+      currentVersion: stateVersionOrFallback("Unknown"),
+      latestVersion: null,
+      message: "The update check failed.",
+      detail: error instanceof Error ? error.message : "An unexpected error occurred."
+    };
+  } finally {
+    ui.settingsUpdateCheckInFlight = false;
+    await renderSettingsDialog();
+  }
 }
 
 function renderKeybindingsSettingsPane() {
@@ -5757,6 +5817,9 @@ async function handleClick(event) {
       await openSettings(target.dataset.settingsTab || "general", {
         claudeView: (target.dataset.settingsClaudeView || undefined) as ClaudeSettingsView | undefined
       });
+      break;
+    case "check-for-updates":
+      await checkForUpdatesFromSettings();
       break;
     case "open-session-search":
       openSessionSearch(target.dataset.repoId || currentRepoId() || state.repos[0]?.id || null);

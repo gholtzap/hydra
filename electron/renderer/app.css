@@ -3932,6 +3932,49 @@ textarea {
   padding: 12px 14px;
 }
 
+.settings-update-card {
+  gap: 12px;
+}
+
+.settings-update-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.settings-update-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.settings-update-status .muted {
+  color: inherit;
+  opacity: 0.82;
+}
+
+.settings-update-status-current,
+.settings-update-status-in-progress {
+  background: var(--status-muted-bg);
+  color: var(--status-muted-fg);
+}
+
+.settings-update-status-available,
+.settings-update-status-downloaded {
+  background: var(--status-live-bg);
+}
+
+.settings-update-status-unsupported,
+.settings-update-status-error {
+  background: var(--status-danger-bg);
+}
+
 .settings-field-copy {
   min-width: 0;
 }

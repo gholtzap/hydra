@@ -35,7 +35,7 @@ jobs:
           fi
 
       - name: Build unpacked macOS app for smoke test
-        run: node scripts/run-electron-builder.mjs --dir --mac
+        run: npm run pack:mac
 
       - name: Smoke test packaged macOS app
         run: npm run smoke:packaged:mac -- release/mac-arm64/Hydra.app

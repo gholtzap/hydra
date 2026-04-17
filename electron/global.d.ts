@@ -1,6 +1,7 @@
 import type {
   AppCommandPayload,
   AppPreferencesPatch,
+  AppUpdateCheckResult,
   AppStateSnapshot,
   ClaudeExternalUrlRequest,
   ClaudePathRevealRequest,
@@ -64,6 +65,7 @@ interface ClaudeWorkspaceApi {
   buildAndRunApp: (repoId: string) => Promise<string | null>;
   readClipboardText: () => Promise<string>;
   writeClipboardText: (text: string) => Promise<void>;
+  checkForUpdates: () => Promise<AppUpdateCheckResult>;
   revealPath: (payload: ClaudePathRevealRequest) => Promise<void>;
   openExternalUrl: (payload: ClaudeExternalUrlRequest) => Promise<void>;
   nextUnreadSession: () => Promise<string | null>;

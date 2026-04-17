@@ -157,6 +157,13 @@ const {
 const { inspectTrackedPorts } = require("./port-inspector") as {
   inspectTrackedPorts: () => Promise<TrackedPortStatus>;
 };
+const {
+  isPathWithinRoot,
+  normalizeSessionTagColor
+} = require("./shared-utils") as {
+  isPathWithinRoot: (filePath: string, rootPath: string) => boolean;
+  normalizeSessionTagColor: (value: unknown) => SessionTagColor | null;
+};
 const { isSessionSearchResultPathForRepo, queryProjectSessions } = require("./session-search") as {
   isSessionSearchResultPathForRepo: (filePath: string, repoPath: string) => Promise<boolean>;
   queryProjectSessions: (repoPath: string, query: string) => Promise<SessionSearchResponse>;
@@ -236,15 +243,6 @@ const FILE_TREE_IGNORED = new Set([
   ".cache", "coverage", ".mypy_cache", ".pytest_cache", ".turbo",
   ".vercel", "out", ".output", ".nuxt", ".svelte-kit", "storybook-static",
   ".parcel-cache", "target", ".gradle", ".idea", ".vscode"
-]);
-const SESSION_TAG_COLORS = new Set([
-  "red",
-  "orange",
-  "yellow",
-  "green",
-  "blue",
-  "purple",
-  "gray"
 ]);
 const SESSION_ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
 const TRUSTED_RENDERER_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "renderer", "index.html"));
@@ -349,14 +347,6 @@ function normalizeAbsolutePath(input: unknown, label = "path") {
   }
 
   return path.resolve(value);
-}
-
-function isPathWithinRoot(filePath: string, rootPath: string) {
-  const relativePath = path.relative(path.resolve(rootPath), path.resolve(filePath));
-  return (
-    relativePath === "" ||
-    (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
-  );
 }
 
 function normalizeFileUrlPath(input: string): string | null {
@@ -2772,11 +2762,6 @@ function compareInboxSessions(left, right) {
   }
 
   return String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
-}
-
-function normalizeSessionTagColor(value: unknown): SessionTagColor | null {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return SESSION_TAG_COLORS.has(normalized) ? normalized as SessionTagColor : null;
 }
 
 function sessionIconDirectoryPath() {

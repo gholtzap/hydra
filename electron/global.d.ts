@@ -2,7 +2,13 @@ import type {
   AppCommandPayload,
   AppPreferences,
   AppStateSnapshot,
+  ClaudeExternalUrlRequest,
+  ClaudePathRevealRequest,
+  ClaudeRepoFileRequest,
+  ClaudeSettingsFileRequest,
+  ClaudeSettingsSaveRequest,
   ClaudeSettingsContext,
+  ClaudeSkillFileRequest,
   DirectoryReadResult,
   EphemeralToolExitPayload,
   EphemeralToolId,
@@ -25,36 +31,6 @@ import type {
 } from "./shared-types";
 
 type Unsubscribe = () => void;
-
-type ClaudePathRevealRequest =
-  | { scope: "repo-file"; repoId: string; filePath: string }
-  | { scope: "repo-relative-file"; repoId: string; relativePath: string }
-  | { scope: "settings-file"; repoId: string | null; filePath: string }
-  | { scope: "session-search-result"; repoId: string; filePath: string };
-
-type ClaudeExternalUrlRequest = {
-  scope: "github-url";
-  url: string;
-};
-
-type ClaudeSettingsFileRequest = {
-  repoId: string | null;
-  filePath: string;
-};
-
-type ClaudeSettingsSaveRequest = ClaudeSettingsFileRequest & {
-  contents: string;
-};
-
-type ClaudeSkillFileRequest = {
-  repoId: string | null;
-  skillFilePath: string;
-};
-
-type ClaudeRepoFileRequest = {
-  repoId: string;
-  filePath: string;
-};
 
 interface ClaudeWorkspaceApi {
   getState: () => Promise<AppStateSnapshot>;

@@ -7,6 +7,9 @@ const { spawn } = require("node:child_process") as typeof import("node:child_pro
 const { resolveCommandPath } = require("./command-path") as {
   resolveCommandPath: (command: string) => Promise<string | null>;
 };
+const { isPathWithinRoot } = require("./shared-utils") as {
+  isPathWithinRoot: (filePath: string, rootPath: string) => boolean;
+};
 
 const REQUIRED_TOOLS = ["fzf", "rg"];
 const INSTALL_COMMAND = process.platform === "win32"
@@ -403,16 +406,6 @@ async function runListCommand(
 
 function claudeProjectKey(repoPath: string): string {
   return path.resolve(repoPath).replace(/[^a-zA-Z0-9]/g, "-");
-}
-
-function isPathWithinRoot(filePath: string, rootPath: string): boolean {
-  const normalizedFilePath = path.resolve(filePath);
-  const normalizedRootPath = path.resolve(rootPath);
-  const relativePath = path.relative(normalizedRootPath, normalizedFilePath);
-  return (
-    relativePath === "" ||
-    (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
-  );
 }
 
 async function codexSessionBelongsToRepo(filePath: string, repoPath: string): Promise<boolean> {

@@ -255,6 +255,36 @@ export type AppCommandPayload = {
   repoId?: string;
 };
 
+export type ClaudePathRevealRequest =
+  | { scope: "repo-file"; repoId: string; filePath: string }
+  | { scope: "repo-relative-file"; repoId: string; relativePath: string }
+  | { scope: "settings-file"; repoId: string | null; filePath: string }
+  | { scope: "session-search-result"; repoId: string; filePath: string };
+
+export type ClaudeExternalUrlRequest = {
+  scope: "github-url";
+  url: string;
+};
+
+export type ClaudeSettingsFileRequest = {
+  repoId: string | null;
+  filePath: string;
+};
+
+export type ClaudeSettingsSaveRequest = ClaudeSettingsFileRequest & {
+  contents: string;
+};
+
+export type ClaudeSkillFileRequest = {
+  repoId: string | null;
+  skillFilePath: string;
+};
+
+export type ClaudeRepoFileRequest = {
+  repoId: string;
+  filePath: string;
+};
+
 export type Point = {
   x: number;
   y: number;

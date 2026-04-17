@@ -500,6 +500,8 @@ const ui: UiState = {
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
 const detailElement = document.getElementById("detail") as HTMLElement;
 const appShellElement = document.getElementById("app-shell") as HTMLElement;
+const sidebarRevealHandleElement = document.getElementById("sidebar-reveal-handle") as HTMLButtonElement;
+const navbarRevealHandleElement = document.getElementById("navbar-reveal-handle") as HTMLButtonElement;
 const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogElement;
 const quickSwitcherDialog = document.getElementById("quick-switcher-dialog") as HTMLDialogElement;
 const sessionSearchDialog = document.getElementById("session-search-dialog") as HTMLDialogElement;
@@ -1559,7 +1561,8 @@ function renderSidebar() {
           renderSidebarUtilityButton(
             "collapse-sidebar",
             "Hide Sidebar",
-            "collapse"
+            "collapse",
+            sidebarNavMatches(sidebarActionNavId("collapse-sidebar")) ? "keyboard-active" : ""
           )
         )
       ),
@@ -5729,8 +5732,15 @@ async function handleClick(event) {
     case "collapse-sidebar":
       collapseSidebarChrome();
       break;
+    case "expand-sidebar":
+      expandSidebarChrome();
+      setFocusSection("sidebar");
+      break;
     case "collapse-navbar":
       collapseWorkspaceNavbar();
+      break;
+    case "expand-navbar":
+      expandWorkspaceNavbar({ focusToolbarControl: true });
       break;
     case "open-launcher":
       await startDefaultAgentSession(target.dataset.repoId || currentRepoId());
@@ -9838,7 +9848,8 @@ function sidebarNavItems() {
     sidebarActionNavId("open-workspace"),
     sidebarActionNavId("create-project"),
     sidebarActionNavId("open-status"),
-    sidebarActionNavId("open-settings")
+    sidebarActionNavId("open-settings"),
+    sidebarActionNavId("collapse-sidebar")
   ];
 }
 
@@ -9885,6 +9896,7 @@ function syncSidebarNavItemFromTarget(target) {
     case "create-project":
     case "open-status":
     case "open-settings":
+    case "collapse-sidebar":
       ui.sidebarNavItem = sidebarActionNavId(action);
       break;
     default:
@@ -10256,10 +10268,14 @@ function syncSectionFocusUi(options: { preserveCurrentFocus?: boolean } = {}) {
   normalizeFocusSection();
 
   const expanded = !!expandedSidebarRepo();
+  const navbarHandleVisible = ui.navbarCollapsed && ui.selection.type === "session";
   appShellElement.classList.toggle("sidebar-expanded", expanded);
   appShellElement.classList.toggle("sidebar-collapsed", ui.sidebarCollapsed);
+  appShellElement.classList.toggle("navbar-collapsed", navbarHandleVisible);
   sidebarElement.classList.toggle("sidebar-expanded", expanded);
   detailElement.classList.toggle("navbar-collapsed", ui.navbarCollapsed);
+  sidebarRevealHandleElement.disabled = !ui.sidebarCollapsed;
+  navbarRevealHandleElement.disabled = !navbarHandleVisible;
 
   sidebarElement.classList.toggle("section-focused", ui.focusSection === "sidebar");
   const sidebarDrawer = sidebarElement.querySelector(".sidebar-project-drawer") as HTMLElement | null;
@@ -10466,6 +10482,15 @@ function collapseSidebarChrome() {
   syncSectionFocusUi({ preserveCurrentFocus: true });
 }
 
+function expandSidebarChrome() {
+  if (!ui.sidebarCollapsed) {
+    return;
+  }
+
+  ui.sidebarCollapsed = false;
+  syncSectionFocusUi({ preserveCurrentFocus: true });
+}
+
 function collapseWorkspaceNavbar() {
   if (ui.focusSection === "sidebar" || ui.focusSection === "sidebar-drawer") {
     setFocusSection("main");
@@ -10481,6 +10506,26 @@ function collapseWorkspaceNavbar() {
 
   ui.navbarCollapsed = true;
   syncSectionFocusUi({ preserveCurrentFocus: true });
+}
+
+function expandWorkspaceNavbar(options: { focusToolbarControl?: boolean } = {}) {
+  if (!ui.navbarCollapsed) {
+    return;
+  }
+
+  ui.navbarCollapsed = false;
+  syncSectionFocusUi({ preserveCurrentFocus: true });
+
+  if (!options.focusToolbarControl) {
+    return;
+  }
+
+  requestAnimationFrame(() => {
+    const toolbarControl = detailElement.querySelector(
+      "#session-workspace-toolbar button, #session-workspace-toolbar select, #session-workspace-toolbar input"
+    ) as HTMLElement | null;
+    toolbarControl?.focus({ preventScroll: true });
+  });
 }
 
 function scrollSidebarSelectionIntoView() {
@@ -10886,6 +10931,9 @@ async function activateSidebarNavItem() {
         break;
       case "open-settings":
         await openSettings("general");
+        break;
+      case "collapse-sidebar":
+        collapseSidebarChrome();
         break;
       default:
         break;

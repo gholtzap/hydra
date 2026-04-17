@@ -11,13 +11,16 @@
  */
 
 import type { IncomingMessage, ServerResponse, Server as HttpServer } from "node:http";
+import type { McpServer as RegisteredMcpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { StreamableHTTPServerTransport as RegisteredStreamableTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+
 import type { AppControllerHandle } from "./internal-api.js";
 
 const http = require("node:http") as typeof import("node:http");
 const { randomUUID, timingSafeEqual } = require("node:crypto") as typeof import("node:crypto");
 
 const {
-  McpServer,
+  McpServer: SdkMcpServer,
 } = require("@modelcontextprotocol/sdk/server/mcp.js") as {
   McpServer: typeof import("@modelcontextprotocol/sdk/server/mcp.js").McpServer;
 };
@@ -31,8 +34,8 @@ const {
 const MCP_PORT = 4141;
 
 interface SessionEntry {
-  server: InstanceType<typeof McpServer>;
-  transport: InstanceType<typeof StreamableHTTPServerTransport>;
+  server: RegisteredMcpServer;
+  transport: RegisteredStreamableTransport;
 }
 
 interface HydraMcpServerOptions {
@@ -57,19 +60,19 @@ export class HydraMcpServer {
   // ── Per-session server factory ─────────────────────────────────
 
   private createSessionServer(): SessionEntry {
-    const server = new McpServer(
+    const server = new SdkMcpServer(
       { name: "hydra", version: "1.0.0" },
       { capabilities: { tools: {}, resources: {}, prompts: {} } }
     );
 
     const { registerAllTools } = require("./mcp-tools/index.js") as {
-      registerAllTools: (server: any, appController: any) => void;
+      registerAllTools: (server: RegisteredMcpServer, appController: AppControllerHandle) => void;
     };
     const { registerResources } = require("./mcp-resources.js") as {
-      registerResources: (server: any, appController: any) => void;
+      registerResources: (server: RegisteredMcpServer, appController: AppControllerHandle) => void;
     };
     const { registerPrompts } = require("./mcp-prompts.js") as {
-      registerPrompts: (server: any, appController: any) => void;
+      registerPrompts: (server: RegisteredMcpServer, appController: AppControllerHandle) => void;
     };
 
     registerAllTools(server, this.appController);
@@ -89,10 +92,7 @@ export class HydraMcpServer {
   notifyResourceChanged(uri: string): void {
     for (const { server } of this.sessions.values()) {
       try {
-        const lowLevel = (server as any).server;
-        if (lowLevel && typeof lowLevel.sendResourceUpdated === "function") {
-          lowLevel.sendResourceUpdated({ uri });
-        }
+        void server.server.sendResourceUpdated({ uri });
       } catch {
         // Silently ignore — no subscribers or session closing
       }
@@ -219,7 +219,7 @@ export class HydraMcpServer {
     await entry.transport.handleRequest(req, res);
 
     // After the initialize handshake the transport has a sessionId — store it
-    const newId = (entry.transport as any).sessionId as string | undefined;
+    const newId = entry.transport.sessionId;
     if (newId) {
       this.sessions.set(newId, entry);
       console.log(`[MCP] New session: ${newId} (total: ${this.sessions.size})`);

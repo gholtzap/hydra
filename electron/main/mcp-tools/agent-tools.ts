@@ -1,7 +1,11 @@
 /**
  * MCP tools for agent configuration.
  */
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+
+import type { AgentDefinition } from "../../shared-types";
+import type { AppControllerHandle } from "../internal-api";
 
 const AGENT_DEFINITIONS = [
   { id: "claude", label: "Claude Code", defaultCommand: "claude" },
@@ -16,13 +20,13 @@ const AGENT_DEFINITIONS = [
   { id: "qwen", label: "Qwen Code", defaultCommand: "qwen-code" },
   { id: "amp", label: "Amp", defaultCommand: "amp" },
   { id: "warp", label: "Warp", defaultCommand: "warp" },
-];
+] as const satisfies readonly AgentDefinition[];
 
 function textResult(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
-export function register(server: any, appController: any) {
+export function register(server: McpServer, appController: AppControllerHandle): void {
   server.tool(
     "list_agents",
     "List available AI coding agents and their configuration",

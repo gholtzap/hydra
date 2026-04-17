@@ -37,6 +37,18 @@ import type {
   WikiContext,
   WikiFileContents
 } from "../shared-types";
+import type { AppControllerHandle } from "./internal-api";
+import type { HydraMcpServer } from "./mcp-server";
+import {
+  extractPreferencesPatch,
+  normalizeMarketplaceInstallArgs,
+  normalizeMarketplaceSkillDetailsArgs,
+  normalizeOrganizeSessionArgs,
+  parseMcpActionArgs,
+  type McpActionArgs,
+  type McpActionName,
+  type McpActionResult
+} from "./mcp-contracts";
 
 const fs = require("node:fs");
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
@@ -195,9 +207,9 @@ const { resolveCommandPath } = require("./command-path") as {
 };
 const { startMcpServer } = require("./mcp-server") as {
   startMcpServer: (
-    appController: InstanceType<typeof AppController>,
+    appController: AppControllerHandle,
     options: { authToken: string }
-  ) => Promise<any>;
+  ) => Promise<HydraMcpServer>;
 };
 
 app.setName("Hydra");
@@ -480,7 +492,7 @@ class AppController {
   saveChain: Promise<void>;
   knownPlanFiles: Set<string>;
   plansDirWatcher: ReturnType<typeof fs.watch> | null;
-  mcpServer: any;
+  mcpServer: HydraMcpServer | null;
 
   constructor() {
     this.state = emptyState();
@@ -1054,97 +1066,199 @@ class AppController {
    * This avoids duplicating IPC handler logic — every mutation tool
    * routes through here to the same method the renderer uses.
    */
-  async handleMcpAction(action: string, args: any): Promise<any> {
+  async handleMcpAction<Action extends McpActionName>(
+    action: Action,
+    args: McpActionArgs<Action>
+  ): Promise<McpActionResult<Action>> {
+    const parseArgs = <ExpectedAction extends McpActionName>(
+      expectedAction: ExpectedAction
+    ): McpActionArgs<ExpectedAction> => parseMcpActionArgs(expectedAction, args);
+
     switch (action) {
       // Session mutations
-      case "create_session":
-        return this.createSession(args.repoId, args.autoLaunch ?? true);
-      case "rename_session":
-        return this.renameSession(args.sessionId, args.title);
-      case "close_session":
-        return this.closeSession(args.sessionId);
-      case "reopen_session":
-        return this.reopenSession(args.sessionId);
-      case "organize_session":
-        return this.updateSessionOrganization(args.sessionId, {
-          isPinned: args.pin,
-          tagColor: args.tagColor,
-          repoID: args.repoId,
-        });
-      case "search_sessions":
-        return this.querySessionFiles(args.repoId, args.query);
-      case "resume_session":
+      case "create_session": {
+        const parsedArgs = parseArgs("create_session");
+        return this.createSession(
+          parsedArgs.repoId,
+          parsedArgs.autoLaunch ?? true
+        ) as McpActionResult<Action>;
+      }
+      case "rename_session": {
+        const parsedArgs = parseArgs("rename_session");
+        return this.renameSession(parsedArgs.sessionId, parsedArgs.title) as McpActionResult<Action>;
+      }
+      case "close_session": {
+        const parsedArgs = parseArgs("close_session");
+        return this.closeSession(parsedArgs.sessionId) as McpActionResult<Action>;
+      }
+      case "reopen_session": {
+        const parsedArgs = parseArgs("reopen_session");
+        return this.reopenSession(parsedArgs.sessionId) as McpActionResult<Action>;
+      }
+      case "organize_session": {
+        const parsedArgs = parseArgs("organize_session");
+        const organizeArgs = normalizeOrganizeSessionArgs(parsedArgs);
+        return this.updateSessionOrganization(organizeArgs.sessionId, {
+          isPinned: organizeArgs.isPinned,
+          tagColor: organizeArgs.tagColor,
+          repoID: organizeArgs.repoId,
+        }) as McpActionResult<Action>;
+      }
+      case "search_sessions": {
+        const parsedArgs = parseArgs("search_sessions");
+        return await this.querySessionFiles(
+          parsedArgs.repoId,
+          parsedArgs.query
+        ) as McpActionResult<Action>;
+      }
+      case "resume_session": {
+        const parsedArgs = parseArgs("resume_session");
         return this.resumeFromSearchResult(
-          args.repoId,
-          args.source || "claude",
-          args.externalSessionId
-        );
+          parsedArgs.repoId,
+          parsedArgs.source || "claude",
+          parsedArgs.externalSessionId
+        ) as McpActionResult<Action>;
+      }
 
       // Workspace / repo mutations
-      case "add_workspace":
-        return this.addWorkspace(args.path);
-      case "rescan_workspace":
-        return this.rescanWorkspace(args.workspaceId);
-      case "set_build_run_config":
-        return this.updateRepoAppLaunchConfig(args.repoId, {
-          buildCommand: args.buildCommand,
-          runCommand: args.runCommand,
-        });
-      case "build_and_run_app":
-        return this.buildAndRunApp(args.repoId);
+      case "add_workspace": {
+        const parsedArgs = parseArgs("add_workspace");
+        return await this.addWorkspace(parsedArgs.path) as McpActionResult<Action>;
+      }
+      case "rescan_workspace": {
+        const parsedArgs = parseArgs("rescan_workspace");
+        return await this.rescanWorkspace(parsedArgs.workspaceId) as McpActionResult<Action>;
+      }
+      case "set_build_run_config": {
+        const parsedArgs = parseArgs("set_build_run_config");
+        return this.updateRepoAppLaunchConfig(parsedArgs.repoId, {
+          buildCommand: parsedArgs.buildCommand,
+          runCommand: parsedArgs.runCommand,
+        }) as McpActionResult<Action>;
+      }
+      case "build_and_run_app": {
+        const parsedArgs = parseArgs("build_and_run_app");
+        return this.buildAndRunApp(parsedArgs.repoId) as McpActionResult<Action>;
+      }
       case "list_files": {
-        const repo = this.repoById(args.repoId);
-        if (!repo) return null;
-        return { path: repo.path, tree: await buildFileTree(repo.path, repo.path, 0) };
+        const parsedArgs = parseArgs("list_files");
+        const repo = this.repoById(parsedArgs.repoId);
+        if (!repo) {
+          return null as McpActionResult<Action>;
+        }
+        return {
+          path: repo.path,
+          tree: await buildFileTree(repo.path, repo.path, 0)
+        } as McpActionResult<Action>;
       }
       case "read_file": {
-        const filePath = this.assertRepoFilePath(args.repoId, args.path);
+        const parsedArgs = parseArgs("read_file");
+        const filePath = this.assertRepoFilePath(parsedArgs.repoId, parsedArgs.path);
         const stats = await fsp.stat(filePath);
-        if (stats.size > 512 * 1024) return { content: null, tooLarge: true, size: stats.size };
+        if (stats.size > 512 * 1024) {
+          return {
+            content: null,
+            tooLarge: true,
+            size: stats.size
+          } as McpActionResult<Action>;
+        }
         const buffer = await fsp.readFile(filePath);
-        return { content: buffer.toString("utf-8"), tooLarge: false };
+        return {
+          content: buffer.toString("utf-8"),
+          tooLarge: false
+        } as McpActionResult<Action>;
       }
 
       // Preferences
-      case "update_preferences":
-        return this.updatePreferences(args.patch ?? args);
+      case "update_preferences": {
+        const parsedArgs = parseArgs("update_preferences");
+        return this.updatePreferences(
+          extractPreferencesPatch(parsedArgs)
+        ) as McpActionResult<Action>;
+      }
 
       // Settings files
-      case "get_settings_context":
-        return buildClaudeSettingsContext(this.repoById(args.repoId) || null);
-      case "load_settings_file":
-        return readClaudeSettingsFile(args.filePath, this.settingsRepoPaths(args.repoId));
-      case "save_settings_file":
-        await writeClaudeSettingsFile(args.filePath, args.content, this.settingsRepoPaths(args.repoId));
-        return { ok: true };
+      case "get_settings_context": {
+        const parsedArgs = parseArgs("get_settings_context");
+        return await buildClaudeSettingsContext(
+          this.repoById(parsedArgs.repoId) || null
+        ) as McpActionResult<Action>;
+      }
+      case "load_settings_file": {
+        const parsedArgs = parseArgs("load_settings_file");
+        return await readClaudeSettingsFile(
+          parsedArgs.filePath,
+          this.settingsRepoPaths(parsedArgs.repoId)
+        ) as McpActionResult<Action>;
+      }
+      case "save_settings_file": {
+        const parsedArgs = parseArgs("save_settings_file");
+        await writeClaudeSettingsFile(
+          parsedArgs.filePath,
+          parsedArgs.content,
+          this.settingsRepoPaths(parsedArgs.repoId)
+        );
+        return { ok: true } as McpActionResult<Action>;
+      }
 
       // Wiki
-      case "get_wiki":
-        return this.projectWikiContext(args.repoId);
-      case "read_wiki_page":
-        return this.projectWikiFile(args.repoId, args.path);
-      case "toggle_wiki":
-        return this.toggleProjectWiki(args.repoId, args.enabled);
+      case "get_wiki": {
+        const parsedArgs = parseArgs("get_wiki");
+        return await this.projectWikiContext(parsedArgs.repoId) as McpActionResult<Action>;
+      }
+      case "read_wiki_page": {
+        const parsedArgs = parseArgs("read_wiki_page");
+        return await this.projectWikiFile(
+          parsedArgs.repoId,
+          parsedArgs.path
+        ) as McpActionResult<Action>;
+      }
+      case "toggle_wiki": {
+        const parsedArgs = parseArgs("toggle_wiki");
+        return await this.toggleProjectWiki(
+          parsedArgs.repoId,
+          parsedArgs.enabled
+        ) as McpActionResult<Action>;
+      }
 
       // Marketplace
-      case "get_skill_details":
-        return getMarketplaceSkillDetails(args);
-      case "inspect_skill_url":
-        return inspectMarketplaceGitHubUrl(args);
-      case "install_skill":
-        return installMarketplaceSkill(args);
+      case "get_skill_details": {
+        const parsedArgs = parseArgs("get_skill_details");
+        return await getMarketplaceSkillDetails(
+          normalizeMarketplaceSkillDetailsArgs(parsedArgs)
+        ) as McpActionResult<Action>;
+      }
+      case "inspect_skill_url": {
+        const parsedArgs = parseArgs("inspect_skill_url");
+        return await inspectMarketplaceGitHubUrl(parsedArgs) as McpActionResult<Action>;
+      }
+      case "install_skill": {
+        const parsedArgs = parseArgs("install_skill");
+        return await installMarketplaceSkill(
+          normalizeMarketplaceInstallArgs(parsedArgs)
+        ) as McpActionResult<Action>;
+      }
 
       // Monitoring
       case "get_port_status":
-        return inspectTrackedPorts();
-      case "launch_ephemeral_tool":
-        return this.createEphemeralToolSession(args.toolId, args.repoId);
-      case "close_ephemeral_tool":
-        return this.closeEphemeralToolSession(args.toolId, args.sessionId);
-
-      default:
-        return { error: `Unknown MCP action: ${action}` };
+        return await inspectTrackedPorts() as McpActionResult<Action>;
+      case "launch_ephemeral_tool": {
+        const parsedArgs = parseArgs("launch_ephemeral_tool");
+        return this.createEphemeralToolSession(
+          parsedArgs.toolId,
+          parsedArgs.repoId
+        ) as McpActionResult<Action>;
+      }
+      case "close_ephemeral_tool": {
+        const parsedArgs = parseArgs("close_ephemeral_tool");
+        return this.closeEphemeralToolSession(
+          parsedArgs.toolId,
+          parsedArgs.sessionId
+        ) as McpActionResult<Action>;
+      }
     }
+
+    throw new Error(`Unknown MCP action: ${String(action)}`);
   }
 
   snapshot() {

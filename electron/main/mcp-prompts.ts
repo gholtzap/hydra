@@ -1,6 +1,10 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-export function registerPrompts(server: any, appController: any) {
+import type { AgentDefinition, RepoRecord, SessionRecord } from "../shared-types";
+import type { AppControllerHandle } from "./internal-api";
+
+export function registerPrompts(server: McpServer, appController: AppControllerHandle): void {
   // review_blockers — list all blocked sessions with blocker details
   server.registerPrompt(
     "review_blockers",
@@ -10,18 +14,18 @@ export function registerPrompts(server: any, appController: any) {
     },
     async () => {
       const blocked = appController.state.sessions.filter(
-        (s: any) => s.status === "blocked" || s.status === "needs_input"
+        (session) => session.status === "blocked" || session.status === "needs_input"
       );
 
       let promptText: string;
       if (blocked.length === 0) {
         promptText = "There are currently no blocked sessions in Hydra. All sessions are running smoothly.";
       } else {
-        const lines = blocked.map((s: any, i: number) => {
-          const blocker = s.blocker
-            ? `[${s.blocker.kind}] ${s.blocker.summary} (since ${s.blocker.detectedAt})`
-            : `Status: ${s.status}`;
-          return `${i + 1}. Session "${s.title}" (id: ${s.id}, repo: ${s.repoID})\n   ${blocker}`;
+        const lines = blocked.map((session, index) => {
+          const blocker = session.blocker
+            ? `[${session.blocker.kind}] ${session.blocker.summary} (since ${session.blocker.detectedAt})`
+            : `Status: ${session.status}`;
+          return `${index + 1}. Session "${session.title}" (id: ${session.id}, repo: ${session.repoID})\n   ${blocker}`;
         });
         promptText =
           `The following ${blocked.length} session(s) in Hydra are currently blocked and need attention:\n\n` +
@@ -41,12 +45,12 @@ export function registerPrompts(server: any, appController: any) {
     {
       title: "Session Summary",
       description: "Summarize what happened in a specific session",
-      argsSchema: z.object({
+      argsSchema: {
         sessionId: z.string().describe("The session ID to summarize"),
-      }),
+      },
     },
     async ({ sessionId }: { sessionId: string }) => {
-      const session = appController.state.sessions.find((s: any) => s.id === sessionId);
+      const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
 
       if (!session) {
         return {
@@ -78,28 +82,30 @@ export function registerPrompts(server: any, appController: any) {
     {
       title: "Project Status",
       description: "Overview of all active work across repos",
-      argsSchema: z.object({
+      argsSchema: {
         repoId: z.string().optional().describe("Optional repo ID to filter by"),
-      }),
+      },
     },
     async ({ repoId }: { repoId?: string }) => {
-      const repos: any[] = appController.state.repos;
-      const sessions: any[] = appController.state.sessions;
+      const repos: RepoRecord[] = appController.state.repos;
+      const sessions: SessionRecord[] = appController.state.sessions;
 
-      const filteredRepos = repoId ? repos.filter((r: any) => r.id === repoId) : repos;
-      const repoIds = new Set(filteredRepos.map((r: any) => r.id));
+      const filteredRepos = repoId ? repos.filter((repo) => repo.id === repoId) : repos;
+      const repoIds = new Set(filteredRepos.map((repo) => repo.id));
 
-      const repoSections = filteredRepos.map((repo: any) => {
-        const repoSessions = sessions.filter((s: any) => s.repoID === repo.id);
+      const repoSections = filteredRepos.map((repo) => {
+        const repoSessions = sessions.filter((session) => session.repoID === repo.id);
         if (repoSessions.length === 0) {
           return `## ${repo.name} (${repo.path})\nNo sessions.`;
         }
-        const sessionLines = repoSessions.map((s: any) => {
-          const blockerInfo = s.blocker ? ` | BLOCKED: [${s.blocker.kind}] ${s.blocker.summary}` : "";
-          return `- "${s.title}" — ${s.status} (agent: ${s.startupAgentId || "unknown"})${blockerInfo}`;
+        const sessionLines = repoSessions.map((session) => {
+          const blockerInfo = session.blocker ? ` | BLOCKED: [${session.blocker.kind}] ${session.blocker.summary}` : "";
+          return `- "${session.title}" — ${session.status} (agent: ${session.startupAgentId || "unknown"})${blockerInfo}`;
         });
-        const running = repoSessions.filter((s: any) => s.status === "running").length;
-        const blocked = repoSessions.filter((s: any) => s.status === "blocked" || s.status === "needs_input").length;
+        const running = repoSessions.filter((session) => session.status === "running").length;
+        const blocked = repoSessions.filter(
+          (session) => session.status === "blocked" || session.status === "needs_input"
+        ).length;
         return (
           `## ${repo.name} (${repo.path})\n` +
           `${repoSessions.length} session(s): ${running} running, ${blocked} blocked\n` +
@@ -110,17 +116,19 @@ export function registerPrompts(server: any, appController: any) {
       // Include orphan sessions (sessions whose repoID doesn't match filtered repos, only when not filtering)
       const orphanSessions = repoId
         ? []
-        : sessions.filter((s: any) => !repoIds.has(s.repoID));
+        : sessions.filter((session) => !repoIds.has(session.repoID));
 
       if (orphanSessions.length > 0) {
         const orphanLines = orphanSessions.map(
-          (s: any) => `- "${s.title}" (repo: ${s.repoID}) — ${s.status}`
+          (session) => `- "${session.title}" (repo: ${session.repoID}) — ${session.status}`
         );
         repoSections.push(`## Unmatched Sessions\n${orphanLines.join("\n")}`);
       }
 
       const totalSessions = sessions.length;
-      const totalBlocked = sessions.filter((s: any) => s.status === "blocked" || s.status === "needs_input").length;
+      const totalBlocked = sessions.filter(
+        (session) => session.status === "blocked" || session.status === "needs_input"
+      ).length;
 
       const promptText =
         `Here is the current project status across Hydra.\n\n` +
@@ -140,25 +148,27 @@ export function registerPrompts(server: any, appController: any) {
     {
       title: "Agent Recommendation",
       description: "Recommend which AI coding agent to use for a given task",
-      argsSchema: z.object({
+      argsSchema: {
         taskDescription: z.string().describe("Description of the task you want to accomplish"),
-      }),
+      },
     },
     async ({ taskDescription }: { taskDescription: string }) => {
-      let agents: any[];
+      let agents: AgentDefinition[] = [];
       try {
-        agents = require("./state-store").AGENT_DEFINITIONS;
+        ({ AGENT_DEFINITIONS: agents } = require("./state-store") as {
+          AGENT_DEFINITIONS: AgentDefinition[];
+        });
       } catch {
         agents = [];
       }
 
       const prefs = appController.state.preferences;
       const agentList = agents
-        .map((a: any) => {
-          const override = prefs.agentCommandOverrides?.[a.id];
-          const cmd = override || a.defaultCommand;
-          const isDefault = a.id === prefs.defaultAgentId ? " (current default)" : "";
-          return `- ${a.label} (id: ${a.id}, command: ${cmd})${isDefault}`;
+        .map((agent) => {
+          const override = prefs.agentCommandOverrides?.[agent.id];
+          const cmd = override || agent.defaultCommand;
+          const isDefault = agent.id === prefs.defaultAgentId ? " (current default)" : "";
+          return `- ${agent.label} (id: ${agent.id}, command: ${cmd})${isDefault}`;
         })
         .join("\n");
 

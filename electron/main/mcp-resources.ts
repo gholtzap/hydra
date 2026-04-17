@@ -1,6 +1,13 @@
-import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-export function registerResources(server: any, appController: any) {
+import type { AgentDefinition, RepoRecord, SessionRecord } from "../shared-types";
+import type { AppControllerHandle } from "./internal-api";
+
+function readTemplateVariable(value: string | string[] | undefined): string | null {
+  return typeof value === "string" && value ? value : null;
+}
+
+export function registerResources(server: McpServer, appController: AppControllerHandle): void {
   // hydra://state — full app state snapshot
   server.registerResource(
     "app-state",
@@ -17,8 +24,8 @@ export function registerResources(server: any, appController: any) {
     "hydra://sessions",
     { title: "All Sessions", description: "All sessions without transcript data", mimeType: "application/json" },
     async (uri: URL) => {
-      const sessions = appController.state.sessions.map((s: any) => {
-        const { transcript, rawTranscript, ...rest } = s;
+      const sessions = appController.state.sessions.map((session) => {
+        const { transcript, rawTranscript, ...rest } = session;
         return rest;
       });
       return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(sessions) }] };
@@ -30,15 +37,19 @@ export function registerResources(server: any, appController: any) {
     "session-detail",
     new ResourceTemplate("hydra://sessions/{id}", {
       list: async () => ({
-        resources: appController.state.sessions.map((s: any) => ({
-          uri: `hydra://sessions/${s.id}`,
-          name: s.title || s.id,
+        resources: appController.state.sessions.map((session) => ({
+          uri: `hydra://sessions/${session.id}`,
+          name: session.title || session.id,
         })),
       }),
     }),
     { title: "Session Detail", description: "Single session with full transcript", mimeType: "application/json" },
-    async (uri: URL, { id }: { id: string }) => {
-      const session = appController.state.sessions.find((s: any) => s.id === id);
+    async (uri: URL, variables) => {
+      const id = readTemplateVariable(variables.id);
+      if (!id) {
+        return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify({ error: "Session not found" }) }] };
+      }
+      const session = appController.state.sessions.find((candidate) => candidate.id === id);
       if (!session) {
         return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify({ error: "Session not found" }) }] };
       }
@@ -51,15 +62,19 @@ export function registerResources(server: any, appController: any) {
     "session-transcript",
     new ResourceTemplate("hydra://sessions/{id}/transcript", {
       list: async () => ({
-        resources: appController.state.sessions.map((s: any) => ({
-          uri: `hydra://sessions/${s.id}/transcript`,
-          name: `${s.title || s.id} - Transcript`,
+        resources: appController.state.sessions.map((session) => ({
+          uri: `hydra://sessions/${session.id}/transcript`,
+          name: `${session.title || session.id} - Transcript`,
         })),
       }),
     }),
     { title: "Session Transcript", description: "Plain text transcript for a session", mimeType: "text/plain" },
-    async (uri: URL, { id }: { id: string }) => {
-      const session = appController.state.sessions.find((s: any) => s.id === id);
+    async (uri: URL, variables) => {
+      const id = readTemplateVariable(variables.id);
+      if (!id) {
+        return { contents: [{ uri: uri.href, mimeType: "text/plain", text: "Session not found" }] };
+      }
+      const session = appController.state.sessions.find((candidate) => candidate.id === id);
       if (!session) {
         return { contents: [{ uri: uri.href, mimeType: "text/plain", text: "Session not found" }] };
       }
@@ -72,15 +87,19 @@ export function registerResources(server: any, appController: any) {
     "repo-files",
     new ResourceTemplate("hydra://repos/{id}/files", {
       list: async () => ({
-        resources: appController.state.repos.map((r: any) => ({
-          uri: `hydra://repos/${r.id}/files`,
-          name: `${r.name} - Files`,
+        resources: appController.state.repos.map((repo) => ({
+          uri: `hydra://repos/${repo.id}/files`,
+          name: `${repo.name} - Files`,
         })),
       }),
     }),
     { title: "Repo File Tree", description: "File tree for a repository (use list_files tool for full tree)", mimeType: "application/json" },
-    async (uri: URL, { id }: { id: string }) => {
-      const repo = appController.state.repos.find((r: any) => r.id === id);
+    async (uri: URL, variables) => {
+      const id = readTemplateVariable(variables.id);
+      if (!id) {
+        return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify({ error: "Repo not found" }) }] };
+      }
+      const repo = appController.state.repos.find((candidate) => candidate.id === id);
       if (!repo) {
         return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify({ error: "Repo not found" }) }] };
       }
@@ -99,14 +118,24 @@ export function registerResources(server: any, appController: any) {
     "repo-wiki",
     new ResourceTemplate("hydra://repos/{id}/wiki", {
       list: async () => ({
-        resources: appController.state.repos.map((r: any) => ({
-          uri: `hydra://repos/${r.id}/wiki`,
-          name: `${r.name} - Wiki`,
+        resources: appController.state.repos.map((repo) => ({
+          uri: `hydra://repos/${repo.id}/wiki`,
+          name: `${repo.name} - Wiki`,
         })),
       }),
     }),
     { title: "Repo Wiki", description: "Wiki tree and content for a repository", mimeType: "application/json" },
-    async (uri: URL, { id }: { id: string }) => {
+    async (uri: URL, variables) => {
+      const id = readTemplateVariable(variables.id);
+      if (!id) {
+        return {
+          contents: [{
+            uri: uri.href,
+            mimeType: "application/json",
+            text: JSON.stringify({ error: "Wiki not available" }),
+          }],
+        };
+      }
       const result = await appController.handleMcpAction("get_wiki", { repoId: id });
       return {
         contents: [{
@@ -125,9 +154,11 @@ export function registerResources(server: any, appController: any) {
     { title: "Agent Definitions", description: "Available AI agent types and their configurations", mimeType: "application/json" },
     async (uri: URL) => {
       // AGENT_DEFINITIONS is loaded in main.ts from state-store; read from require at runtime
-      let agents: any[];
+      let agents: AgentDefinition[] = [];
       try {
-        agents = require("./state-store").AGENT_DEFINITIONS;
+        ({ AGENT_DEFINITIONS: agents } = require("./state-store") as {
+          AGENT_DEFINITIONS: AgentDefinition[];
+        });
       } catch {
         agents = [];
       }

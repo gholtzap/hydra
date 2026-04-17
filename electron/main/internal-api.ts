@@ -17,6 +17,7 @@ import type {
   RepoRecord,
   RepoAppLaunchConfig,
   SessionSearchResponse,
+  SessionSearchSource,
   SessionTagColor,
   SessionRecord,
   SessionStatus,
@@ -27,134 +28,11 @@ import type {
   WorkspaceRecord,
   ReadFileResult
 } from "../shared-types";
-
-type MarketplaceSkillSourcePayload = {
-  owner: string;
-  repo: string;
-  ref?: string;
-  path: string;
-  reviewState?: MarketplaceReviewState;
-  tags?: string[];
-};
-
-type MarketplaceSkillDetailsArgs =
-  | { source: MarketplaceSkillSourcePayload }
-  | MarketplaceSkillSourcePayload;
-
-type MarketplaceInstallArgs =
-  | {
-      source: { owner: string; repo: string; ref?: string; path: string };
-      scope: MarketplaceInstallScope;
-      repoPath?: string | null;
-    }
-  | {
-      owner: string;
-      repo: string;
-      ref?: string;
-      path: string;
-      scope: MarketplaceInstallScope;
-      repoPath?: string | null;
-    };
-
-export type McpActionName =
-  | "create_session"
-  | "rename_session"
-  | "close_session"
-  | "reopen_session"
-  | "organize_session"
-  | "search_sessions"
-  | "resume_session"
-  | "add_workspace"
-  | "rescan_workspace"
-  | "set_build_run_config"
-  | "build_and_run_app"
-  | "list_files"
-  | "read_file"
-  | "update_preferences"
-  | "get_settings_context"
-  | "load_settings_file"
-  | "save_settings_file"
-  | "get_wiki"
-  | "read_wiki_page"
-  | "toggle_wiki"
-  | "get_skill_details"
-  | "inspect_skill_url"
-  | "install_skill"
-  | "get_port_status"
-  | "launch_ephemeral_tool"
-  | "close_ephemeral_tool";
-
-export type McpActionArgsMap = {
-  create_session: {
-    repoId: string;
-    autoLaunch?: boolean;
-    agentId?: string;
-    prompt?: string;
-  };
-  rename_session: { sessionId: string; title: string };
-  close_session: { sessionId: string };
-  reopen_session: { sessionId: string };
-  organize_session: {
-    sessionId: string;
-    pin?: boolean;
-    isPinned?: boolean;
-    tagColor?: SessionTagColor | null | string;
-    repoId?: string;
-  };
-  search_sessions: { repoId: string; query: string };
-  resume_session: { repoId: string; source?: string; externalSessionId: string };
-  add_workspace: { path: string };
-  rescan_workspace: { workspaceId: string };
-  set_build_run_config: { repoId: string; buildCommand: string; runCommand: string };
-  build_and_run_app: { repoId: string };
-  list_files: { repoId: string };
-  read_file: { repoId: string; path: string };
-  update_preferences: ({ patch?: Record<string, unknown> } & Record<string, unknown>);
-  get_settings_context: { repoId: string };
-  load_settings_file: { repoId: string; filePath: string };
-  save_settings_file: { repoId: string; filePath: string; content: string };
-  get_wiki: { repoId: string };
-  read_wiki_page: { repoId: string; path: string };
-  toggle_wiki: { repoId: string; enabled: boolean };
-  get_skill_details: MarketplaceSkillDetailsArgs;
-  inspect_skill_url: { url: string };
-  install_skill: MarketplaceInstallArgs;
-  get_port_status: Record<string, never>;
-  launch_ephemeral_tool: { toolId: string; repoId: string };
-  close_ephemeral_tool: { toolId: string; sessionId: string };
-};
-
-export type McpActionResultMap = {
-  create_session: string | null;
-  rename_session: boolean;
-  close_session: void;
-  reopen_session: void;
-  organize_session: boolean;
-  search_sessions: SessionSearchResponse;
-  resume_session: string | null;
-  add_workspace: void;
-  rescan_workspace: void;
-  set_build_run_config: RepoAppLaunchConfig | null;
-  build_and_run_app: string | null;
-  list_files: DirectoryReadResult;
-  read_file: ReadFileResult;
-  update_preferences: void;
-  get_settings_context: ClaudeSettingsContext;
-  load_settings_file: string;
-  save_settings_file: { ok: true };
-  get_wiki: WikiContext | null;
-  read_wiki_page: WikiFileContents;
-  toggle_wiki: WikiContext | null;
-  get_skill_details: MarketplaceSkillDetails;
-  inspect_skill_url: MarketplaceInspectResponse;
-  install_skill: MarketplaceInstallResponse;
-  get_port_status: TrackedPortStatus;
-  launch_ephemeral_tool: string | null;
-  close_ephemeral_tool: void;
-};
-
-export type McpActionArgs<Action extends McpActionName> = McpActionArgsMap[Action];
-export type McpActionResult<Action extends McpActionName> = McpActionResultMap[Action];
+import type {
+  McpActionArgs,
+  McpActionName,
+  McpActionResult
+} from "./mcp-contracts";
 
 /**
  * Minimal interface for the AppController instance from main.ts.
@@ -287,7 +165,7 @@ export class InternalApi {
   async resumeSession(
     repoId: string,
     externalSessionId: string,
-    source?: string
+    source?: SessionSearchSource
   ): Promise<McpActionResult<"resume_session">> {
     return this.ctrl.handleMcpAction("resume_session", { repoId, externalSessionId, source });
   }

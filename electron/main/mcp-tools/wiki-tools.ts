@@ -1,20 +1,24 @@
 /**
  * MCP tools for wiki management.
  */
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+
+import type { AppControllerHandle } from "../internal-api";
+import type { McpActionArgs } from "../mcp-contracts";
 
 function textResult(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
-export function register(server: any, appController: any) {
+export function register(server: McpServer, appController: AppControllerHandle): void {
   server.tool(
     "get_wiki",
     "Get wiki tree and status for a repo",
     {
       repoId: z.string().describe("Repo ID"),
     },
-    async (args: { repoId: string }) => {
+    async (args: McpActionArgs<"get_wiki">) => {
       const result = await appController.handleMcpAction("get_wiki", args);
       return textResult(result);
     }
@@ -27,7 +31,7 @@ export function register(server: any, appController: any) {
       repoId: z.string().describe("Repo ID"),
       path: z.string().describe("Relative path to wiki page"),
     },
-    async (args: { repoId: string; path: string }) => {
+    async (args: McpActionArgs<"read_wiki_page">) => {
       const result = await appController.handleMcpAction("read_wiki_page", args);
       return textResult(result);
     }
@@ -40,7 +44,7 @@ export function register(server: any, appController: any) {
       repoId: z.string().describe("Repo ID"),
       enabled: z.boolean().describe("Enable or disable wiki"),
     },
-    async (args: { repoId: string; enabled: boolean }) => {
+    async (args: McpActionArgs<"toggle_wiki">) => {
       const result = await appController.handleMcpAction("toggle_wiki", args);
       return textResult(result ?? { ok: true });
     }

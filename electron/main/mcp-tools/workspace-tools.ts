@@ -1,13 +1,17 @@
 /**
  * MCP tools for workspace and repository management.
  */
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+
+import type { AppControllerHandle } from "../internal-api";
+import type { McpActionArgs } from "../mcp-contracts";
 
 function textResult(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
-export function register(server: any, appController: any) {
+export function register(server: McpServer, appController: AppControllerHandle): void {
   server.tool(
     "list_workspaces",
     "List all workspaces",
@@ -23,7 +27,7 @@ export function register(server: any, appController: any) {
     {
       path: z.string().describe("Absolute path to workspace folder"),
     },
-    async (args: { path: string }) => {
+    async (args: McpActionArgs<"add_workspace">) => {
       const result = await appController.handleMcpAction("add_workspace", args);
       return textResult(result);
     }
@@ -35,7 +39,7 @@ export function register(server: any, appController: any) {
     {
       workspaceId: z.string().describe("Workspace ID to rescan"),
     },
-    async (args: { workspaceId: string }) => {
+    async (args: McpActionArgs<"rescan_workspace">) => {
       const result = await appController.handleMcpAction("rescan_workspace", args);
       return textResult(result);
     }
@@ -49,7 +53,7 @@ export function register(server: any, appController: any) {
     },
     async (args: { workspaceId?: string }) => {
       let repos = [...appController.state.repos];
-      if (args.workspaceId) repos = repos.filter((r: any) => r.workspaceID === args.workspaceId);
+      if (args.workspaceId) repos = repos.filter((repo) => repo.workspaceID === args.workspaceId);
       return textResult(repos);
     }
   );
@@ -61,7 +65,7 @@ export function register(server: any, appController: any) {
       repoId: z.string().describe("Repo ID"),
     },
     async (args: { repoId: string }) => {
-      const repo = appController.state.repos.find((r: any) => r.id === args.repoId);
+      const repo = appController.state.repos.find((candidate) => candidate.id === args.repoId);
       if (!repo) return textResult({ error: "Repo not found" });
       return textResult(repo);
     }
@@ -73,7 +77,7 @@ export function register(server: any, appController: any) {
     {
       repoId: z.string().describe("Repo ID"),
     },
-    async (args: { repoId: string }) => {
+    async (args: McpActionArgs<"list_files">) => {
       const result = await appController.handleMcpAction("list_files", args);
       return textResult(result);
     }
@@ -86,7 +90,7 @@ export function register(server: any, appController: any) {
       repoId: z.string().describe("Repo ID"),
       path: z.string().describe("Relative file path within repo"),
     },
-    async (args: { repoId: string; path: string }) => {
+    async (args: McpActionArgs<"read_file">) => {
       const result = await appController.handleMcpAction("read_file", args);
       return textResult(result);
     }
@@ -100,7 +104,7 @@ export function register(server: any, appController: any) {
       buildCommand: z.string().describe("Build command"),
       runCommand: z.string().describe("Run command"),
     },
-    async (args: { repoId: string; buildCommand: string; runCommand: string }) => {
+    async (args: McpActionArgs<"set_build_run_config">) => {
       const result = await appController.handleMcpAction("set_build_run_config", args);
       return textResult(result ?? { ok: true });
     }
@@ -112,7 +116,7 @@ export function register(server: any, appController: any) {
     {
       repoId: z.string().describe("Repo ID"),
     },
-    async (args: { repoId: string }) => {
+    async (args: McpActionArgs<"build_and_run_app">) => {
       const result = await appController.handleMcpAction("build_and_run_app", args);
       return textResult(result);
     }

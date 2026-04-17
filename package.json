@@ -14,7 +14,7 @@
     "dev": "npm run build && electron .",
     "pack": "npm run build && npm run build:icon && node scripts/run-electron-builder.mjs --dir",
     "dist": "npm run build && npm run build:icon && node scripts/run-electron-builder.mjs",
-    "dist:mac": "npm run build && npm run build:icon && node scripts/run-electron-builder.mjs --mac",
+    "dist:mac": "npm run build && node scripts/run-electron-builder.mjs --mac",
     "dist:win": "npm run build && node scripts/run-electron-builder.mjs --win",
     "release": "node scripts/release.mjs",
     "release:patch": "node scripts/release.mjs patch",

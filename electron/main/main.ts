@@ -117,6 +117,9 @@ type ResolvedCommandPayload = {
   command: string[];
   env?: Record<string, string>;
 };
+type PersistStateOptions = {
+  throwOnError?: boolean;
+};
 
 const { scanWorkspace } = require("./workspace-scanner") as {
   scanWorkspace: (rootPath: string, workspaceId: string) => Promise<RepoRecord[]>;
@@ -556,6 +559,7 @@ class AppController {
   lazygitPath: string | null;
   tokscalePath: string | null;
   saveChain: Promise<void>;
+  shutdownPromise: Promise<void> | null;
   knownPlanFiles: Set<string>;
   plansDirWatcher: ReturnType<typeof fs.watch> | null;
   mcpServer: HydraMcpServer | null;
@@ -581,6 +585,7 @@ class AppController {
     this.lazygitPath = null;
     this.tokscalePath = null;
     this.saveChain = Promise.resolve();
+    this.shutdownPromise = null;
     this.knownPlanFiles = new Set();
     this.plansDirWatcher = null;
     this.mcpServer = null;
@@ -1490,22 +1495,25 @@ class AppController {
     }, 200);
   }
 
-  async persistNow(): Promise<void> {
+  async persistNow(options: PersistStateOptions = {}): Promise<void> {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
 
-    await this.flushStateSave();
+    await this.flushStateSave(options);
   }
 
-  flushStateSave(): Promise<void> {
+  flushStateSave(options: PersistStateOptions = {}): Promise<void> {
     this.saveChain = this.saveChain
       .catch(() => undefined)
       .then(() => saveState(this.state));
 
     return this.saveChain.catch((error: unknown) => {
       console.error("Failed to save app state.", error);
+      if (options.throwOnError) {
+        throw error;
+      }
     });
   }
 
@@ -2685,11 +2693,27 @@ class AppController {
       return;
     }
 
+    event.preventDefault();
+    if (this.shutdownPromise) {
+      return;
+    }
+
     const liveSessions = this.state.sessions.filter((session) => session.runtimeState === "live");
     if (liveSessions.length === 0) {
-      event.preventDefault();
-      await this.shutdown();
-      app.quit();
+      try {
+        await this.shutdown();
+        this.allowQuit = true;
+        app.quit();
+      } catch (error: unknown) {
+        console.error("Failed to shut down Hydra before quit.", error);
+        await dialog.showMessageBox({
+          type: "error",
+          title: "Quit failed",
+          message: "Hydra could not quit cleanly.",
+          detail: `Hydra kept running because shutdown did not complete. Error: ${formatUpdaterLogMessage(error)}`,
+          buttons: ["OK"]
+        });
+      }
       return;
     }
 
@@ -2703,13 +2727,23 @@ class AppController {
     });
 
     if (result === 0) {
-      event.preventDefault();
       return;
     }
 
-    event.preventDefault();
-    await this.shutdown();
-    app.quit();
+    try {
+      await this.shutdown();
+      this.allowQuit = true;
+      app.quit();
+    } catch (error: unknown) {
+      console.error("Failed to shut down Hydra before quit.", error);
+      await dialog.showMessageBox({
+        type: "error",
+        title: "Quit failed",
+        message: "Hydra could not quit cleanly.",
+        detail: `Hydra kept running because shutdown did not complete. Error: ${formatUpdaterLogMessage(error)}`,
+        buttons: ["OK"]
+      });
+    }
   }
 
   async restartToInstallUpdate(version?: string | null): Promise<void> {
@@ -2733,9 +2767,10 @@ class AppController {
       ? version.trim()
       : this.downloadedUpdateVersion;
 
+    this.updateInstallInProgress = true;
     try {
       await this.shutdown();
-      this.updateInstallInProgress = true;
+      this.allowQuit = true;
       this.scheduleUpdateInstallWatchdog(targetVersion);
       logUpdater(
         "info",
@@ -2748,7 +2783,19 @@ class AppController {
   }
 
   async shutdown(): Promise<void> {
-    this.allowQuit = true;
+    const pendingShutdown = this.shutdownPromise || this.performShutdown();
+    this.shutdownPromise = pendingShutdown;
+
+    try {
+      await pendingShutdown;
+    } finally {
+      if (this.shutdownPromise === pendingShutdown) {
+        this.shutdownPromise = null;
+      }
+    }
+  }
+
+  async performShutdown(): Promise<void> {
     for (const session of this.state.sessions) {
       if (session.runtimeState === "live") {
         this.cancelPendingAgentLaunch(session.id);
@@ -2763,7 +2810,7 @@ class AppController {
       }
     }
     this.ptyHost.stop();
-    await this.persistNow();
+    await this.persistNow({ throwOnError: true });
   }
 
   handleSessionResize(sessionId: string, cols: number, rows: number): void {
@@ -3086,6 +3133,59 @@ function mcpServerTokenPath() {
   return path.join(app.getPath("userData"), MCP_SERVER_TOKEN_FILE_NAME);
 }
 
+function ensureWindowsUserOnlyFileAcl(filePath: string): void {
+  const command = [
+    "$ErrorActionPreference = 'Stop'",
+    "$path = $args[0]",
+    "$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User",
+    "$acl = Get-Acl -LiteralPath $path",
+    "$acl.SetAccessRuleProtection($true, $false)",
+    "foreach ($accessRule in @($acl.Access)) { [void]$acl.RemoveAccessRuleAll($accessRule) }",
+    "$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'Allow')",
+    "[void]$acl.AddAccessRule($rule)",
+    "Set-Acl -LiteralPath $path -AclObject $acl"
+  ].join("; ");
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      command,
+      filePath
+    ],
+    {
+      encoding: "utf8",
+      windowsHide: true
+    }
+  );
+
+  if (result.error) {
+    throw new Error(
+      `Failed to secure MCP auth token file ${filePath}: ${formatUpdaterLogMessage(result.error)}`
+    );
+  }
+
+  if (result.status !== 0) {
+    const detail = String(result.stderr || result.stdout || "").trim();
+    throw new Error(
+      `Failed to secure MCP auth token file ${filePath}: ${detail || `powershell exited with status ${result.status}`}`
+    );
+  }
+}
+
+async function ensureMcpServerTokenFilePermissions(tokenPath: string): Promise<void> {
+  if (process.platform === "win32") {
+    ensureWindowsUserOnlyFileAcl(tokenPath);
+    return;
+  }
+
+  await fsp.chmod(tokenPath, 0o600);
+}
+
 async function resolveMcpServerAuthToken(): Promise<{ token: string; source: "env" | "file"; path?: string }> {
   const configuredToken = process.env[MCP_SERVER_TOKEN_ENV]?.trim();
   if (configuredToken) {
@@ -3097,6 +3197,7 @@ async function resolveMcpServerAuthToken(): Promise<{ token: string; source: "en
   try {
     const existingToken = (await fsp.readFile(tokenPath, "utf8")).trim();
     if (existingToken) {
+      await ensureMcpServerTokenFilePermissions(tokenPath);
       return { token: existingToken, source: "file", path: tokenPath };
     }
   } catch {
@@ -3109,12 +3210,7 @@ async function resolveMcpServerAuthToken(): Promise<{ token: string; source: "en
     encoding: "utf8",
     mode: 0o600
   });
-
-  try {
-    await fsp.chmod(tokenPath, 0o600);
-  } catch {
-    // chmod can fail on platforms that do not honor POSIX file modes.
-  }
+  await ensureMcpServerTokenFilePermissions(tokenPath);
 
   return { token: generatedToken, source: "file", path: tokenPath };
 }

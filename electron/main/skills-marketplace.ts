@@ -78,9 +78,103 @@ type ResolvedMarketplaceSkill = MarketplaceSkillSummary & {
   files: MarketplaceSkillFile[];
 };
 
-const repoInfoCache = new Map<string, Promise<GitHubRepoInfo>>();
-const repoTreeCache = new Map<string, Promise<GitHubTreePayload>>();
-const skillMarkdownCache = new Map<string, Promise<string>>();
+type AsyncCacheEntry<T> = {
+  value: Promise<T>;
+  expiresAt: number;
+  lastAccessedAt: number;
+};
+
+type AsyncCachePolicy = {
+  maxEntries: number;
+  ttlMs: number;
+};
+
+const REPO_INFO_CACHE_POLICY: AsyncCachePolicy = {
+  maxEntries: 64,
+  ttlMs: 15 * 60 * 1000
+};
+const REPO_TREE_CACHE_POLICY: AsyncCachePolicy = {
+  maxEntries: 64,
+  ttlMs: 10 * 60 * 1000
+};
+const SKILL_MARKDOWN_CACHE_POLICY: AsyncCachePolicy = {
+  maxEntries: 128,
+  ttlMs: 10 * 60 * 1000
+};
+
+const repoInfoCache = new Map<string, AsyncCacheEntry<GitHubRepoInfo>>();
+const repoTreeCache = new Map<string, AsyncCacheEntry<GitHubTreePayload>>();
+const skillMarkdownCache = new Map<string, AsyncCacheEntry<string>>();
+
+function cacheTimestampMs() {
+  return Date.now();
+}
+
+function pruneAsyncCache<T>(cache: Map<string, AsyncCacheEntry<T>>, policy: AsyncCachePolicy) {
+  const currentTime = cacheTimestampMs();
+
+  for (const [key, entry] of cache.entries()) {
+    if (entry.expiresAt <= currentTime) {
+      cache.delete(key);
+    }
+  }
+
+  while (cache.size > policy.maxEntries) {
+    let oldestKey = "";
+    let oldestAccessedAt = Number.POSITIVE_INFINITY;
+
+    for (const [key, entry] of cache.entries()) {
+      if (entry.lastAccessedAt < oldestAccessedAt) {
+        oldestAccessedAt = entry.lastAccessedAt;
+        oldestKey = key;
+      }
+    }
+
+    if (!oldestKey) {
+      break;
+    }
+
+    cache.delete(oldestKey);
+  }
+}
+
+function getOrCreateCachedAsyncValue<T>(
+  cache: Map<string, AsyncCacheEntry<T>>,
+  key: string,
+  policy: AsyncCachePolicy,
+  load: () => Promise<T>
+) {
+  pruneAsyncCache(cache, policy);
+
+  const existingEntry = cache.get(key);
+  if (existingEntry) {
+    const currentTime = cacheTimestampMs();
+    if (existingEntry.expiresAt > currentTime) {
+      existingEntry.lastAccessedAt = currentTime;
+      return existingEntry.value;
+    }
+
+    cache.delete(key);
+  }
+
+  const createdAt = cacheTimestampMs();
+  let task: Promise<T>;
+  task = load().catch((error: unknown) => {
+    const currentEntry = cache.get(key);
+    if (currentEntry?.value === task) {
+      cache.delete(key);
+    }
+    throw error;
+  });
+
+  cache.set(key, {
+    value: task,
+    expiresAt: createdAt + policy.ttlMs,
+    lastAccessedAt: createdAt
+  });
+  pruneAsyncCache(cache, policy);
+  return task;
+}
 
 function githubHeaders() {
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "";
@@ -111,26 +205,24 @@ async function githubJson<T>(endpoint: string): Promise<T> {
 
 async function githubText(url: string) {
   const cacheKey = `text:${url}`;
-  if (skillMarkdownCache.has(cacheKey)) {
-    return skillMarkdownCache.get(cacheKey)!;
-  }
+  return getOrCreateCachedAsyncValue(
+    skillMarkdownCache,
+    cacheKey,
+    SKILL_MARKDOWN_CACHE_POLICY,
+    async () => {
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": USER_AGENT
+        }
+      });
 
-  const task = (async () => {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": USER_AGENT
+      if (!response.ok) {
+        throw new Error(`GitHub raw fetch failed (${response.status}) for ${url}`);
       }
-    });
 
-    if (!response.ok) {
-      throw new Error(`GitHub raw fetch failed (${response.status}) for ${url}`);
+      return response.text();
     }
-
-    return response.text();
-  })();
-
-  skillMarkdownCache.set(cacheKey, task);
-  return task;
+  );
 }
 
 async function githubBytes(url: string) {
@@ -235,14 +327,12 @@ function rawGithubUrl(source: { owner: string; repo: string; ref: string }, file
 
 async function getRepoInfo(owner: string, repo: string): Promise<GitHubRepoInfo> {
   const key = `${owner}/${repo}`;
-  if (!repoInfoCache.has(key)) {
-    repoInfoCache.set(
-      key,
-      githubJson<GitHubRepoInfo>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`)
-    );
-  }
-
-  return repoInfoCache.get(key)!;
+  return getOrCreateCachedAsyncValue(
+    repoInfoCache,
+    key,
+    REPO_INFO_CACHE_POLICY,
+    () => githubJson<GitHubRepoInfo>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`)
+  );
 }
 
 async function getRepoTree(owner: string, repo: string, ref = ""): Promise<{ ref: string; tree: GitHubTreeEntry[] }> {
@@ -250,16 +340,14 @@ async function getRepoTree(owner: string, repo: string, ref = ""): Promise<{ ref
   const resolvedRef = ref || repoInfo.default_branch || "main";
   const key = `${owner}/${repo}@${resolvedRef}`;
 
-  if (!repoTreeCache.has(key)) {
-    repoTreeCache.set(
-      key,
-      githubJson<GitHubTreePayload>(
-        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(resolvedRef)}?recursive=1`
-      )
-    );
-  }
-
-  const payload = await repoTreeCache.get(key)!;
+  const payload = await getOrCreateCachedAsyncValue(
+    repoTreeCache,
+    key,
+    REPO_TREE_CACHE_POLICY,
+    () => githubJson<GitHubTreePayload>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(resolvedRef)}?recursive=1`
+    )
+  );
   return {
     ref: resolvedRef,
     tree: Array.isArray(payload?.tree) ? payload.tree : []

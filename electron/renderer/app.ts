@@ -6148,6 +6148,10 @@ function handlePointerDown(event) {
     return;
   }
 
+  if (target.closest("[data-no-drag='true'], [data-session-rename-input='true']")) {
+    return;
+  }
+
   const resizeHandle = target.closest(".pane-resize-handle") as HTMLElement | null;
   if (resizeHandle) {
     const splitPath = resizeHandle.dataset.splitPath ?? "";
@@ -6914,7 +6918,19 @@ async function handleFocusOut(event: FocusEvent) {
     return;
   }
 
-  await commitSessionRename(target.dataset.sessionId);
+  const sessionId = target.dataset.sessionId || null;
+  const currentPane = target.closest(".session-pane") as HTMLElement | null;
+  const nextFocus = event.relatedTarget as HTMLElement | null;
+  const nextPane = nextFocus?.closest(".session-pane") as HTMLElement | null;
+  if (
+    sessionId &&
+    currentPane?.dataset.sessionId === sessionId &&
+    nextPane?.dataset.sessionId === sessionId
+  ) {
+    return;
+  }
+
+  await commitSessionRename(sessionId);
 }
 
 function handleFocusIn(event: FocusEvent) {

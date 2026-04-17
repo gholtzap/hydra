@@ -308,28 +308,48 @@ textarea {
 }
 
 #app-shell {
+  --sidebar-column-width: 84px;
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-column-width) minmax(0, 1fr);
   grid-template-rows: 1fr;
   width: 100%;
   height: 100%;
 }
 
 #app-shell.sidebar-expanded {
-  grid-template-columns: 348px minmax(0, 1fr);
+  --sidebar-column-width: 348px;
+}
+
+#app-shell.sidebar-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
 }
 
 #sidebar {
   display: flex;
   align-items: center;
   min-height: 0;
+  width: var(--sidebar-column-width);
+  justify-self: start;
+  overflow: hidden;
   padding: 10px 8px;
   border-right: 1px solid var(--border);
   background: var(--sidebar-surface);
+  transition:
+    transform 140ms ease,
+    padding 140ms ease,
+    border-color 140ms ease,
+    opacity 140ms ease;
 }
 
 #sidebar.sidebar-expanded {
   align-items: stretch;
+}
+
+#app-shell.sidebar-collapsed #sidebar {
+  transform: translateX(calc(-1 * var(--sidebar-column-width)));
+  padding-inline: 0;
+  border-right-color: transparent;
+  opacity: 0;
 }
 
 #sidebar:focus,
@@ -1300,6 +1320,28 @@ textarea {
   border-bottom: 1px solid var(--border);
   flex: none;
   min-height: 0;
+  transition:
+    transform 140ms ease,
+    opacity 120ms ease;
+}
+
+#session-workspace-toolbar {
+  min-height: 0;
+}
+
+#detail.navbar-collapsed .session-workspace-detail {
+  gap: 0;
+}
+
+#detail.navbar-collapsed #session-workspace-toolbar {
+  max-height: 0;
+  overflow: hidden;
+}
+
+#detail.navbar-collapsed #session-workspace-toolbar .ws-toolbar {
+  transform: translateY(calc(-100% - 8px));
+  opacity: 0;
+  pointer-events: none;
 }
 
 .ws-toolbar-info {

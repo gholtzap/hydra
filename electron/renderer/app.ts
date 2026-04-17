@@ -309,6 +309,8 @@ type UiState = {
   focusSection: SectionId;
   sidebarExpandedRepoId: string | null;
   sidebarNavItem: string;
+  sidebarCollapsed: boolean;
+  navbarCollapsed: boolean;
   mainListSessionId: string | null;
   terminalMounts: Map<string, TerminalMount>;
   renamingSessionId: string | null;
@@ -402,6 +404,8 @@ const ui: UiState = {
   focusSection: "main" as SectionId,
   sidebarExpandedRepoId: null as string | null,
   sidebarNavItem: "inbox" as string,
+  sidebarCollapsed: false,
+  navbarCollapsed: false,
   mainListSessionId: null as string | null,
   terminalMounts: new Map<string, TerminalMount>(),
   renamingSessionId: null as string | null,
@@ -1177,6 +1181,7 @@ if (typeof colorSchemeQuery.addEventListener === "function") {
 document.addEventListener("click", handleClick);
 document.addEventListener("input", handleInput);
 document.addEventListener("change", handleChange);
+document.addEventListener("focusin", handleFocusIn, true);
 document.addEventListener("focusout", handleFocusOut, true);
 document.addEventListener("pointerdown", handlePointerDown, true);
 document.addEventListener("contextmenu", handleContextMenu, true);
@@ -1550,6 +1555,11 @@ function renderSidebar() {
             "Settings",
             "settings",
             sidebarNavMatches(sidebarActionNavId("open-settings")) ? "keyboard-active" : ""
+          ),
+          renderSidebarUtilityButton(
+            "collapse-sidebar",
+            "Hide Sidebar",
+            "collapse"
           )
         )
       ),
@@ -2847,6 +2857,7 @@ function updateSessionWorkspaceToolbar() {
           { className: "ws-action-btn", attrs: { "data-action": "open-settings", "data-settings-tab": "claude" } },
           "Agent Files"
         ),
+        dom("button", { className: "ws-action-btn", attrs: { "data-action": "collapse-navbar" } }, "Hide Bar"),
         session.runtimeState !== "live"
           ? dom(
               "button",
@@ -5715,6 +5726,12 @@ async function handleClick(event) {
     case "collapse-sidebar-project":
       collapseSidebarProjectDrawer(target.dataset.repoId);
       break;
+    case "collapse-sidebar":
+      collapseSidebarChrome();
+      break;
+    case "collapse-navbar":
+      collapseWorkspaceNavbar();
+      break;
     case "open-launcher":
       await startDefaultAgentSession(target.dataset.repoId || currentRepoId());
       break;
@@ -6915,6 +6932,42 @@ async function handleFocusOut(event: FocusEvent) {
   }
 
   await commitSessionRename(target.dataset.sessionId);
+}
+
+function handleFocusIn(event: FocusEvent) {
+  if (isAnyDialogOpen()) {
+    return;
+  }
+
+  const target = event.target as HTMLElement | null;
+  if (!target) {
+    return;
+  }
+
+  let needsUiSync = false;
+
+  if (sidebarElement.contains(target)) {
+    const focusSection: SectionId = isSidebarDrawerTarget(target) ? "sidebar-drawer" : "sidebar";
+    if (ui.focusSection !== focusSection) {
+      ui.focusSection = focusSection;
+      normalizeFocusSection();
+      needsUiSync = true;
+    }
+  }
+
+  if (ui.sidebarCollapsed && sidebarElement.contains(target)) {
+    ui.sidebarCollapsed = false;
+    needsUiSync = true;
+  }
+
+  if (ui.navbarCollapsed && isWorkspaceNavbarTarget(target)) {
+    ui.navbarCollapsed = false;
+    needsUiSync = true;
+  }
+
+  if (needsUiSync) {
+    syncSectionFocusUi({ preserveCurrentFocus: true });
+  }
 }
 
 async function handleChange(event) {
@@ -9903,6 +9956,9 @@ function availableSections() {
 }
 
 function setFocusSection(section: SectionId) {
+  if ((section === "sidebar" || section === "sidebar-drawer") && ui.sidebarCollapsed) {
+    ui.sidebarCollapsed = false;
+  }
   ui.focusSection = section;
   normalizeFocusSection();
   syncSectionFocusUi();
@@ -10196,12 +10252,14 @@ async function focusOrderedSessionPane(sessionId, focusSection: SectionId) {
   await selectSession(sessionId, focusSection);
 }
 
-function syncSectionFocusUi() {
+function syncSectionFocusUi(options: { preserveCurrentFocus?: boolean } = {}) {
   normalizeFocusSection();
 
   const expanded = !!expandedSidebarRepo();
   appShellElement.classList.toggle("sidebar-expanded", expanded);
+  appShellElement.classList.toggle("sidebar-collapsed", ui.sidebarCollapsed);
   sidebarElement.classList.toggle("sidebar-expanded", expanded);
+  detailElement.classList.toggle("navbar-collapsed", ui.navbarCollapsed);
 
   sidebarElement.classList.toggle("section-focused", ui.focusSection === "sidebar");
   const sidebarDrawer = sidebarElement.querySelector(".sidebar-project-drawer") as HTMLElement | null;
@@ -10226,7 +10284,7 @@ function syncSectionFocusUi() {
     terminalWrap?.classList.toggle("section-focused", active && ui.focusSection === "terminal");
   }
 
-  if (isAnyDialogOpen()) {
+  if (isAnyDialogOpen() || options.preserveCurrentFocus) {
     return;
   }
 
@@ -10393,6 +10451,36 @@ function collapseSidebarProjectDrawer(repoId = null) {
 
   ui.sidebarExpandedRepoId = null;
   renderSidebar();
+}
+
+function collapseSidebarChrome() {
+  if (ui.focusSection === "sidebar" || ui.focusSection === "sidebar-drawer") {
+    setFocusSection("main");
+  }
+
+  if (ui.sidebarCollapsed) {
+    return;
+  }
+
+  ui.sidebarCollapsed = true;
+  syncSectionFocusUi({ preserveCurrentFocus: true });
+}
+
+function collapseWorkspaceNavbar() {
+  if (ui.focusSection === "sidebar" || ui.focusSection === "sidebar-drawer") {
+    setFocusSection("main");
+  }
+
+  if (isWorkspaceNavbarTarget(document.activeElement as HTMLElement | null)) {
+    setFocusSection("main");
+  }
+
+  if (ui.navbarCollapsed) {
+    return;
+  }
+
+  ui.navbarCollapsed = true;
+  syncSectionFocusUi({ preserveCurrentFocus: true });
 }
 
 function scrollSidebarSelectionIntoView() {
@@ -10670,6 +10758,12 @@ function renderUtilityIcon(kind) {
           <path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M17.3 6.7l-1.4 1.4M8.1 15.9l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
         </svg>
       `;
+    case "collapse":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M15.5 5.5 8.5 12l7 6.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      `;
     case "inbox":
     default:
       return `
@@ -10766,6 +10860,14 @@ function isTerminalTarget(target: HTMLElement) {
 
 function isSidebarDrawerTarget(target: HTMLElement) {
   return !!target.closest(".sidebar-project-drawer");
+}
+
+function isWorkspaceNavbarTarget(target: HTMLElement | null) {
+  if (!target) {
+    return false;
+  }
+
+  return !!target.closest("#session-workspace-toolbar");
 }
 
 async function activateSidebarNavItem() {

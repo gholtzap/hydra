@@ -909,6 +909,52 @@ textarea {
   flex: none;
 }
 
+.session-restart-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.session-restart-icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+.session-restart-label {
+  line-height: 1;
+}
+
+.session-inline-action {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
+}
+
+.session-inline-action:hover {
+  background: var(--surface-muted);
+  border-color: var(--surface-active-border);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.session-inline-action[data-runtime-state="stopped"] {
+  color: var(--primary);
+  border-color: color-mix(in oklab, var(--primary) 36%, var(--border));
+}
+
 .row-subtitle,
 .row-meta,
 .muted {
@@ -1510,6 +1556,12 @@ textarea {
   font-size: 11px;
   font-weight: 600;
   border-radius: 7px;
+}
+
+.ws-action-btn .session-restart-icon,
+.pane-action-btn .session-restart-icon {
+  width: 12px;
+  height: 12px;
 }
 
 .ws-action-btn-active {

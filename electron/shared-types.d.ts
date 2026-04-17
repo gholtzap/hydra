@@ -245,6 +245,10 @@ export type SessionOutputPayload = {
   session: SessionSummary;
 };
 
+export type SessionRestartRequest = {
+  sessionId: string;
+};
+
 export type AppCommandPayload = {
   command: string;
   sessionId?: string;

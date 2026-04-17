@@ -26,6 +26,7 @@ import type {
   RepoRecord,
   SessionBlocker,
   SessionOrganizationPatch,
+  SessionRestartRequest,
   SessionRecord,
   SessionSearchSource,
   SessionSearchResponse,
@@ -92,6 +93,9 @@ type PtyHostClientConstructor = {
 type EphemeralSessionRecord = {
   repoId: string;
   toolId: EphemeralToolId;
+};
+type PendingSessionRestart = {
+  requestedAt: string;
 };
 type QueuedSessionLaunch = {
   title?: string;
@@ -480,6 +484,7 @@ class AppController {
   updateInstallInProgress: boolean;
   pendingAgentLaunch: Set<string>;
   pendingAgentLaunchTimers: Map<string, NodeJS.Timeout>;
+  pendingSessionRestarts: Map<string, PendingSessionRestart>;
   sessionSizes: Map<string, { cols: number; rows: number }>;
   terminalBuffers: Map<string, TerminalTranscriptBufferInstance>;
   signalBuffers: Map<string, string>;
@@ -505,6 +510,7 @@ class AppController {
     this.updateInstallInProgress = false;
     this.pendingAgentLaunch = new Set();
     this.pendingAgentLaunchTimers = new Map();
+    this.pendingSessionRestarts = new Map();
     this.sessionSizes = new Map();
     this.terminalBuffers = new Map();
     this.signalBuffers = new Map();
@@ -692,6 +698,9 @@ class AppController {
       this.clearSessionIcon(sessionId)
     );
     ipcMain.handle("session:reopen", (_event, sessionId) => this.reopenSession(sessionId));
+    ipcMain.handle("session:restart", (_event, payload: SessionRestartRequest) =>
+      this.restartSession(payload.sessionId)
+    );
     ipcMain.handle("session:close", (_event, sessionId) => this.closeSession(sessionId));
     ipcMain.handle("session:input", (_event, payload) => {
       this.handleSessionInput(payload.sessionId, payload.data);
@@ -1699,8 +1708,31 @@ class AppController {
     this.broadcastState();
   }
 
+  restartSession(sessionId: string): void {
+    const session = this.sessionById(sessionId);
+    if (!session) {
+      return;
+    }
+
+    if (session.runtimeState === "live") {
+      if (this.pendingSessionRestarts.has(sessionId)) {
+        return;
+      }
+
+      this.pendingSessionRestarts.set(sessionId, { requestedAt: now() });
+      this.cancelPendingAgentLaunch(sessionId);
+      this.queuedSessionLaunches.delete(sessionId);
+      this.resetSignalTracking(sessionId);
+      this.ptyHost.killSession(sessionId);
+      return;
+    }
+
+    this.startRestartedSession(sessionId);
+  }
+
   closeSession(sessionId) {
     const session = this.sessionById(sessionId);
+    this.pendingSessionRestarts.delete(sessionId);
     this.cancelPendingAgentLaunch(sessionId);
     this.queuedSessionLaunches.delete(sessionId);
     this.sessionSizes.delete(sessionId);
@@ -2236,6 +2268,11 @@ class AppController {
       return;
     }
 
+    if (this.pendingSessionRestarts.delete(sessionId)) {
+      this.startRestartedSession(sessionId);
+      return;
+    }
+
     this.cancelPendingAgentLaunch(sessionId);
     this.queuedSessionLaunches.delete(sessionId);
     this.resetSignalTracking(sessionId);
@@ -2265,6 +2302,43 @@ class AppController {
 
     this.scheduleSave();
     this.sendSessionUpdated(sessionId);
+  }
+
+  startRestartedSession(sessionId: string): void {
+    const session = this.sessionById(sessionId);
+    const repo = session ? this.repoById(session.repoID) : null;
+    if (!session || !repo) {
+      return;
+    }
+
+    const defaultAgentId = normalizeAgentId(this.state.preferences.defaultAgentId) || DEFAULT_AGENT_ID;
+    const defaultAgentLabel = AGENT_LABELS[defaultAgentId] || "Default Agent";
+    const banner = `[Session restarted with ${defaultAgentLabel} ${timestampLabel()}]`;
+    const bannerChunk = `\r\n${banner}\r\n`;
+
+    this.cancelPendingAgentLaunch(sessionId);
+    this.queuedSessionLaunches.delete(sessionId);
+    session.launchProfile = "agent";
+    session.initialPrompt = "";
+    session.launchesClaudeOnStart = true;
+    session.startupAgentId = defaultAgentId;
+    session.claudeSessionId = defaultAgentId === DEFAULT_AGENT_ID ? session.id : null;
+    session.agentSessionId = defaultAgentId === DEFAULT_AGENT_ID ? session.id : null;
+    session.runtimeState = "live";
+    session.status = "running";
+    session.blocker = null;
+    session.unreadCount = 0;
+    session.lastActivityAt = null;
+    session.stoppedAt = null;
+    session.launchCount = 1;
+    session.updatedAt = now();
+    session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${bannerChunk}`);
+    session.transcript = trimTranscript(this.terminalBuffer(session.id, session.transcript).consume(bannerChunk));
+    this.resetSignalTracking(session.id);
+
+    this.launchRuntime(session, repo);
+    this.scheduleSave();
+    this.broadcastState();
   }
 
   terminalBuffer(sessionId, seedText = "") {

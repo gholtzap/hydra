@@ -15,6 +15,7 @@ import type {
   RepoAppLaunchConfig,
   SessionOrganizationPatch,
   SessionOutputPayload,
+  SessionRestartRequest,
   SessionSearchResponse,
   SessionSummary,
   SessionUpdatedPayload,
@@ -62,6 +63,7 @@ interface ClaudeWorkspaceApi {
   rescanWorkspace: (workspaceId: string) => Promise<void>;
   createSession: (repoId: string, launchesClaudeOnStart: boolean) => Promise<string | null>;
   reopenSession: (sessionId: string) => Promise<void>;
+  restartSession: (payload: SessionRestartRequest) => Promise<void>;
   closeSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<boolean>;
   updateSessionOrganization: (

@@ -16,6 +16,7 @@ import type {
   RepoAppLaunchConfig,
   SessionOrganizationPatch,
   SessionOutputPayload,
+  SessionRestartRequest,
   SessionSearchResponse,
   SessionSummary,
   SessionUpdatedPayload,
@@ -102,6 +103,7 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     createSession: (repoId: string, launchesClaudeOnStart: boolean) =>
       invoke<string | null>("session:create", { repoId, launchesClaudeOnStart }),
     reopenSession: (sessionId: string) => invoke<void>("session:reopen", sessionId),
+    restartSession: (payload: SessionRestartRequest) => invoke<void>("session:restart", payload),
     closeSession: (sessionId: string) => invoke<void>("session:close", sessionId),
     renameSession: (sessionId: string, title: string) =>
       invoke<boolean>("session:rename", { sessionId, title }),

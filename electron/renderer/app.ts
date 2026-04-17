@@ -1767,6 +1767,7 @@ function renderSidebarDrawerSession(session, repo) {
       dom(
         "span",
         { className: "row-title-meta" },
+        renderSessionRestartInlineElement(session),
         session.isPinned ? renderSessionPinIndicatorElement("Pin") : null,
         session.unreadCount && state.preferences.showInAppBadges
           ? dom("span", { className: "unread-dot" })
@@ -2861,16 +2862,10 @@ function updateSessionWorkspaceToolbar() {
           "Agent Files"
         ),
         dom("button", { className: "ws-action-btn", attrs: { "data-action": "collapse-navbar" } }, "Hide Bar"),
-        session.runtimeState !== "live"
-          ? dom(
-              "button",
-              {
-                className: "ws-action-btn primary",
-                attrs: { "data-action": "restart-session", "data-session-id": session.id }
-              },
-              resumeSessionActionLabel(session)
-            )
-          : null,
+        renderSessionRestartButtonElement(session, {
+          className: "ws-action-btn",
+          primary: session.runtimeState !== "live"
+        }),
         dom(
           "button",
           { className: "ws-action-btn ws-action-danger", attrs: { "data-action": "close-session", "data-session-id": session.id } },
@@ -3026,16 +3021,11 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
             "Review Plan"
           )
         : null,
-      session.runtimeState !== "live"
-        ? dom(
-            "button",
-            {
-              className: "pane-action-btn primary",
-              attrs: { "data-action": "restart-session", "data-session-id": session.id }
-            },
-            resumeSessionActionLabel(session)
-          )
-        : null,
+      renderSessionRestartButtonElement(session, {
+        className: "pane-action-btn",
+        primary: session.runtimeState !== "live",
+        noDrag: true
+      }),
       dom(
         "button",
         {
@@ -3202,13 +3192,7 @@ function renderPausedSessionNotice(session) {
     return null;
   }
 
-  const startupAgentId = sessionAgentId(session);
-  const body =
-    startupAgentId === DEFAULT_AGENT_ID
-      ? "This Claude conversation was restored from history. Resume it to send another message in this project."
-      : startupAgentId
-        ? `This ${agentLabel(startupAgentId)} session was restored from history. Restart it to relaunch the agent in this project.`
-        : "This shell session was restored from history. Restart it to type in the terminal again.";
+  const body = `This session is paused. Restart it to relaunch ${restartTargetAgentLabel()} in this project.`;
 
   return dom(
     "div",
@@ -3216,31 +3200,15 @@ function renderPausedSessionNotice(session) {
     dom(
       "div",
       {},
-      dom("div", { className: "row-title" }, resumeSessionActionLabel(session)),
+      dom("div", { className: "row-title" }, restartSessionActionLabel()),
       dom("div", { className: "row-subtitle" }, body)
     ),
-    dom(
-      "button",
-      {
-        className: "primary",
-        attrs: { "data-action": "restart-session", "data-session-id": session.id }
-      },
-      resumeSessionActionLabel(session)
-    )
+    renderSessionRestartButtonElement(session, { className: "primary" })
   );
 }
 
-function resumeSessionActionLabel(session) {
-  const startupAgentId = sessionAgentId(session);
-  if (startupAgentId === DEFAULT_AGENT_ID) {
-    return "Resume Claude Code";
-  }
-
-  if (startupAgentId) {
-    return `Restart ${agentLabel(startupAgentId)}`;
-  }
-
-  return "Restart Shell";
+function restartSessionActionLabel() {
+  return "Restart";
 }
 
 function startSessionRename(sessionId) {
@@ -3452,6 +3420,7 @@ function renderInboxCard(session) {
           <span class="row-title-text">${escapeHtml(session.title)}</span>
         </span>
         <span class="row-title-meta">
+          ${renderSessionRestartInline(session)}
           ${session.isPinned ? renderSessionPinIndicator("Pin") : ""}
           <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
         </span>
@@ -3476,6 +3445,7 @@ function renderRepoSession(session) {
           <span class="row-title-text">${escapeHtml(session.title)}</span>
         </span>
         <span class="row-title-meta">
+          ${renderSessionRestartInline(session)}
           ${session.isPinned ? renderSessionPinIndicator("Pin") : ""}
           <span class="status-badge ${session.runtimeState === "live" ? "status-running" : "status-idle"}">${projectSessionStateLabel(session)}</span>
         </span>
@@ -5884,8 +5854,7 @@ async function handleClick(event) {
       await clearSessionIcon(target.dataset.sessionId);
       break;
     case "restart-session":
-      setFocusSection("terminal");
-      await api.reopenSession(target.dataset.sessionId);
+      await restartSessionById(target.dataset.sessionId);
       break;
     case "remove-session-pane":
       await hideSessionPane(target.dataset.sessionId);
@@ -6172,6 +6141,10 @@ function handlePointerDown(event) {
 
   const target = event.target as HTMLElement | null;
   if (!target) {
+    return;
+  }
+
+  if (target.closest("[data-stop-row-select='true']")) {
     return;
   }
 
@@ -7515,6 +7488,27 @@ async function closeSessionById(sessionId) {
       await selectInbox();
     }
   }
+}
+
+async function restartSessionById(sessionId) {
+  const session = sessionId ? sessionById(sessionId) : null;
+  if (!session) {
+    return;
+  }
+
+  if (session.runtimeState === "live") {
+    const targetAgent = restartTargetAgentLabel();
+    const repo = repoById(session.repoID);
+    const message = repo
+      ? `Restart this session with ${targetAgent}? This will stop the current terminal and relaunch ${targetAgent} in ${repo.name}.`
+      : `Restart this session with ${targetAgent}? This will stop the current terminal and relaunch ${targetAgent}.`;
+    if (!window.confirm(message)) {
+      return;
+    }
+  }
+
+  await selectSession(session.id, "terminal");
+  await api.restartSession({ sessionId: session.id });
 }
 
 async function toggleSessionPin(sessionId) {
@@ -10720,6 +10714,96 @@ function renderPinIcon() {
       <path d="M5.2 2.4h5.6v1.6l-1.6 1.6v2.1l1.8 1.8v1H8.7v2.9l-.7.8-.7-.8v-2.9H5v-1l1.8-1.8V5.6L5.2 4z" fill="currentColor"/>
     </svg>
   `;
+}
+
+function renderRestartIcon() {
+  return `
+    <svg class="session-restart-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M13 8a5 5 0 1 1-1.46-3.54" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      <path d="M10.6 2.7H13v2.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  `;
+}
+
+function restartTargetAgentLabel() {
+  return agentLabel(defaultSessionAgentId());
+}
+
+type SessionRestartButtonRenderOptions = {
+  className?: string;
+  primary?: boolean;
+  tagName?: "button" | "span";
+  noDrag?: boolean;
+  stopRowSelect?: boolean;
+};
+
+function renderSessionRestartButton(session, options: SessionRestartButtonRenderOptions = {}) {
+  const {
+    className = "",
+    primary = false,
+    tagName = "button",
+    noDrag = false,
+    stopRowSelect = false
+  } = options;
+  const label = restartSessionActionLabel();
+  const classes = classNames(
+    className || undefined,
+    "session-restart-button",
+    primary ? "primary" : undefined
+  );
+  const title = `Restart with ${restartTargetAgentLabel()}`;
+  const baseAttrs = [
+    `class="${escapeAttribute(classes)}"`,
+    `data-action="restart-session"`,
+    `data-session-id="${escapeAttribute(session.id)}"`,
+    `data-runtime-state="${escapeAttribute(session.runtimeState)}"`,
+    `aria-label="${escapeAttribute(title)}"`,
+    `title="${escapeAttribute(title)}"`
+  ];
+
+  if (tagName === "button") {
+    baseAttrs.push(`type="button"`);
+  } else {
+    baseAttrs.push(`role="button"`, `tabindex="-1"`);
+  }
+
+  if (noDrag) {
+    baseAttrs.push(`data-no-drag="true"`);
+  }
+
+  if (stopRowSelect) {
+    baseAttrs.push(`data-stop-row-select="true"`);
+  }
+
+  return `
+    <${tagName} ${baseAttrs.join(" ")}>
+      ${renderRestartIcon()}
+      <span class="session-restart-label">${escapeHtml(label)}</span>
+    </${tagName}>
+  `;
+}
+
+function renderSessionRestartButtonElement(
+  session,
+  options: SessionRestartButtonRenderOptions = {}
+) {
+  return trustedElement<HTMLElement>(renderSessionRestartButton(session, options));
+}
+
+function renderSessionRestartInline(session) {
+  return renderSessionRestartButton(session, {
+    className: "session-inline-action",
+    tagName: "span",
+    stopRowSelect: true
+  });
+}
+
+function renderSessionRestartInlineElement(session) {
+  return renderSessionRestartButtonElement(session, {
+    className: "session-inline-action",
+    tagName: "span",
+    stopRowSelect: true
+  });
 }
 
 function selectionMatches(type: RendererSelection["type"], id: string | null = null): boolean {

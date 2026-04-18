@@ -2806,7 +2806,7 @@ textarea {
   line-height: 1.3;
 }
 
-.session-search-row .row-title > span:first-child {
+.session-search-row .row-title > span:last-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2833,6 +2833,17 @@ textarea {
   -webkit-box-orient: vertical;
   overflow: hidden;
   word-break: break-word;
+}
+
+.session-search-highlight {
+  background: oklch(85% 0.18 85 / 0.35);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.dark .session-search-highlight {
+  background: oklch(75% 0.18 85 / 0.4);
 }
 
 .session-search-source {

@@ -61,6 +61,7 @@ const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   "quick-switcher": "Quick Switcher",
   "command-palette": "Command Palette",
   "next-unread": "Next Unread Session",
+
   "open-lazygit": "Open Lazygit",
   "open-tokscale": "Open Token Usage",
   "open-launcher": "Open Launcher",
@@ -3785,10 +3786,29 @@ function renderSessionSearchDialog() {
   );
 }
 
+function getFilteredSessionResults(source: "all" | "claude" | "codex") {
+  const seenHashes = new Set<string>();
+
+  return ui.sessionSearchResults
+    .map((result, originalIndex) => ({ result, originalIndex }))
+    .filter(({ result }) => source === "all" || result.source === source)
+    .filter(({ result }) => {
+      const normalizedPreview = normalizeJsonlPreview(result.preview);
+      if (!normalizedPreview.trim()) return false;
+
+      const previewHash = normalizedPreview.split("").reduce((acc, char) => {
+        acc = ((acc << 5) - acc) + char.charCodeAt(0);
+        return acc & acc;
+      }, 0).toString();
+
+      return !seenHashes.has(previewHash) && seenHashes.add(previewHash);
+    });
+}
+
 function renderSessionSearchFilterButtons() {
-  const claudeCount = ui.sessionSearchResults.filter((r) => r.source === "claude").length;
-  const codexCount = ui.sessionSearchResults.filter((r) => r.source === "codex").length;
-  const totalCount = ui.sessionSearchResults.length;
+  const claudeCount = getFilteredSessionResults("claude").length;
+  const codexCount = getFilteredSessionResults("codex").length;
+  const totalCount = claudeCount + codexCount;
   const hasResults = totalCount > 0;
 
   const makeButton = (
@@ -3853,85 +3873,83 @@ function renderSessionSearchBody() {
     return [emptyStateElement("No matching session content found for this project.")];
   }
 
-  const indexedResults = ui.sessionSearchResults
-    .map((result, originalIndex) => ({ result, originalIndex }))
-    .filter(({ result }) => ui.sessionSearchFilter === "all" || result.source === ui.sessionSearchFilter);
+  const indexedResults = getFilteredSessionResults(ui.sessionSearchFilter);
 
   if (!indexedResults.length) {
     const label = ui.sessionSearchFilter === "claude" ? "Claude" : "Codex";
     return [emptyStateElement(`No ${label} sessions matched. Try a different filter.`)];
   }
 
-  return indexedResults
-    .map(({ result, originalIndex: index }) => {
-      const sourceLabel = result.source === "claude" ? "Claude" : "Codex";
-      const normalizedPreview = normalizeJsonlPreview(result.preview);
-      const canResume = canResumeSessionSearchResult(result);
-      const shortId = result.sessionId ? result.sessionId.slice(0, 8) : null;
-      return dom(
+  
+  return indexedResults  
+  .map(({ result, originalIndex: index }) => {
+    const normalizedPreview = normalizeJsonlPreview(result.preview);
+    const canResume = canResumeSessionSearchResult(result);
+    const sourceLabel = result.source === "claude" ? "Claude" : "Codex";
+    const shortId = result.sessionId ? result.sessionId.slice(0, 8) : null;
+
+    return dom(
+      "div",
+      {
+        className: classNames(
+          "session-search-row",
+          index === ui.sessionSearchSelectedIndex ? "active" : undefined
+        ),
+        attrs: {
+          "data-action": "select-session-search-result",
+          "data-result-index": String(index)
+        }
+      },
+      dom(
         "div",
-        {
-          className: classNames(
-            "session-search-row",
-            index === ui.sessionSearchSelectedIndex ? "active" : undefined
-          ),
-          attrs: {
-            "data-action": "select-session-search-result",
-            "data-result-index": String(index)
-          }
-        },
+        { className: "row-title" },
         dom(
-          "div",
-          { className: "row-title" },
-          dom("span", {}, result.title),
-          dom(
-            "span",
-            {
-              className: classNames(
-                "session-search-source",
-                `session-search-source-${result.source}`
-              )
-            },
-            sourceLabel
-          )
+          "span",
+          {
+            className: classNames(
+              "session-search-source",
+              `session-search-source-${result.source}`
+            )
+          },
+          sourceLabel
         ),
-        dom(
-          "div",
-          { className: "row-subtitle mono" },
-          `${shortId ? `${shortId} \u00B7 ` : ""}${pathLeafLabel(result.filePath)}:${String(result.lineNumber || 1)}`
-        ),
-        dom("div", { className: "row-meta" }, normalizedPreview),
-        dom(
-          "div",
-          { className: "session-search-actions" },
-          dom(
-            "button",
-            {
-              attrs: {
-                type: "button",
-                "data-action": "reveal-session-search-result",
-                "data-result-index": String(index)
-              }
-            },
-            "Reveal"
-          ),
-          canResume
-            ? dom(
-                "button",
-                {
-                  className: "primary",
-                  attrs: {
-                    type: "button",
-                    "data-action": "resume-session-search-result",
-                    "data-result-index": String(index)
-                  }
-                },
-                "Resume from here"
-              )
-            : null
-        )
-      );
-    });
+        dom("span", {}, result.title || (shortId ?? "")),
+      ),
+      normalizedPreview
+        ? dom("div", { className: "row-meta" }, highlightQueryTerms(normalizedPreview, ui.sessionSearchQuery))
+        : null,
+      dom(  
+        "div",  
+        { className: "session-search-actions" },  
+        dom(  
+          "button",  
+          {  
+            attrs: {  
+              type: "button",  
+              "data-action": "reveal-session-search-result",  
+              "data-result-index": String(index)  
+            }  
+          },  
+          "Reveal"  
+        ),  
+        canResume  
+          ? dom(  
+              "button",  
+              {  
+                className: "primary",  
+                attrs: {  
+                  type: "button",  
+                  "data-action": "resume-session-search-result",  
+                  "data-result-index": String(index)  
+                }  
+              },  
+              "Resume from here"  
+            )  
+          : null  
+      )  
+    );  
+  })  
+  .filter(Boolean);
 }
 
 async function renderSettingsDialog() {
@@ -11408,6 +11426,35 @@ function canResumeSessionSearchResult(
   return !!result && (result.source === "claude" || result.source === "codex") && !!result.sessionId;
 }
 
+
+function codexJsonlPreview(raw: string): string{
+	try{
+		const parsed = JSON.parse(raw);		
+		if (parsed?.payload?.type === "agent_message" || parsed?.payload?.message){
+			return String(parsed.payload.message).slice(0, 300).trim();  
+		}
+
+		if (parsed?.payload?.type === "message"){
+			const content = parsed.payload.content;
+			
+			if (Array.isArray(content)) {  
+				const textBlock = content.find(block => block?.type === "output_text");  
+				if (textBlock?.text) {    
+					return String(textBlock.text).slice(0, 300).trim();  
+				}  
+			}
+			
+			return String(parsed.payload.message).slice(0, 300).trim();  
+		}
+
+
+	}
+	catch{
+		// not valid JSON
+	}
+	return raw.slice(0, 300).trim()
+}
+
 function normalizeJsonlPreview(raw: string): string {
   try {
     const parsed = JSON.parse(raw);
@@ -11421,6 +11468,23 @@ function normalizeJsonlPreview(raw: string): string {
     if (parsed?.customTitle) {
       return String(parsed.customTitle).slice(0, 300).trim();
     }
+
+	if (parsed?.payload?.type === "agent_message" || parsed?.payload?.message){
+		return String(parsed.payload.message).slice(0, 300).trim();  
+	}
+
+	if (parsed?.payload?.type === "message"){
+		const content = parsed.payload.content;
+		
+		if (Array.isArray(content)) {  
+			const textBlock = content.find(block => block?.type === "output_text");  
+			if (textBlock?.text) {    
+				return String(textBlock.text).slice(0, 300).trim();  
+			}  
+		}
+		
+		return String(parsed.payload.message).slice(0, 300).trim();  
+	}
 
     // user / assistant message — message.content is string or array of blocks
     const msgContent = parsed?.message?.content;
@@ -11455,13 +11519,40 @@ function normalizeJsonlPreview(raw: string): string {
   } catch {
     // not valid JSON
   }
-  return raw.slice(0, 300).trim();
+  return "";
+}
+
+function highlightQueryTerms(text: string, query: string): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  const terms = query.trim().split(/\s+/).filter(Boolean);
+  if (!terms.length) {
+    fragment.appendChild(document.createTextNode(text));
+    return fragment;
+  }
+  const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const pattern = new RegExp(`(${escaped.join("|")})`, "gi");
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > last) {
+      fragment.appendChild(document.createTextNode(text.slice(last, match.index)));
+    }
+    const mark = document.createElement("mark");
+    mark.className = "session-search-highlight";
+    mark.textContent = match[0];
+    fragment.appendChild(mark);
+    last = pattern.lastIndex;
+  }
+  if (last < text.length) {
+    fragment.appendChild(document.createTextNode(text.slice(last)));
+  }
+  return fragment;
 }
 
 function renderSessionSearchDialogKeepFocus() {
   const prev = document.getElementById("session-search-query") as HTMLInputElement | null;
   const wasFocused = document.activeElement === prev;
-  const selStart = wasFocused && prev ? prev.selectionStart : null;
+  const selStart = wasFocused&& prev ? prev.selectionStart : null;
   const selEnd = wasFocused && prev ? prev.selectionEnd : null;
   renderSessionSearchDialog();
   if (wasFocused) {
@@ -11709,7 +11800,6 @@ function renderMarkdownDocument(
 
 function renderInlineMarkdownText(value: string | null | undefined) {
   let html = escapeHtml(value);
-
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");

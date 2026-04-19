@@ -1,0 +1,4 @@
+BETTER_AUTH_SECRET= Generate a secret from https://better-auth.com/docs/installation. Alternatively, you can useopenssl rand -base64 32 to generate one.
+
+BETTER_AUTH_URL=http://localhost:8787
+AUTH_ALLOWED_ORIGINS=app://-,http://localhost:3000,http://localhost:5173,http://localhost:8787

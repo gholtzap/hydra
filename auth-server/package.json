@@ -15,7 +15,7 @@
     "@better-auth/electron": "^1.6.5",
     "better-auth-cloudflare": "^0.3.0",
     "@better-auth/drizzle-adapter": "^1.6.5",
-    "drizzle-orm": "^0.39.0",
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.7.0"
   },
   "devDependencies": {

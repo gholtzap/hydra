@@ -5,12 +5,16 @@ import type { CloudflareBindings } from "./env";
 
 const app = new Hono<{ Bindings: CloudflareBindings }>();
 
-// CORS for auth routes — allow Electron origins
-app.use("/api/auth/*", async (c, next) => {
-  const origins = c.env.AUTH_ALLOWED_ORIGINS
+function parseOrigins(value?: string) {
+  return (value ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+// CORS for auth routes — allow Electron origins
+app.use("/api/auth/*", async (c, next) => {
+  const origins = parseOrigins(c.env.AUTH_ALLOWED_ORIGINS);
 
   return cors({
     origin: origins,

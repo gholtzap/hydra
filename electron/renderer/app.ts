@@ -3239,6 +3239,10 @@ function startSessionRename(sessionId) {
 
   ui.renamingSessionId = session.id;
   ui.renamingSessionTitle = session.title || "";
+  if (ui.focusSection !== "main") {
+    ui.focusSection = "main";
+    syncSectionFocusUi({ preserveCurrentFocus: true });
+  }
   updateSessionWorkspaceToolbar();
   updateSessionPane(session);
 }
@@ -10410,7 +10414,8 @@ function syncSectionFocusUi(options: { preserveCurrentFocus?: boolean } = {}) {
     terminalWrap?.classList.toggle("section-focused", active && ui.focusSection === "terminal");
   }
 
-  if (isAnyDialogOpen() || options.preserveCurrentFocus) {
+  // Keep inline session renames stable while live session updates refresh the chrome.
+  if (isAnyDialogOpen() || options.preserveCurrentFocus || ui.renamingSessionId) {
     return;
   }
 

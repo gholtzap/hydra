@@ -381,10 +381,11 @@ textarea {
   min-height: 0;
   width: var(--sidebar-column-width);
   justify-self: start;
-  overflow: hidden;
+  overflow: visible;
   padding: 10px 8px;
   border-right: 1px solid var(--border);
   background: var(--sidebar-surface);
+  z-index: 1;
   transition:
     transform 140ms ease,
     padding 140ms ease,
@@ -401,6 +402,7 @@ textarea {
   padding-inline: 0;
   border-right-color: transparent;
   opacity: 0;
+  overflow: hidden;
 }
 
 #sidebar:focus,

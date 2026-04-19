@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hydra — Sign In</title>
+    <style>
+      *, *::before, *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      :root {
+        --bg: #0f0f0f;
+        --surface: #181818;
+        --surface-raised: #202020;
+        --border: #2a2a2a;
+        --border-focus: #4a4a4a;
+        --text: #e8e8e8;
+        --text-muted: #888;
+        --text-dim: #555;
+        --accent: #e8e8e8;
+        --accent-fg: #0f0f0f;
+        --danger: #c0392b;
+        --success: #27ae60;
+        --font-mono: "SF Mono", "JetBrains Mono", Menlo, Monaco, monospace;
+        --font-sans: "Avenir Next", "SF Pro Text", "Helvetica Neue", sans-serif;
+        --radius: 6px;
+      }
+
+      html, body {
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-sans);
+        font-size: 13px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        padding: 24px;
+      }
+
+      .card {
+        width: 100%;
+        max-width: 380px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 32px;
+      }
+
+      .logo {
+        font-family: var(--font-mono);
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text);
+        letter-spacing: -0.02em;
+        margin-bottom: 24px;
+        text-align: center;
+      }
+
+      .logo span {
+        color: var(--text-muted);
+        font-weight: 400;
+      }
+
+      /* Tabs */
+      .tabs {
+        display: flex;
+        gap: 2px;
+        background: var(--bg);
+        border-radius: var(--radius);
+        padding: 3px;
+        margin-bottom: 24px;
+      }
+
+      .tab-btn {
+        flex: 1;
+        padding: 6px 12px;
+        background: transparent;
+        border: none;
+        border-radius: 4px;
+        color: var(--text-muted);
+        font-size: 12px;
+        font-family: var(--font-sans);
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+      }
+
+      .tab-btn.active {
+        background: var(--surface-raised);
+        color: var(--text);
+      }
+
+      .tab-btn:hover:not(.active) {
+        color: var(--text);
+      }
+
+      /* Forms */
+      .tab-panel {
+        display: none;
+      }
+
+      .tab-panel.active {
+        display: block;
+      }
+
+      .form-group {
+        margin-bottom: 12px;
+      }
+
+      label {
+        display: block;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 5px;
+      }
+
+      input[type="email"],
+      input[type="password"],
+      input[type="text"] {
+        width: 100%;
+        padding: 8px 10px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: var(--text);
+        font-size: 13px;
+        font-family: var(--font-mono);
+        outline: none;
+        transition: border-color 0.15s;
+        -webkit-appearance: none;
+      }
+
+      input:focus {
+        border-color: var(--border-focus);
+      }
+
+      input::placeholder {
+        color: var(--text-dim);
+      }
+
+      /* Buttons */
+      .btn {
+        width: 100%;
+        padding: 8px 14px;
+        background: var(--text);
+        border: none;
+        border-radius: var(--radius);
+        color: var(--accent-fg);
+        font-size: 13px;
+        font-family: var(--font-sans);
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 0.15s;
+        margin-top: 4px;
+      }
+
+      .btn:hover {
+        opacity: 0.88;
+      }
+
+      .btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      /* Status */
+      .status {
+        margin-top: 14px;
+        padding: 8px 10px;
+        border-radius: var(--radius);
+        font-size: 12px;
+        font-family: var(--font-mono);
+        display: none;
+      }
+
+      .status.error {
+        display: block;
+        background: rgba(192, 57, 43, 0.12);
+        border: 1px solid rgba(192, 57, 43, 0.3);
+        color: #e07060;
+      }
+
+      .status.success {
+        display: block;
+        background: rgba(39, 174, 96, 0.1);
+        border: 1px solid rgba(39, 174, 96, 0.25);
+        color: #5cb87a;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="logo">hydra <span>// sign in</span></div>
+
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="signin">Sign In</button>
+        <button class="tab-btn" data-tab="signup">Sign Up</button>
+      </div>
+
+      <!-- Sign In -->
+      <div class="tab-panel active" id="tab-signin">
+        <div class="form-group">
+          <label for="signin-email">Email</label>
+          <input type="email" id="signin-email" placeholder="you@example.com" autocomplete="email" />
+        </div>
+        <div class="form-group">
+          <label for="signin-password">Password</label>
+          <input type="password" id="signin-password" placeholder="••••••••" autocomplete="current-password" />
+        </div>
+        <button class="btn" id="signin-btn">Sign In</button>
+        <div class="status" id="signin-status"></div>
+      </div>
+
+      <!-- Sign Up -->
+      <div class="tab-panel" id="tab-signup">
+        <div class="form-group">
+          <label for="signup-name">Name</label>
+          <input type="text" id="signup-name" placeholder="Your name" autocomplete="name" />
+        </div>
+        <div class="form-group">
+          <label for="signup-email">Email</label>
+          <input type="email" id="signup-email" placeholder="you@example.com" autocomplete="email" />
+        </div>
+        <div class="form-group">
+          <label for="signup-password">Password</label>
+          <input type="password" id="signup-password" placeholder="••••••••" autocomplete="new-password" />
+        </div>
+        <button class="btn" id="signup-btn">Create Account</button>
+        <div class="status" id="signup-status"></div>
+      </div>
+    </div>
+
+    <script>
+      // --- Helpers ---
+      function showStatus(el, type, msg) {
+        el.className = "status " + type;
+        el.textContent = msg;
+      }
+
+      function clearStatus(el) {
+        el.className = "status";
+        el.textContent = "";
+      }
+
+      function setLoading(btn, loading, label) {
+        btn.disabled = loading;
+        btn.textContent = loading ? "Please wait\u2026" : label;
+      }
+
+      // --- Tab switching ---
+      const tabBtns = document.querySelectorAll(".tab-btn");
+      const tabPanels = document.querySelectorAll(".tab-panel");
+
+      tabBtns.forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          const target = btn.dataset.tab;
+          tabBtns.forEach(function (b) { b.classList.remove("active"); });
+          tabPanels.forEach(function (p) { p.classList.remove("active"); });
+          btn.classList.add("active");
+          document.getElementById("tab-" + target).classList.add("active");
+        });
+      });
+
+      // --- Sign In ---
+      const signinBtn = document.getElementById("signin-btn");
+      const signinStatus = document.getElementById("signin-status");
+
+      signinBtn.addEventListener("click", async function () {
+        const email = document.getElementById("signin-email").value.trim();
+        const password = document.getElementById("signin-password").value;
+        if (!email || !password) {
+          showStatus(signinStatus, "error", "Email and password are required.");
+          return;
+        }
+        setLoading(signinBtn, true, "Sign In");
+        clearStatus(signinStatus);
+        try {
+          const result = await window.claudeWorkspace.signInWithEmail(email, password);
+          if (!result || !result.success) {
+            showStatus(signinStatus, "error", (result && result.error) || "Sign in failed.");
+          }
+          // On success, the main process navigates to index.html automatically
+        } catch (err) {
+          showStatus(signinStatus, "error", (err && err.message) || "An unexpected error occurred.");
+        } finally {
+          setLoading(signinBtn, false, "Sign In");
+        }
+      });
+
+      // Enter key submits sign-in
+      document.getElementById("signin-password").addEventListener("keydown", function (e) {
+        if (e.key === "Enter") signinBtn.click();
+      });
+
+      // --- Sign Up ---
+      const signupBtn = document.getElementById("signup-btn");
+      const signupStatus = document.getElementById("signup-status");
+
+      signupBtn.addEventListener("click", async function () {
+        const name = document.getElementById("signup-name").value.trim();
+        const email = document.getElementById("signup-email").value.trim();
+        const password = document.getElementById("signup-password").value;
+        if (!name || !email || !password) {
+          showStatus(signupStatus, "error", "All fields are required.");
+          return;
+        }
+        setLoading(signupBtn, true, "Create Account");
+        clearStatus(signupStatus);
+        try {
+          const result = await window.claudeWorkspace.signUpWithEmail(name, email, password);
+          if (!result || !result.success) {
+            showStatus(signupStatus, "error", (result && result.error) || "Sign up failed.");
+          } else {
+            showStatus(signupStatus, "success", "Account created! Signing you in\u2026");
+            // Main process navigates to index.html automatically on success
+          }
+        } catch (err) {
+          showStatus(signupStatus, "error", (err && err.message) || "An unexpected error occurred.");
+        } finally {
+          setLoading(signupBtn, false, "Create Account");
+        }
+      });
+
+      // Enter key submits sign-up
+      document.getElementById("signup-password").addEventListener("keydown", function (e) {
+        if (e.key === "Enter") signupBtn.click();
+      });
+    </script>
+  </body>
+</html>

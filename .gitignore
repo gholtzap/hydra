@@ -37,3 +37,7 @@ GEMINI.md
 .cursor/
 /LESSONS.md
 /.wiki
+auth-server/node_modules
+auth-server/.wrangler/
+auth-server/.dev.vars
+auth-server/dist/

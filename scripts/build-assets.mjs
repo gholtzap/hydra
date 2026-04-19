@@ -34,6 +34,7 @@ try {
 
   // Renderer static assets
   cp("electron/renderer/index.html", "dist-electron/renderer/index.html");
+  cp("electron/renderer/auth.html", "dist-electron/renderer/auth.html");
   cp("electron/renderer/app.css", "dist-electron/renderer/app.css");
   cp("electron/renderer/vendor/xterm.css", "dist-electron/renderer/vendor/xterm.css");
   cp("electron/renderer/vendor/xterm.js", "dist-electron/renderer/vendor/xterm.js");

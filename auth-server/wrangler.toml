@@ -1,0 +1,14 @@
+name = "hydra-auth"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[alias]
+"@opentelemetry/api" = "./src/otel-noop.ts"
+
+[[d1_databases]]
+binding = "DATABASE"
+database_name = "hydra-auth"
+database_id = "e1b0dcac-dfb1-4121-a95a-319131039f54"
+migrations_dir = "migrations"
+

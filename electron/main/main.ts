@@ -2534,6 +2534,14 @@ class AppController {
     this.queuedSessionLaunches.delete(sessionId);
     this.resetSignalTracking(sessionId);
     this.sessionSizes.delete(sessionId);
+
+    // Agent/appLaunch sessions fall back to a plain shell instead of blocking
+    // the terminal with a "paused" overlay.
+    if (session.launchProfile === "agent" || session.launchProfile === "appLaunch") {
+      this.fallbackToShell(session, exitCode);
+      return;
+    }
+
     session.runtimeState = "stopped";
     session.stoppedAt = now();
     session.updatedAt = now();
@@ -2559,6 +2567,50 @@ class AppController {
 
     this.scheduleSave();
     this.sendSessionUpdated(sessionId);
+  }
+
+  /** Transition an agent session into a live shell after the agent process exits. */
+  private fallbackToShell(session: SessionRecord, exitCode: number): void {
+    const repo = this.repoById(session.repoID);
+    if (!repo) {
+      // No repo — can't launch a shell, fall through to stopped state.
+      session.runtimeState = "stopped";
+      session.stoppedAt = now();
+      session.updatedAt = now();
+      session.status = exitCode === 0 ? "done" : "failed";
+      session.blocker = null;
+      this.scheduleSave();
+      this.sendSessionUpdated(session.id);
+      return;
+    }
+
+    const banner =
+      exitCode === 0
+        ? `\r\n[Agent exited. Shell is ready.]\r\n`
+        : `\r\n[Agent exited with status ${exitCode}. Shell is ready.]\r\n`;
+
+    session.launchProfile = "shell";
+    session.launchesClaudeOnStart = false;
+    session.status = "running";
+    session.blocker = null;
+    session.runtimeState = "live";
+    session.updatedAt = now();
+
+    session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${banner}`);
+    session.transcript = trimTranscript(
+      this.terminalBuffer(session.id, session.transcript).consume(banner)
+    );
+
+    this.sendSessionOutput(session.id, banner);
+
+    this.ptyHost.createSession({
+      sessionId: session.id,
+      cwd: repo.path,
+      shellPath: resolvedShellPath(this.state.preferences)
+    });
+
+    this.scheduleSave();
+    this.sendSessionUpdated(session.id);
   }
 
   startRestartedSession(sessionId: string): void {

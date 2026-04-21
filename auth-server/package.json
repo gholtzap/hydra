@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "dev:local": "npm run d1:migrate:local && npm run dev",
+    "deploy": "node ../scripts/guard-auth-command.mjs deploy && wrangler deploy",
     "generate": "npx @better-auth/cli generate --config src/auth.ts",
     "d1:migrate:local": "wrangler d1 migrations apply hydra-auth --local",
-    "d1:migrate:remote": "wrangler d1 migrations apply hydra-auth --remote"
+    "d1:migrate:remote": "node ../scripts/guard-auth-command.mjs remote-migrate && wrangler d1 migrations apply hydra-auth --remote"
   },
   "dependencies": {
     "better-auth": "^1.6.5",

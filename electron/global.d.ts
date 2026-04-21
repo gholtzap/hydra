@@ -144,6 +144,7 @@ interface ClaudeWorkspaceApi {
   signUpWithEmail: (name: string, email: string, password: string) => Promise<AuthResult>;
   authSignOut: () => Promise<void>;
   authGetSession: () => Promise<AuthSession | null>;
+  authOpenPage: () => Promise<void>;
   requestPasswordReset: (email: string, redirectUrl: string) => Promise<AuthResult>;
   verifyTotp: (code: string) => Promise<AuthResult>;
   onAuthStateChanged: (callback: (session: AuthSession | null) => void) => Unsubscribe;

@@ -3,6 +3,7 @@ import type {
   AppPreferences,
   AppUpdateCheckResult,
   AppStateSnapshot,
+  AuthSession,
   ClaudeSettingsContext,
   EphemeralToolId,
   EphemeralToolOutputPayload,
@@ -239,6 +240,7 @@ type FileTreeNode = SharedFileTreeNode;
 type SessionSearchResult = SharedSessionSearchResult & {
   hydraSessionId?: string | null;
 };
+type SettingsTab = "general" | "account" | "themes" | "keybindings" | "claude";
 
 function createEphemeralToolOverlayState(): EphemeralToolOverlayState {
   return {
@@ -327,10 +329,14 @@ type UiState = {
   sessionSearchLoadId: number;
   sessionSearchFilter: "all" | "claude" | "codex";
   commandPaletteQuery: string;
-  settingsTab: string;
+  settingsTab: SettingsTab;
   settingsClaudeView: ClaudeSettingsView;
   settingsUpdateCheckInFlight: boolean;
   settingsUpdateCheckResult: AppUpdateCheckResult | null;
+  authSession: AuthSession | null;
+  authSessionLoaded: boolean;
+  settingsAuthInFlight: boolean;
+  settingsAuthError: string;
   settingsContext: ClaudeSettingsContext | null;
   settingsSelectedFilePath: string | null;
   settingsJsonCategoryId: string;
@@ -424,10 +430,14 @@ const ui: UiState = {
   sessionSearchLoadId: 0,
   sessionSearchFilter: "all" as "all" | "claude" | "codex",
   commandPaletteQuery: "",
-  settingsTab: "general",
+  settingsTab: "general" as SettingsTab,
   settingsClaudeView: "files" as ClaudeSettingsView,
   settingsUpdateCheckInFlight: false,
   settingsUpdateCheckResult: null,
+  authSession: null,
+  authSessionLoaded: false,
+  settingsAuthInFlight: false,
+  settingsAuthError: "",
   settingsContext: null,
   settingsSelectedFilePath: null,
   settingsJsonCategoryId: "",
@@ -1237,6 +1247,9 @@ api.onSessionOutput((payload) => {
     return;
   }
 
+  // Keep the expanded sidebar drawer stable while live sessions stream output.
+  updateSidebarDrawerSessionPreview(session);
+
   if (ui.selection.type === "session" && isSessionVisible(payload.sessionId)) {
     updateSessionWorkspaceToolbar();
     updateSessionPane(session);
@@ -1275,6 +1288,15 @@ api.onSessionUpdated((payload) => {
     syncSessionTerminalLiveState(session);
   } else if (ui.selection.type !== "session") {
     renderDetail();
+  }
+});
+
+api.onAuthStateChanged((session) => {
+  ui.authSession = session;
+  ui.authSessionLoaded = true;
+  ui.settingsAuthError = "";
+  if (settingsDialog.open) {
+    void renderSettingsDialog();
   }
 });
 
@@ -1415,7 +1437,13 @@ function buildTerminalTheme() {
 }
 
 async function initialize() {
-  replaceState(await api.getState());
+  const [nextState, authSession] = await Promise.all([
+    api.getState(),
+    api.authGetSession().catch(() => null)
+  ]);
+  replaceState(nextState);
+  ui.authSession = authSession;
+  ui.authSessionLoaded = true;
   ensureValidSelection();
   normalizeFocusSection();
   renderSidebar();
@@ -1500,13 +1528,29 @@ function sidebarSignature() {
     return `${repo.id}:${sessions.filter((s) => s.runtimeState === "live").length}:${sessions.filter((s) => s.blocker || s.unreadCount > 0).length}`;
   }).join(",");
   const drawerSig = expandedRepo
-    ? sessionsForRepo(expandedRepo.id).map((s) =>
-        `${s.id}:${s.title}:${s.status}:${s.unreadCount}:${previewTranscript(s.transcript)}`
-      ).join(",")
+    ? sessionsForRepo(expandedRepo.id).map((session) => sidebarDrawerSessionSignature(session)).join(",")
     : "";
   const selSig = `${ui.selection.type}:${(ui.selection as any).id ?? ""}`;
   const multiSelSig = ui.selectedSessionIds.size ? [...ui.selectedSessionIds].sort().join(",") : "";
   return `${inboxCount}|${railSig}|${drawerSig}|${selSig}|${ui.sidebarNavItem}|${ui.sidebarExpandedRepoId}|${multiSelSig}`;
+}
+
+function sidebarDrawerSessionSignature(session) {
+  return [
+    session.id,
+    session.title,
+    session.runtimeState,
+    session.status,
+    session.isPinned ? "1" : "0",
+    state.preferences.showInAppBadges && session.unreadCount > 0 ? "1" : "0",
+    normalizeSessionTagColor(session.tagColor) || "",
+    session.sessionIconUrl || "",
+    session.sessionIconUpdatedAt || ""
+  ].join(":");
+}
+
+function sidebarDrawerSessionPreview(session) {
+  return previewTranscript(session.transcript);
 }
 
 function renderSidebar() {
@@ -1781,11 +1825,20 @@ function renderSidebarDrawerSession(session, repo) {
       )
     ),
     dom("div", { className: "row-subtitle" }, repo.name),
-    dom("div", { className: "row-meta" }, previewTranscript(session.transcript))
+    dom("div", { className: "row-meta" }, sidebarDrawerSessionPreview(session))
   );
 
   setSessionDragAttributes(button, session.id, "list");
   return button;
+}
+
+function updateSidebarDrawerSessionPreview(session) {
+  const metaEl = sidebarElement.querySelector<HTMLElement>(
+    `[data-session-id="${CSS.escape(session.id)}"] .row-meta`
+  );
+  if (metaEl) {
+    metaEl.textContent = sidebarDrawerSessionPreview(session);
+  }
 }
 
 function renderBulkActionBar(currentRepoId: string) {
@@ -2580,6 +2633,36 @@ function formatRelativeDate(value) {
     month: "short",
     day: "numeric"
   });
+}
+
+function formatDateTime(value: string | null | undefined, fallback = "Unavailable") {
+  if (!value) {
+    return fallback;
+  }
+
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return fallback;
+  }
+
+  return timestamp.toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
+}
+
+function profileInitials(session: AuthSession | null) {
+  const source = session?.user.name?.trim() || session?.user.email?.trim() || "";
+  if (!source) {
+    return "HY";
+  }
+
+  const parts = source.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
+  }
+
+  return source.slice(0, 2).toUpperCase();
 }
 
 function renderSessionDetail(session) {
@@ -3976,6 +4059,7 @@ async function renderSettingsDialog() {
 
         <div class="settings-tabs">
           <button type="button" class="settings-tab ${ui.settingsTab === "general" ? "active" : ""}" data-action="settings-tab" data-tab="general">General</button>
+          <button type="button" class="settings-tab ${ui.settingsTab === "account" ? "active" : ""}" data-action="settings-tab" data-tab="account">Account</button>
           <button type="button" class="settings-tab ${ui.settingsTab === "themes" ? "active" : ""}" data-action="settings-tab" data-tab="themes">Themes</button>
           <button type="button" class="settings-tab ${ui.settingsTab === "keybindings" ? "active" : ""}" data-action="settings-tab" data-tab="keybindings">Keybindings</button>
           <button type="button" class="settings-tab ${ui.settingsTab === "claude" ? "active" : ""}" data-action="settings-tab" data-tab="claude">Agent Files</button>
@@ -3986,6 +4070,8 @@ async function renderSettingsDialog() {
         ${
           ui.settingsTab === "general"
             ? renderGeneralSettingsPane()
+            : ui.settingsTab === "account"
+              ? renderAccountSettingsPane()
             : ui.settingsTab === "themes"
               ? renderThemesSettingsPane()
               : ui.settingsTab === "keybindings"
@@ -4383,6 +4469,85 @@ function renderGeneralSettingsPane() {
           <div class="row-title">${escapeHtml(updateResult?.message || "No update check has been run yet.")}</div>
           <div class="muted">${escapeHtml(updateResult?.detail || "Local development builds and unsigned macOS bundles report that updates are unavailable.")}</div>
         </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderAccountSettingsPane() {
+  const session = ui.authSession;
+  const loading = !ui.authSessionLoaded || ui.settingsAuthInFlight;
+  const expiresLabel = session ? formatDateTime(session.expiresAt, "Unknown") : "Not available";
+  const avatarMarkup = session?.user.image
+    ? `
+      <span class="account-avatar" aria-hidden="true">
+        <img class="account-avatar-image" src="${escapeAttribute(session.user.image)}" alt="" />
+      </span>
+    `
+    : `
+      <span class="account-avatar account-avatar-fallback" aria-hidden="true">${escapeHtml(profileInitials(session))}</span>
+    `;
+
+  return `
+    <div class="dialog-panel">
+      <section class="settings-field-card account-summary-card">
+        <div class="settings-help-row">
+          <div class="settings-field-copy">
+            <div class="row-title">Profile</div>
+            <div class="muted">View the active Hydra account and return to the auth screen without leaving Settings.</div>
+          </div>
+          <div class="settings-detail-actions">
+            <button type="button" data-action="settings-auth-refresh" ${ui.settingsAuthInFlight ? "disabled" : ""}>${ui.settingsAuthInFlight ? "Refreshing..." : "Refresh"}</button>
+            ${
+              session
+                ? `<button type="button" class="ws-action-danger" data-action="settings-sign-out" ${ui.settingsAuthInFlight ? "disabled" : ""}>Sign Out</button>`
+                : `<button type="button" class="primary" data-action="settings-sign-in" ${ui.settingsAuthInFlight ? "disabled" : ""}>Sign In</button>`
+            }
+          </div>
+        </div>
+
+        ${
+          loading
+            ? `<div class="muted">Loading account details…</div>`
+            : session
+              ? `
+                <div class="account-profile-grid">
+                  <div class="account-identity-card">
+                    ${avatarMarkup}
+                    <div class="account-identity-copy">
+                      <div class="row-title">${escapeHtml(session.user.name || "Unnamed User")}</div>
+                      <div class="row-subtitle mono">${escapeHtml(session.user.email)}</div>
+                      <div class="settings-meta-row">
+                        <span class="settings-meta-pill">${session.user.emailVerified ? "Email Verified" : "Email Unverified"}</span>
+                        <span class="settings-meta-pill">Session Active</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="account-detail-grid">
+                    <div class="account-detail-item">
+                      <span class="account-detail-label">User ID</span>
+                      <span class="account-detail-value mono">${escapeHtml(session.user.id || "Unavailable")}</span>
+                    </div>
+                    <div class="account-detail-item">
+                      <span class="account-detail-label">Session Expires</span>
+                      <span class="account-detail-value">${escapeHtml(expiresLabel)}</span>
+                    </div>
+                  </div>
+                </div>
+              `
+              : `
+                <div class="settings-warning-card">
+                  <div class="row-title">You’re not signed in</div>
+                  <div class="row-subtitle">Use Sign In to switch back to Hydra’s auth screen. After authentication, Hydra returns to the main app.</div>
+                </div>
+              `
+        }
+
+        ${
+          ui.settingsAuthError
+            ? `<div class="settings-warning-card"><div class="row-title">Account error</div><div class="row-subtitle">${escapeHtml(ui.settingsAuthError)}</div></div>`
+            : ""
+        }
       </section>
     </div>
   `;
@@ -6033,12 +6198,31 @@ async function handleClick(event) {
       await selectRepo(target.dataset.repoId, "main");
       break;
     case "settings-tab":
-      ui.settingsTab = target.dataset.tab;
+      ui.settingsTab = (target.dataset.tab || "general") as SettingsTab;
       if (ui.settingsTab !== "claude") {
         ui.settingsClaudeView = "files";
       }
       ui.keybindingRecordingAction = null;
+      if (ui.settingsTab === "account") {
+        await refreshAuthSession();
+        break;
+      }
       await renderSettingsDialog();
+      break;
+    case "settings-auth-refresh":
+      await refreshAuthSession();
+      break;
+    case "settings-sign-in":
+      await api.authOpenPage();
+      break;
+    case "settings-sign-out":
+      ui.settingsAuthInFlight = true;
+      await renderSettingsDialog();
+      try {
+        await api.authSignOut();
+      } finally {
+        ui.settingsAuthInFlight = false;
+      }
       break;
     case "settings-claude-view":
       ui.settingsClaudeView = (target.dataset.claudeView || "files") as ClaudeSettingsView;
@@ -7666,7 +7850,7 @@ async function setSessionTagColor(sessionId: string | null | undefined, tagColor
 }
 
 async function openSettings(
-  initialTab = "general",
+  initialTab: SettingsTab = "general",
   options: { claudeView?: ClaudeSettingsView } = {}
 ) {
   ui.settingsTab = initialTab;
@@ -7680,9 +7864,36 @@ async function openSettings(
   ui.settingsJsonDraft = null;
   ui.settingsJsonError = "";
   ui.settingsShowRawJson = false;
+  ui.settingsAuthError = "";
+  if (initialTab === "account" || !ui.authSessionLoaded) {
+    await refreshAuthSession();
+  }
   await renderSettingsDialog();
   if (!settingsDialog.open) {
     settingsDialog.showModal();
+  }
+}
+
+async function refreshAuthSession() {
+  ui.settingsAuthInFlight = true;
+  if (settingsDialog.open) {
+    await renderSettingsDialog();
+  }
+
+  try {
+    ui.authSession = await api.authGetSession();
+    ui.authSessionLoaded = true;
+    ui.settingsAuthError = "";
+  } catch (error) {
+    ui.authSession = null;
+    ui.authSessionLoaded = true;
+    ui.settingsAuthError =
+      error instanceof Error ? error.message : "Failed to load account details.";
+  } finally {
+    ui.settingsAuthInFlight = false;
+    if (settingsDialog.open) {
+      await renderSettingsDialog();
+    }
   }
 }
 

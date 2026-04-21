@@ -6,7 +6,11 @@ import { withCloudflare } from "better-auth-cloudflare";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { drizzle } from "drizzle-orm/d1";
 import * as schema from "./db/schema";
-import type { CloudflareBindings } from "./env";
+import {
+  ELECTRON_AUTH_ORIGIN,
+  getAuthRuntimeConfig,
+  type CloudflareBindings,
+} from "./env";
 
 /**
  * Creates a Better Auth instance per-request.
@@ -18,10 +22,11 @@ function createAuth(
   baseURL?: string
 ) {
   const db = env ? drizzle(env.DATABASE, { schema }) : ({} as any);
+  const runtimeConfig = env ? getAuthRuntimeConfig(env) : null;
 
   return betterAuth({
-    baseURL: baseURL ?? env?.BETTER_AUTH_URL,
-    secret: env?.BETTER_AUTH_SECRET,
+    baseURL: baseURL ?? runtimeConfig?.baseURL,
+    secret: runtimeConfig?.secret,
     ...withCloudflare(
       {
         d1: env
@@ -34,7 +39,7 @@ function createAuth(
       }
     ),
     plugins: [electron(), bearer()],
-    trustedOrigins: [...(env?.AUTH_ALLOWED_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean), "app://-"],
+    trustedOrigins: runtimeConfig?.allowedOrigins ?? [ELECTRON_AUTH_ORIGIN],
     // CLI-only: provide a database adapter for schema generation
     ...(env
       ? {}

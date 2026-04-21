@@ -3620,6 +3620,102 @@ textarea {
   padding: 14px;
 }
 
+.account-summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+}
+
+.account-profile-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(240px, 0.9fr);
+  gap: 14px;
+}
+
+.account-identity-card,
+.account-detail-item {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-muted);
+}
+
+.account-identity-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+}
+
+.account-identity-copy,
+.account-detail-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.account-detail-grid {
+  gap: 12px;
+}
+
+.account-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.account-avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.account-avatar-fallback {
+  background: oklch(0.84 0.055 230 / 0.95);
+  border-color: transparent;
+  color: oklch(0.31 0.06 235);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.dark .account-avatar-fallback {
+  background: oklch(0.38 0.045 230 / 0.95);
+  color: oklch(0.9 0.02 230);
+}
+
+.account-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+}
+
+.account-detail-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.account-detail-value {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .agent-default-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -4360,6 +4456,7 @@ textarea {
   .settings-shell,
   .claude-skills-shell,
   .claude-marketplace-shell,
+  .account-profile-grid,
   .settings-guided-layout,
   .themes-toolbar-header,
   .themes-toolbar-controls,

@@ -151,6 +151,36 @@
         color: var(--text-dim);
       }
 
+      .password-field {
+        position: relative;
+      }
+
+      .password-field input {
+        padding-right: 64px;
+      }
+
+      .password-toggle {
+        position: absolute;
+        top: 50%;
+        right: 8px;
+        transform: translateY(-50%);
+        padding: 2px 6px;
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        font-size: 11px;
+        font-family: var(--font-sans);
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+
+      .password-toggle:hover,
+      .password-toggle:focus-visible {
+        color: var(--text);
+      }
+
       /* Buttons */
       .btn {
         width: 100%;
@@ -218,7 +248,18 @@
         </div>
         <div class="form-group">
           <label for="signin-password">Password</label>
-          <input type="password" id="signin-password" placeholder="••••••••" autocomplete="current-password" />
+          <div class="password-field">
+            <input type="password" id="signin-password" placeholder="••••••••" autocomplete="current-password" />
+            <button
+              type="button"
+              class="password-toggle"
+              data-password-toggle="signin-password"
+              aria-label="Show password"
+              aria-pressed="false"
+            >
+              Show
+            </button>
+          </div>
         </div>
         <button class="btn" id="signin-btn">Sign In</button>
         <div class="status" id="signin-status"></div>
@@ -236,7 +277,18 @@
         </div>
         <div class="form-group">
           <label for="signup-password">Password</label>
-          <input type="password" id="signup-password" placeholder="••••••••" autocomplete="new-password" />
+          <div class="password-field">
+            <input type="password" id="signup-password" placeholder="••••••••" autocomplete="new-password" />
+            <button
+              type="button"
+              class="password-toggle"
+              data-password-toggle="signup-password"
+              aria-label="Show password"
+              aria-pressed="false"
+            >
+              Show
+            </button>
+          </div>
         </div>
         <button class="btn" id="signup-btn">Create Account</button>
         <div class="status" id="signup-status"></div>
@@ -259,6 +311,26 @@
         btn.disabled = loading;
         btn.textContent = loading ? "Please wait\u2026" : label;
       }
+
+      function syncPasswordToggle(toggle, input) {
+        const isVisible = input.type === "text";
+        toggle.textContent = isVisible ? "Hide" : "Show";
+        toggle.setAttribute("aria-label", isVisible ? "Hide password" : "Show password");
+        toggle.setAttribute("aria-pressed", String(isVisible));
+      }
+
+      document.querySelectorAll("[data-password-toggle]").forEach(function (toggle) {
+        const input = document.getElementById(toggle.dataset.passwordToggle);
+        if (!input) return;
+
+        syncPasswordToggle(toggle, input);
+        toggle.addEventListener("click", function () {
+          input.type = input.type === "password" ? "text" : "password";
+          syncPasswordToggle(toggle, input);
+          input.focus({ preventScroll: true });
+          input.setSelectionRange(input.value.length, input.value.length);
+        });
+      });
 
       // --- Tab switching ---
       const tabBtns = document.querySelectorAll(".tab-btn");

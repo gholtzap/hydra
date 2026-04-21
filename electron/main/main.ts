@@ -1128,6 +1128,11 @@ class AppController {
         this.window.loadFile(path.join(__dirname, "..", "renderer", "auth.html"));
       }
     });
+    ipcMain.handle("auth:openPage", async () => {
+      if (this.window) {
+        await this.window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+      }
+    });
     ipcMain.handle("auth:getSession", async () => {
       if (!this.authClient) return null;
       return this.authClient.getSession();

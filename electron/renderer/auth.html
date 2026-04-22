@@ -104,6 +104,47 @@
         color: var(--text);
       }
 
+      .oauth-card {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 12px;
+        margin-bottom: 18px;
+      }
+
+      .oauth-copy {
+        color: var(--text-muted);
+        font-size: 12px;
+        margin-bottom: 10px;
+      }
+
+      .oauth-grid {
+        display: grid;
+        gap: 8px;
+      }
+
+      .oauth-btn {
+        width: 100%;
+        padding: 8px 12px;
+        background: var(--surface-raised);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: var(--text);
+        font-size: 12px;
+        font-family: var(--font-sans);
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .oauth-btn:hover:not(:disabled) {
+        border-color: var(--border-focus);
+      }
+
+      .oauth-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
       /* Forms */
       .tab-panel {
         display: none;
@@ -240,6 +281,16 @@
         <button class="tab-btn" data-tab="signup">Sign Up</button>
       </div>
 
+      <div class="oauth-card">
+        <div class="oauth-copy">Continue with a provider in your browser. Hydra will return automatically.</div>
+        <div class="oauth-grid">
+          <button class="oauth-btn" data-provider="google">Continue with Google</button>
+          <button class="oauth-btn" data-provider="discord">Continue with Discord</button>
+          <button class="oauth-btn" data-provider="github">Continue with GitHub</button>
+        </div>
+        <div class="status" id="oauth-status"></div>
+      </div>
+
       <!-- Sign In -->
       <div class="tab-panel active" id="tab-signin">
         <div class="form-group">
@@ -312,6 +363,12 @@
         btn.textContent = loading ? "Please wait\u2026" : label;
       }
 
+      function setButtonsDisabled(buttons, disabled) {
+        buttons.forEach(function (button) {
+          button.disabled = disabled;
+        });
+      }
+
       function syncPasswordToggle(toggle, input) {
         const isVisible = input.type === "text";
         toggle.textContent = isVisible ? "Hide" : "Show";
@@ -329,6 +386,31 @@
           syncPasswordToggle(toggle, input);
           input.focus({ preventScroll: true });
           input.setSelectionRange(input.value.length, input.value.length);
+        });
+      });
+
+      const oauthButtons = Array.from(document.querySelectorAll("[data-provider]"));
+      const oauthStatus = document.getElementById("oauth-status");
+
+      oauthButtons.forEach(function (button) {
+        button.addEventListener("click", async function () {
+          const provider = button.dataset.provider;
+          if (!provider) return;
+
+          setButtonsDisabled(oauthButtons, true);
+          clearStatus(oauthStatus);
+          try {
+            const result = await window.claudeWorkspace.authStartProvider(provider);
+            if (!result || !result.success) {
+              showStatus(oauthStatus, "error", (result && result.error) || "Unable to start provider sign in.");
+            } else {
+              showStatus(oauthStatus, "success", "Browser opened. Complete sign in there to return to Hydra.");
+            }
+          } catch (err) {
+            showStatus(oauthStatus, "error", (err && err.message) || "Unable to start provider sign in.");
+          } finally {
+            setButtonsDisabled(oauthButtons, false);
+          }
         });
       });
 

@@ -5,16 +5,34 @@ export interface CloudflareBindings {
   BETTER_AUTH_SECRET?: string;
   BETTER_AUTH_URL?: string;
   AUTH_ALLOWED_ORIGINS?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  DISCORD_CLIENT_ID?: string;
+  DISCORD_CLIENT_SECRET?: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
 }
 
 export const ELECTRON_AUTH_ORIGIN = "app://-";
+export const ELECTRON_DEEP_LINK_ORIGIN = "com.gmh.hydra:/";
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+type SocialProviderName = "google" | "discord" | "github";
+
+type SocialProviderConfig = {
+  clientId: string;
+  clientSecret: string;
+};
+
+export type AuthSocialProviders = Partial<Record<SocialProviderName, SocialProviderConfig>>;
 
 export type AuthRuntimeConfig = {
   allowedOrigins: string[];
   baseURL: string;
   secret: string;
+  socialProviders: AuthSocialProviders;
+  trustedOrigins: string[];
   useSecureCookies: boolean;
 };
 
@@ -29,6 +47,8 @@ export function getAuthRuntimeConfig(env: CloudflareBindings): AuthRuntimeConfig
     allowedOrigins,
     baseURL,
     secret,
+    socialProviders: getSocialProviders(env),
+    trustedOrigins: normalizeTrustedOrigins(allowedOrigins),
     useSecureCookies: shouldUseSecureCookies(baseURL),
   };
 }
@@ -54,6 +74,47 @@ export function normalizeAllowedOrigins(value: string): string[] {
   return [...normalized];
 }
 
+function normalizeTrustedOrigins(allowedOrigins: string[]): string[] {
+  return [...new Set([...allowedOrigins, ELECTRON_DEEP_LINK_ORIGIN])];
+}
+
+function getSocialProviders(
+  env: CloudflareBindings,
+): AuthSocialProviders {
+  const providers: AuthSocialProviders = {};
+
+  addSocialProvider(providers, "google", env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET);
+  addSocialProvider(providers, "discord", env.DISCORD_CLIENT_ID, env.DISCORD_CLIENT_SECRET);
+  addSocialProvider(providers, "github", env.GITHUB_CLIENT_ID, env.GITHUB_CLIENT_SECRET);
+
+  return providers;
+}
+
+function addSocialProvider(
+  providers: AuthSocialProviders,
+  name: SocialProviderName,
+  clientId: string | undefined,
+  clientSecret: string | undefined,
+): void {
+  const normalizedClientId = normalizeOptionalEnvValue(clientId);
+  const normalizedClientSecret = normalizeOptionalEnvValue(clientSecret);
+
+  if (!normalizedClientId && !normalizedClientSecret) {
+    return;
+  }
+
+  if (!normalizedClientId || !normalizedClientSecret) {
+    throw new Error(
+      `${name.toUpperCase()}_CLIENT_ID and ${name.toUpperCase()}_CLIENT_SECRET must both be set when enabling ${name} auth.`,
+    );
+  }
+
+  providers[name] = {
+    clientId: normalizedClientId,
+    clientSecret: normalizedClientSecret,
+  };
+}
+
 function normalizeBetterAuthUrl(value: string): string {
   const parsed = new URL(value);
   const hostname = parsed.hostname.toLowerCase();
@@ -70,10 +131,15 @@ function shouldUseSecureCookies(baseURL: string): boolean {
 }
 
 function requireEnvValue(value: string | undefined, name: string): string {
-  const normalized = value?.trim();
+  const normalized = normalizeOptionalEnvValue(value);
   if (!normalized) {
     throw new Error(`${name} is required for auth routes.`);
   }
 
   return normalized;
+}
+
+function normalizeOptionalEnvValue(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }

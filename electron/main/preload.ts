@@ -178,6 +178,8 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
       invoke<AuthResult>("auth:signIn", { email, password }),
     signUpWithEmail: (name: string, email: string, password: string) =>
       invoke<AuthResult>("auth:signUp", { name, email, password }),
+    authStartProvider: (provider: "google" | "discord" | "github") =>
+      invoke<AuthResult>("auth:startProvider", { provider }),
     authSignOut: () => invoke<void>("auth:signOut"),
     authGetSession: () => invoke<AuthSession | null>("auth:getSession"),
     authOpenPage: () => invoke<void>("auth:openPage"),

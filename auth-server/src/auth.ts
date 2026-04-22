@@ -1,6 +1,5 @@
 import type { D1Database, IncomingRequestCfProperties } from "@cloudflare/workers-types";
 import { betterAuth } from "better-auth";
-import { bearer } from "better-auth/plugins/bearer";
 import { electron } from "@better-auth/electron";
 import { withCloudflare } from "better-auth-cloudflare";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
@@ -9,6 +8,7 @@ import * as schema from "./db/schema";
 import { createEncryptedSecondaryStorage } from "./secondary-storage";
 import {
   ELECTRON_AUTH_ORIGIN,
+  ELECTRON_DEEP_LINK_ORIGIN,
   getAuthRuntimeConfig,
   type CloudflareBindings,
 } from "./env";
@@ -70,9 +70,18 @@ function createAuth(
   const account = {
     encryptOAuthTokens: true,
   };
+  const verification = {
+    // Hash verification identifiers before storing them in secondary storage.
+    storeIdentifier: "hashed" as const,
+    storeInDatabase: false,
+  };
   const advanced = {
     useSecureCookies: runtimeConfig?.useSecureCookies ?? false,
   };
+  const socialProviders =
+    runtimeConfig && Object.keys(runtimeConfig.socialProviders).length > 0
+      ? runtimeConfig.socialProviders
+      : undefined;
   const databaseHooks = {
     account: {
       create: {
@@ -98,15 +107,18 @@ function createAuth(
       },
       {
         emailAndPassword: { enabled: true },
-        plugins: [electron(), bearer()],
+        // The desktop app now uses the native Better Auth Electron client/plugin flow.
+        plugins: [electron()],
         session,
         account,
+        verification,
         advanced,
         databaseHooks,
+        socialProviders,
       }
     ),
     secondaryStorage,
-    trustedOrigins: runtimeConfig?.allowedOrigins ?? [ELECTRON_AUTH_ORIGIN],
+    trustedOrigins: runtimeConfig?.trustedOrigins ?? [ELECTRON_AUTH_ORIGIN, ELECTRON_DEEP_LINK_ORIGIN],
     // CLI-only: provide a database adapter for schema generation
     ...(env
       ? {}

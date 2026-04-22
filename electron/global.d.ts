@@ -142,6 +142,7 @@ interface ClaudeWorkspaceApi {
   // Auth
   signInWithEmail: (email: string, password: string) => Promise<AuthResult>;
   signUpWithEmail: (name: string, email: string, password: string) => Promise<AuthResult>;
+  authStartProvider: (provider: "google" | "discord" | "github") => Promise<AuthResult>;
   authSignOut: () => Promise<void>;
   authGetSession: () => Promise<AuthSession | null>;
   authOpenPage: () => Promise<void>;

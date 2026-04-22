@@ -49,6 +49,7 @@ import type {
 } from "../shared-types";
 import type { AppControllerHandle } from "./internal-api";
 import type { HydraMcpServer } from "./mcp-server";
+import type { AuthSession } from "./auth-client";
 import { HydraAuthClient } from "./auth-client";
 import {
   extractPreferencesPatch,
@@ -622,6 +623,7 @@ class AppController {
   plansDirWatcher: ReturnType<typeof fs.watch> | null;
   mcpServer: HydraMcpServer | null;
   authClient: HydraAuthClient | null;
+  authMainSetup: Promise<void>;
 
   constructor() {
     this.state = emptyState();
@@ -648,7 +650,18 @@ class AppController {
     this.knownPlanFiles = new Set();
     this.plansDirWatcher = null;
     this.mcpServer = null;
-    this.authClient = null;
+    const authServerUrl = this.resolveAuthServerUrl();
+    this.authClient = new HydraAuthClient(authServerUrl, {
+      getWindow: () => this.window,
+      onSessionChanged: (session) => {
+        void this.handleAuthSessionChanged(session);
+      }
+    });
+    this.authMainSetup = this.authClient.setupMain({
+      bridges: false,
+      csp: true,
+      getWindow: () => this.window,
+    });
     this.ptyHost = new PtyHostClient();
     this.ptyHost.onMessage((message) => this.handlePtyMessage(message));
   }
@@ -859,7 +872,8 @@ class AppController {
   }
 
   async initialize(): Promise<void> {
-    const [state, lazygitPath] = await Promise.all([
+    const [, state, lazygitPath] = await Promise.all([
+      this.authMainSetup,
       loadState(),
       resolveCommandPath("lazygit")
     ]);
@@ -870,10 +884,6 @@ class AppController {
     this.normalizeFolderRepos();
     this.repairStoredTranscripts();
     this.watchPlansDir();
-
-    // Initialize auth client
-    const authServerUrl = this.resolveAuthServerUrl();
-    this.authClient = new HydraAuthClient(authServerUrl);
   }
 
   private resolveAuthServerUrl(): string {
@@ -947,6 +957,16 @@ class AppController {
     } catch {
       // If auth check fails (e.g. server unreachable), show auth page
       window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+    }
+  }
+
+  private async handleAuthSessionChanged(session: AuthSession | null): Promise<void> {
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
+
+    if (session && this.window.webContents.getURL().endsWith("/auth.html")) {
+      await this.window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
     }
   }
 
@@ -1131,6 +1151,30 @@ class AppController {
     ipcMain.handle("auth:openPage", async () => {
       if (this.window) {
         await this.window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+      }
+    });
+    ipcMain.handle("auth:startProvider", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      try {
+        await this.authClient.requestAuth({ provider: payload?.provider });
+        return { success: true };
+      } catch (error: unknown) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unable to start provider sign in."
+        };
+      }
+    });
+    ipcMain.handle("auth:signInWithProvider", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      try {
+        await this.authClient.requestAuth({ provider: payload?.provider });
+        return { success: true };
+      } catch (error: unknown) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unable to start provider sign in."
+        };
       }
     });
     ipcMain.handle("auth:getSession", async () => {

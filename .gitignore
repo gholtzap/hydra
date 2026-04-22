@@ -37,3 +37,9 @@ GEMINI.md
 .cursor/
 /LESSONS.md
 /.wiki
+auth-server/.wrangler
+auth-server/dist
+auth-server/node_modules
+auth-server/.dev.vars
+.agents/
+skills-lock.json

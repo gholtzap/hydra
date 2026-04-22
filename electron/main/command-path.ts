@@ -8,6 +8,7 @@ const WELL_KNOWN_COMMAND_DIRECTORIES = [
   "/usr/bin",
   "/bin",
   path.join(os.homedir(), ".local", "bin"),
+  path.join(os.homedir(), ".opencode", "bin"),
   ...(process.platform === "win32"
     ? [
         process.env["SCOOP"] ? path.join(process.env["SCOOP"], "shims") : null,

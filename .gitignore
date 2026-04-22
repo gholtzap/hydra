@@ -1,3 +1,4 @@
+.agents/
 .DS_Store
 /.build
 /.dist
@@ -36,6 +37,7 @@ GEMINI.md
 .claude/
 .codex/
 .cursor/
+skills-lock.json
 /LESSONS.md
 /.wiki
 auth-server/node_modules

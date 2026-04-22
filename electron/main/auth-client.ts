@@ -210,10 +210,7 @@ export class HydraAuthClient {
       try {
         await fetch(`${this.baseURL}/api/auth/sign-out`, {
           method: "POST",
-          headers: authHeaders({
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          }),
+          headers: authHeaders({ Authorization: `Bearer ${token}` }),
         });
       } catch {
         // best effort

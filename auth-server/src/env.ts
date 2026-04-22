@@ -15,6 +15,7 @@ export type AuthRuntimeConfig = {
   allowedOrigins: string[];
   baseURL: string;
   secret: string;
+  useSecureCookies: boolean;
 };
 
 export function getAuthRuntimeConfig(env: CloudflareBindings): AuthRuntimeConfig {
@@ -28,6 +29,7 @@ export function getAuthRuntimeConfig(env: CloudflareBindings): AuthRuntimeConfig
     allowedOrigins,
     baseURL,
     secret,
+    useSecureCookies: shouldUseSecureCookies(baseURL),
   };
 }
 
@@ -61,6 +63,10 @@ function normalizeBetterAuthUrl(value: string): string {
   }
 
   return parsed.toString().replace(/\/+$/, "");
+}
+
+function shouldUseSecureCookies(baseURL: string): boolean {
+  return new URL(baseURL).protocol === "https:";
 }
 
 function requireEnvValue(value: string | undefined, name: string): string {

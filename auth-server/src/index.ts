@@ -44,7 +44,19 @@ app.all("/api/auth/*", async (c) => {
   }
 
   const auth = createAuth(c.env, c.req.raw.cf as any, result.config.baseURL);
-  return auth.handler(c.req.raw);
+
+  // Reconstruct the request so the body stream is guaranteed to be fresh.
+  // Passing c.req.raw directly can hand better-call a body ReadableStream
+  // that the Workers runtime has already locked/disturbed, which causes
+  // "SyntaxError: Unexpected end of JSON input" inside getBody().
+  const raw = c.req.raw;
+  const hasBody = raw.method !== "GET" && raw.method !== "HEAD" && raw.body;
+  const request = new Request(raw.url, {
+    method: raw.method,
+    headers: raw.headers,
+    body: hasBody ? await raw.arrayBuffer() : undefined,
+  });
+  return auth.handler(request);
 });
 
 // Health check

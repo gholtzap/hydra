@@ -133,11 +133,37 @@
         font-size: 12px;
         font-family: var(--font-sans);
         font-weight: 600;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 10px;
         cursor: pointer;
       }
 
       .oauth-btn:hover:not(:disabled) {
         border-color: var(--border-focus);
+      }
+
+      .oauth-btn-icon {
+        width: 16px;
+        height: 16px;
+        display: block;
+      }
+
+      .oauth-btn-label {
+        line-height: 1;
+      }
+
+      .oauth-btn[data-provider="google"] .oauth-btn-icon {
+        color: #e8e8e8;
+      }
+
+      .oauth-btn[data-provider="discord"] .oauth-btn-icon {
+        color: #5865f2;
+      }
+
+      .oauth-btn[data-provider="github"] .oauth-btn-icon {
+        color: #e8e8e8;
       }
 
       .oauth-btn:disabled {
@@ -274,7 +300,7 @@
   </head>
   <body>
     <div class="card">
-      <div class="logo">hydra <span>// sign in</span></div>
+      <div class="logo">hydra</div>
 
       <div class="tabs">
         <button class="tab-btn active" data-tab="signin">Sign In</button>
@@ -284,9 +310,36 @@
       <div class="oauth-card">
         <div class="oauth-copy">Continue with a provider in your browser. Hydra will return automatically.</div>
         <div class="oauth-grid">
-          <button class="oauth-btn" data-provider="google">Continue with Google</button>
-          <button class="oauth-btn" data-provider="discord">Continue with Discord</button>
-          <button class="oauth-btn" data-provider="github">Continue with GitHub</button>
+          <button class="oauth-btn" data-provider="google" aria-label="Continue with Google">
+            <svg class="oauth-btn-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="#4285F4"
+                d="M21.35 10.45h-9.18v3.1h5.27c-.24 1.43-1.04 2.64-2.27 3.45v2.87h3.67c2.15-1.98 3.39-4.89 3.39-8.34 0-.75-.07-1.32-.18-1.08Z"
+              />
+              <path fill="#34A853" d="M12.17 22c2.72 0 5-0.9 6.67-2.44l-3.67-2.87c-1 .67-2.28 1.08-3.98 1.08-3.06 0-5.65-2.06-6.58-4.84H0.82v3.01C2.47 19.59 6.89 22 12.17 22Z" />
+              <path fill="#FBBC05" d="M5.59 13.93a7.95 7.95 0 0 1 0-5.06V5.86H0.82a11.97 11.97 0 0 0 0 10.08l4.77-2.01Z" />
+              <path fill="#EA4335" d="M12.17 4.77c1.48 0 2.8.51 3.85 1.5l2.89-2.89C17.16 1.73 14.89.75 12.17.75 6.89.75 2.47 3.16.82 6.86l4.77 3.01c.93-2.78 3.52-5.1 6.58-5.1Z" />
+            </svg>
+            <span class="oauth-btn-label">Continue with Google</span>
+          </button>
+          <button class="oauth-btn" data-provider="discord" aria-label="Continue with Discord">
+            <svg class="oauth-btn-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M19.54 5.62a16.6 16.6 0 0 0-4.14-1.28l-.2.41a15.2 15.2 0 0 1 3.1 1.53 12.5 12.5 0 0 0-9.14 0 15.2 15.2 0 0 1 3.1-1.53l-.2-.41A16.6 16.6 0 0 0 7.92 5.62C5.42 9.16 4.75 12.62 4.95 16.03c1.7 1.27 3.35 2.03 4.98 2.53l.6-1.62a10.3 10.3 0 0 1-1.58-.77l.37-.27c3.03 1.41 6.3 1.41 9.31 0l.37.27c-.5.3-1.03.56-1.58.77l.6 1.62c1.63-.5 3.28-1.26 4.98-2.53.22-3.84-.75-7.26-2.46-10.41ZM9.4 14.07c-.9 0-1.64-.82-1.64-1.83 0-1 .72-1.83 1.64-1.83.94 0 1.66.83 1.64 1.83 0 1-.72 1.83-1.64 1.83Zm5.2 0c-.9 0-1.64-.82-1.64-1.83 0-1 .72-1.83 1.64-1.83.94 0 1.66.83 1.64 1.83 0 1-.72 1.83-1.64 1.83Z"
+              />
+            </svg>
+            <span class="oauth-btn-label">Continue with Discord</span>
+          </button>
+          <button class="oauth-btn" data-provider="github" aria-label="Continue with GitHub">
+            <svg class="oauth-btn-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M12 .75A11.25 11.25 0 0 0 8.45 22.7c.56.1.77-.24.77-.54v-1.9c-3.14.68-3.8-1.34-3.8-1.34-.52-1.34-1.27-1.7-1.27-1.7-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.67 1.25 3.33.96.1-.74.4-1.25.73-1.54-2.5-.29-5.13-1.25-5.13-5.57 0-1.23.44-2.23 1.17-3.02-.12-.29-.51-1.48.11-3.08 0 0 .95-.3 3.11 1.15a10.8 10.8 0 0 1 5.66 0c2.16-1.45 3.11-1.15 3.11-1.15.62 1.6.23 2.79.11 3.08.73.79 1.17 1.79 1.17 3.02 0 4.33-2.63 5.28-5.14 5.57.41.35.79 1.05.79 2.11v3.13c0 .31.21.65.78.54A11.25 11.25 0 0 0 12 .75Z"
+              />
+            </svg>
+            <span class="oauth-btn-label">Continue with GitHub</span>
+          </button>
         </div>
         <div class="status" id="oauth-status"></div>
       </div>

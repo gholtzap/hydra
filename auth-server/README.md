@@ -77,14 +77,11 @@ The app boots that client early in [electron/main/main.ts](/Users/omavashia/hydr
 
 Renderer auth UI lives in [electron/renderer/auth.html](/Users/omavashia/hydra/electron/renderer/auth.html:1).
 
-## Local Development
+## Local Setup
 
-Relevant package scripts are in [auth-server/package.json](/Users/omavashia/hydra/auth-server/package.json:7):
+1. Install dependencies once from the repo root: `npm install` and `npm --prefix auth-server install`.
+2. Create `auth-server/.dev.vars` from `auth-server/.dev.vars.example` and set `BETTER_AUTH_SECRET`. Add any OAuth provider credentials you need.
+3. Start everything from the repo root with `npm run dev`. This runs the auth Worker with local D1 migrations and the desktop app together.
 
-- `npm --prefix auth-server run dev` starts Wrangler against the Worker.
-- `npm --prefix auth-server run dev:local` applies local D1 migrations first, then starts dev.
-- `npm --prefix auth-server run generate` regenerates Better Auth schema artifacts.
-- `npm --prefix auth-server run d1:migrate:local` applies migrations to local D1.
-- `npm --prefix auth-server run d1:migrate:remote` applies remote migrations.
+If you only want the auth Worker, run `npm run dev:auth`.
 
-`auth-server/wrangler.toml` defines the Worker name, D1 binding, compatibility flags, and migrations directory.

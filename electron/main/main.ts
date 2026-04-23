@@ -949,12 +949,14 @@ class AppController {
   private async loadAuthenticatedPage(window: ElectronBrowserWindow): Promise<void> {
     try {
       const session = await this.authClient?.initialize();
+      if (window.isDestroyed()) return;
       if (session) {
         window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
       } else {
         window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
       }
     } catch {
+      if (window.isDestroyed()) return;
       // If auth check fails (e.g. server unreachable), show auth page
       window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
     }
@@ -965,8 +967,11 @@ class AppController {
       return;
     }
 
-    if (session && this.window.webContents.getURL().endsWith("/auth.html")) {
+    const currentUrl = this.window.webContents.getURL();
+    if (session && currentUrl.endsWith("/auth.html")) {
       await this.window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
+    } else if (!session && !currentUrl.endsWith("/auth.html")) {
+      await this.window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
     }
   }
 
@@ -1142,10 +1147,13 @@ class AppController {
     });
     ipcMain.handle("auth:signOut", async () => {
       if (!this.authClient) return;
-      await this.authClient.signOut();
-      // Navigate back to auth page
-      if (this.window) {
-        this.window.loadFile(path.join(__dirname, "..", "renderer", "auth.html"));
+      try {
+        await this.authClient.signOut();
+      } finally {
+        // Always navigate back to auth page, even if signOut throws
+        if (this.window && !this.window.isDestroyed()) {
+          this.window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+        }
       }
     });
     ipcMain.handle("auth:openPage", async () => {

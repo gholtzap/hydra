@@ -1772,39 +1772,47 @@ class AppController {
       launchesClaudeOnStart !== false
         ? normalizeAgentId(this.state.preferences.defaultAgentId)
         : null;
-    const session: SessionRecord = {
-      id: sessionId,
-      repoID: repoId,
-      title: repo.name,
-      launchProfile: "agent",
-      initialPrompt: "",
-      launchesClaudeOnStart: !!startupAgentId,
-      startupAgentId,
-      claudeSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
-      agentSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
-      status: "running",
-      runtimeState: "live",
-      blocker: null,
-      unreadCount: 0,
-      createdAt: now(),
-      updatedAt: now(),
-      lastActivityAt: null,
-      stoppedAt: null,
-      launchCount: 1,
-      isPinned: false,
-      tagColor: null,
-      sessionIconPath: null,
-      sessionIconUpdatedAt: null,
-      transcript: "",
-      rawTranscript: ""
-    };
+const session: SessionRecord = {
+    id: sessionId,
+    repoID: repoId,
+    title: repo.name,
+    launchProfile: "agent",
+    initialPrompt: "",
+    launchesClaudeOnStart: !!startupAgentId,
+    startupAgentId,
+    claudeSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
+    agentSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
+    status: "running",
+    runtimeState: "launching",
+    blocker: null,
+    unreadCount: 0,
+    createdAt: now(),
+    updatedAt: now(),
+    lastActivityAt: null,
+    stoppedAt: null,
+    launchCount: 1,
+    isPinned: false,
+    tagColor: null,
+    sessionIconPath: null,
+    sessionIconUpdatedAt: null,
+    transcript: "",
+    rawTranscript: ""
+  };
 
-    this.state.sessions.unshift(session);
-    this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(session.transcript));
+  this.state.sessions.unshift(session);
+  const launchMsg = "Launching opencode...\n";
+  this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(launchMsg));
+  session.transcript = launchMsg;
+  this.broadcastState();
+
+  setImmediate(() => {
     this.launchRuntime(session, repo);
+    session.runtimeState = "live";
     this.scheduleSave();
     this.broadcastState();
-    return session.id;
+  });
+
+  return session.id;
   }
 
   renameSession(sessionId: string, title: string): boolean {

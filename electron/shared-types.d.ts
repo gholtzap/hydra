@@ -108,7 +108,7 @@ export type SessionStatus =
   | "done"
   | "idle";
 
-export type SessionRuntimeState = "live" | "stopped";
+export type SessionRuntimeState = "live" | "stopped" | "launching";
 export type SessionLaunchProfile = "agent" | "shell" | "appLaunch";
 
 export type SessionOrganizationPatch = {

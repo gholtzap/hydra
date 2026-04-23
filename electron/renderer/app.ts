@@ -3212,6 +3212,10 @@ function renderPausedSessionNotice(session) {
     return null;
   }
 
+  if (session.runtimeState === "launching") {
+    return null;
+  }
+
   const body = `This session is paused. Restart it to relaunch ${restartTargetAgentLabel()} in this project.`;
 
   return dom(
@@ -3456,7 +3460,13 @@ function renderInboxCard(session) {
 }
 
 function projectSessionStateLabel(session) {
-  return session.runtimeState === "live" ? "Running" : "Idle";
+  if (session.runtimeState === "live") {
+    return "Running";
+  }
+  if (session.runtimeState === "launching") {
+    return "Launching";
+  }
+  return "Idle";
 }
 
 function renderRepoSession(session) {

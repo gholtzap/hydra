@@ -2,7 +2,13 @@ import type {
   AppCommandPayload,
   AppPreferences,
   AppStateSnapshot,
+  ClaudeExternalUrlRequest,
+  ClaudePathRevealRequest,
+  ClaudeRepoFileRequest,
   ClaudeSettingsContext,
+  ClaudeSettingsFileRequest,
+  ClaudeSettingsSaveRequest,
+  ClaudeSkillFileRequest,
   DirectoryReadResult,
   EphemeralToolExitPayload,
   EphemeralToolId,
@@ -20,40 +26,13 @@ import type {
   SessionSummary,
   SessionUpdatedPayload,
   TrackedPortStatus,
+  VoiceCallState,
+  VoiceConfig,
   WikiContext,
   WikiFileContents
 } from "../shared-types";
 
 const { contextBridge, ipcRenderer } = require("electron");
-
-type ClaudePathRevealRequest =
-  | { scope: "repo-file"; repoId: string; filePath: string }
-  | { scope: "settings-file"; repoId: string | null; filePath: string }
-  | { scope: "session-search-result"; repoId: string; filePath: string };
-
-type ClaudeExternalUrlRequest = {
-  scope: "marketplace-source";
-  url: string;
-};
-
-type ClaudeSettingsFileRequest = {
-  repoId: string | null;
-  filePath: string;
-};
-
-type ClaudeSettingsSaveRequest = ClaudeSettingsFileRequest & {
-  contents: string;
-};
-
-type ClaudeSkillFileRequest = {
-  repoId: string | null;
-  skillFilePath: string;
-};
-
-type ClaudeRepoFileRequest = {
-  repoId: string;
-  filePath: string;
-};
 
 type RepoAppLaunchConfigRequest = {
   repoId: string;
@@ -187,5 +166,20 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
   onEphemeralToolExit: (callback: (payload: EphemeralToolExitPayload) => void) =>
     subscribe<EphemeralToolExitPayload>("ephemeralTool:exit", callback),
   onPlanDetected: (callback: (payload: { sessionId: string; markdown: string }) => void) =>
-    subscribe<{ sessionId: string; markdown: string }>("plan:detected", callback)
+    subscribe<{ sessionId: string; markdown: string }>("plan:detected", callback),
+  startVoiceCall: (config?: Partial<VoiceConfig>) =>
+    invoke<{ success: boolean; port?: number; error?: string }>("voice:start", config),
+  stopVoiceCall: () => invoke<void>("voice:stop"),
+  getVoiceCallState: () => invoke<VoiceCallState>("voice:state"),
+  getVoiceConfig: () => invoke<VoiceConfig>("voice:getConfig"),
+  updateVoiceConfig: (patch: Partial<VoiceConfig>) => invoke<void>("voice:updateConfig", patch),
+  checkPython: () => invoke<{ found: boolean; path?: string; version?: string }>("voice:checkPython"),
+  installVoiceDeps: () => invoke<{ success: boolean; error?: string }>("voice:installDeps"),
+  getVoiceBotPort: () => invoke<number | null>("voice:getBotPort"),
+  onVoiceCallStateChanged: (callback: (state: VoiceCallState) => void) =>
+    subscribe<VoiceCallState>("voice:stateChanged", callback),
+  onVoiceInstallProgress: (callback: (line: string) => void) =>
+    subscribe<string>("voice:installProgress", callback),
+  onVoiceError: (callback: (error: { code: string; message: string }) => void) =>
+    subscribe<{ code: string; message: string }>("voice:error", callback)
 });

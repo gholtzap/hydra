@@ -180,6 +180,17 @@ const { resolveCommandPath } = require("./command-path") as {
 const { startMcpServer } = require("./mcp-server") as {
   startMcpServer: (appController: InstanceType<typeof AppController>) => Promise<any>;
 };
+const { createVoiceManager } = require("./voice-manager") as {
+  createVoiceManager: (
+    mainWindow: ElectronBrowserWindow,
+    getPreferences: () => Record<string, unknown>,
+    updatePreferences: (patch: Record<string, unknown>) => void
+  ) => { dispose: () => Promise<void> };
+};
+const { isPathWithinRoot, normalizeSessionTagColor } = require("./shared-utils") as {
+  isPathWithinRoot: (filePath: string, rootPath: string) => boolean;
+  normalizeSessionTagColor: (value: unknown) => SessionTagColor | null;
+};
 
 app.setName("ClaudeWorkspace");
 
@@ -188,15 +199,6 @@ const FILE_TREE_IGNORED = new Set([
   ".cache", "coverage", ".mypy_cache", ".pytest_cache", ".turbo",
   ".vercel", "out", ".output", ".nuxt", ".svelte-kit", "storybook-static",
   ".parcel-cache", "target", ".gradle", ".idea", ".vscode"
-]);
-const SESSION_TAG_COLORS = new Set([
-  "red",
-  "orange",
-  "yellow",
-  "green",
-  "blue",
-  "purple",
-  "gray"
 ]);
 const SESSION_ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
 const AGENT_LABELS: Record<AgentId, string> = Object.fromEntries(
@@ -210,14 +212,6 @@ function normalizeAbsolutePath(input: unknown, label = "path") {
   }
 
   return path.resolve(value);
-}
-
-function isPathWithinRoot(filePath: string, rootPath: string) {
-  const relativePath = path.relative(path.resolve(rootPath), path.resolve(filePath));
-  return (
-    relativePath === "" ||
-    (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
-  );
 }
 
 function assertMarketplaceSourceUrl(input: unknown) {
@@ -311,6 +305,7 @@ class AppController {
   knownPlanFiles: Set<string>;
   plansDirWatcher: ReturnType<typeof fs.watch> | null;
   mcpServer: any;
+  voiceManager: { dispose: () => Promise<void> } | null;
 
   constructor() {
     this.state = emptyState();
@@ -332,6 +327,7 @@ class AppController {
     this.knownPlanFiles = new Set();
     this.plansDirWatcher = null;
     this.mcpServer = null;
+    this.voiceManager = null;
     this.ptyHost = new PtyHostClient();
     this.ptyHost.onMessage((message) => this.handlePtyMessage(message));
   }
@@ -2147,6 +2143,9 @@ class AppController {
       }
     }
     this.ptyHost.stop();
+    if (this.voiceManager) {
+      await this.voiceManager.dispose();
+    }
     await this.persistNow();
   }
 
@@ -2259,11 +2258,6 @@ function compareInboxSessions(left, right) {
   }
 
   return String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
-}
-
-function normalizeSessionTagColor(value: unknown): SessionTagColor | null {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return SESSION_TAG_COLORS.has(normalized) ? normalized as SessionTagColor : null;
 }
 
 function sessionIconDirectoryPath() {
@@ -2457,6 +2451,13 @@ app.whenReady().then(async () => {
   }).catch((err) =>
     console.error("[MCP] Server failed to start:", err)
   );
+  if (controller.window) {
+    controller.voiceManager = createVoiceManager(
+      controller.window,
+      () => controller.state.preferences,
+      (patch) => controller.updatePreferences(patch)
+    );
+  }
 });
 
 app.on("before-quit", (event) => {

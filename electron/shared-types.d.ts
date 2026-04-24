@@ -80,6 +80,17 @@ export type ThemeDefinition = {
   dark: ThemeSeedPalette;
 };
 
+export type VoiceCallState = "idle" | "connecting" | "listening" | "error";
+
+export interface VoiceConfig {
+  llmProvider: string;
+  sttProvider: string;
+  ttsProvider: string;
+  ttsVoice: string;
+  enableSubagents: boolean;
+  apiKeys: Record<string, string>;
+}
+
 export type AgentDefinition = {
   id: AgentId;
   label: string;
@@ -253,6 +264,35 @@ export type AppCommandPayload = {
 export type Point = {
   x: number;
   y: number;
+};
+
+export type ClaudePathRevealRequest =
+  | { scope: "repo-file"; repoId: string; filePath: string }
+  | { scope: "settings-file"; repoId: string | null; filePath: string }
+  | { scope: "session-search-result"; repoId: string; filePath: string };
+
+export type ClaudeExternalUrlRequest = {
+  scope: "marketplace-source";
+  url: string;
+};
+
+export type ClaudeSettingsFileRequest = {
+  repoId: string | null;
+  filePath: string;
+};
+
+export type ClaudeSettingsSaveRequest = ClaudeSettingsFileRequest & {
+  contents: string;
+};
+
+export type ClaudeSkillFileRequest = {
+  repoId: string | null;
+  skillFilePath: string;
+};
+
+export type ClaudeRepoFileRequest = {
+  repoId: string;
+  filePath: string;
 };
 
 export type WikiTreeNode = {

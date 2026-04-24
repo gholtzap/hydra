@@ -13,6 +13,13 @@ import type {
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
+const { isPathWithinRoot, parseFrontmatter } = require("./shared-utils") as {
+  isPathWithinRoot: (filePath: string, rootPath: string) => boolean;
+  parseFrontmatter: (contents: string) => {
+    values: Record<string, string>;
+    body: string;
+  };
+};
 
 const GITHUB_API_ROOT = "https://api.github.com";
 const GITHUB_RAW_ROOT = "https://raw.githubusercontent.com";
@@ -216,68 +223,9 @@ function isSkillFile(filePath: string) {
   return name === "skill.md";
 }
 
-function isPathWithinRoot(filePath: string, rootPath: string) {
-  const normalizedFile = normalizePath(filePath);
-  const normalizedRoot = normalizePath(rootPath);
-  return normalizedRoot
-    ? normalizedFile === normalizedRoot || normalizedFile.startsWith(`${normalizedRoot}/`)
-    : true;
-}
-
 function rawGithubUrl(source: { owner: string; repo: string; ref: string }, filePath: string) {
   const encodedSegments = encodeGithubPathParts(filePath);
   return `${GITHUB_RAW_ROOT}/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}/${encodeURIComponent(source.ref)}/${encodedSegments}`;
-}
-
-function parseFrontmatter(contents: string) {
-  if (!contents.startsWith("---")) {
-    return {
-      values: {} as Record<string, string>,
-      body: contents
-    };
-  }
-
-  const lines = contents.split(/\r?\n/);
-  if (lines[0].trim() !== "---") {
-    return {
-      values: {} as Record<string, string>,
-      body: contents
-    };
-  }
-
-  const closingIndex = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
-  if (closingIndex === -1) {
-    return {
-      values: {} as Record<string, string>,
-      body: contents
-    };
-  }
-
-  const values: Record<string, string> = {};
-  for (const line of lines.slice(1, closingIndex)) {
-    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-    if (!match) {
-      continue;
-    }
-
-    values[match[1]] = stripYamlQuotes(match[2].trim());
-  }
-
-  return {
-    values,
-    body: lines.slice(closingIndex + 1).join("\n")
-  };
-}
-
-function stripYamlQuotes(value: string) {
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
-    return value.slice(1, -1);
-  }
-
-  return value;
 }
 
 async function getRepoInfo(owner: string, repo: string): Promise<GitHubRepoInfo> {

@@ -7,14 +7,23 @@ import type {
   ClaudeSkillInventoryItem,
   ClaudeSkillRoots,
   ClaudeSkillSourceType,
-  JsonObject,
-  JsonValue
+  JsonObject
 } from "../shared-types";
 
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { isPathWithinRoot, isPlainObject, parseFrontmatter } = require("./shared-utils") as {
+  isPathWithinRoot: (filePath: string, rootPath: string) => boolean;
+  isPlainObject: (value: unknown) => value is JsonObject;
+  parseFrontmatter: (contents: string) => {
+    hasFrontmatter: boolean;
+    lines: string[];
+    values: Record<string, string>;
+    body: string;
+  };
+};
 
 const FILE_LAYOUTS = [
   ["AGENTS.md", "AGENTS.md"],
@@ -91,14 +100,6 @@ function normalizeRepoPaths(repoPaths: unknown): string[] {
         .map((repoPath) => normalizeAccessPath(repoPath))
         .filter(Boolean)
     : [];
-}
-
-function isPathWithinRoot(filePath: string, rootPath: string): boolean {
-  const relativePath = path.relative(rootPath, filePath);
-  return (
-    relativePath === "" ||
-    (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
-  );
 }
 
 function isKnownSettingsLayoutPath(filePath: string, rootPath: string): boolean {
@@ -545,61 +546,6 @@ async function readSkillMetadata(
   };
 }
 
-function parseFrontmatter(contents: string): {
-  hasFrontmatter: boolean;
-  lines: string[];
-  values: Record<string, string>;
-  body: string;
-} {
-  if (!contents.startsWith("---")) {
-    return {
-      hasFrontmatter: false,
-      lines: [],
-      values: {} as Record<string, string>,
-      body: contents
-    };
-  }
-
-  const lines = contents.split(/\r?\n/);
-  if (lines[0].trim() !== "---") {
-    return {
-      hasFrontmatter: false,
-      lines: [],
-      values: {} as Record<string, string>,
-      body: contents
-    };
-  }
-
-  const closingIndex = lines.findIndex((line: string, index: number) => index > 0 && line.trim() === "---");
-  if (closingIndex === -1) {
-    return {
-      hasFrontmatter: false,
-      lines: [],
-      values: {} as Record<string, string>,
-      body: contents
-    };
-  }
-
-  const frontmatterLines = lines.slice(1, closingIndex);
-  const values: Record<string, string> = {};
-
-  for (const line of frontmatterLines) {
-    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-    if (!match) {
-      continue;
-    }
-
-    values[match[1]] = stripYamlScalarQuotes(match[2].trim());
-  }
-
-  return {
-    hasFrontmatter: true,
-    lines: frontmatterLines,
-    values,
-    body: lines.slice(closingIndex + 1).join("\n")
-  };
-}
-
 async function resolveSkillIconPath(skillFilePath: string, iconReference: string): Promise<string> {
   if (!iconReference) {
     return "";
@@ -640,10 +586,6 @@ function setFrontmatterValue(contents: string, key: string, nextValue: string | 
   }
 
   return `${frontmatterBlock}\n\n${body}`;
-}
-
-function stripYamlScalarQuotes(value: string): string {
-  return value.replace(/^["']|["']$/g, "");
 }
 
 function isSupportedSkillIconExtension(extension: string): boolean {
@@ -715,10 +657,6 @@ async function pathExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function isPlainObject(value: unknown): value is JsonObject {
-  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 module.exports = {

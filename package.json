@@ -8,7 +8,8 @@
     "build": "npm run build:main && npm run build:renderer && npm run build:assets",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "tsc -p tsconfig.renderer.json",
-    "build:assets": "mkdir -p dist-electron/main dist-electron/renderer/vendor && cp electron/main/pty_host.py dist-electron/main/pty_host.py && cp electron/main/app-launch-runner.sh dist-electron/main/app-launch-runner.sh && chmod +x dist-electron/main/app-launch-runner.sh && cp electron/renderer/index.html dist-electron/renderer/index.html && cp electron/renderer/app.css dist-electron/renderer/app.css && cp electron/renderer/vendor/xterm.css dist-electron/renderer/vendor/xterm.css && cp electron/renderer/vendor/xterm.js dist-electron/renderer/vendor/xterm.js && cp electron/renderer/vendor/addon-fit.js dist-electron/renderer/vendor/addon-fit.js",
+    "build:vendor:pipecat": "node scripts/build-pipecat-vendor.mjs",
+    "build:assets": "npm run build:vendor:pipecat && mkdir -p dist-electron/main dist-electron/renderer/vendor && cp electron/main/pty_host.py dist-electron/main/pty_host.py && cp electron/main/app-launch-runner.sh dist-electron/main/app-launch-runner.sh && chmod +x dist-electron/main/app-launch-runner.sh && rm -rf dist-electron/main/voice && cp -R voice dist-electron/main/voice && cp electron/renderer/index.html dist-electron/renderer/index.html && cp electron/renderer/app.css dist-electron/renderer/app.css && cp electron/renderer/vendor/xterm.css dist-electron/renderer/vendor/xterm.css && cp electron/renderer/vendor/xterm.js dist-electron/renderer/vendor/xterm.js && cp electron/renderer/vendor/addon-fit.js dist-electron/renderer/vendor/addon-fit.js && cp electron/renderer/vendor/pipecat-client.js dist-electron/renderer/vendor/pipecat-client.js && cp electron/renderer/vendor/pipecat-webrtc.js dist-electron/renderer/vendor/pipecat-webrtc.js",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron ."
   },
@@ -17,8 +18,11 @@
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
+    "@pipecat-ai/client-js": "^1.7.0",
+    "@pipecat-ai/small-webrtc-transport": "^1.10.0",
     "@types/node": "^25.5.2",
     "electron": "^35.0.0",
+    "esbuild": "^0.28.0",
     "typescript": "^6.0.2"
   }
 }

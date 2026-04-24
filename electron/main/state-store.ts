@@ -17,6 +17,10 @@ const { app } = require("electron");
 const { isExecutableFile } = require("./command-path") as {
   isExecutableFile: (filePath: string) => boolean;
 };
+const { isPlainObject, normalizeSessionTagColor } = require("./shared-utils") as {
+  isPlainObject: (value: unknown) => value is Record<string, unknown>;
+  normalizeSessionTagColor: (value: unknown) => SessionTagColor | null;
+};
 
 const AGENT_DEFINITIONS: AgentDefinition[] = [
   { id: "claude", label: "Claude Code", defaultCommand: "claude" },
@@ -53,16 +57,6 @@ const DEFAULT_PREFERENCES: AppPreferences = {
   themeActiveId: "workspace-default",
   themeCustomThemes: []
 };
-const SESSION_TAG_COLORS = new Set([
-  "red",
-  "orange",
-  "yellow",
-  "green",
-  "blue",
-  "purple",
-  "gray"
-]);
-
 async function loadState(): Promise<StoredAppState> {
   const statePath = getStatePath();
 
@@ -258,11 +252,6 @@ function normalizeAgentCommand(value: unknown, agentId: AgentId): string {
   return normalized;
 }
 
-function normalizeSessionTagColor(value: unknown): SessionTagColor | null {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return SESSION_TAG_COLORS.has(normalized) ? normalized as SessionTagColor : null;
-}
-
 function normalizeSessionIconPath(value: unknown): string | null {
   if (typeof value !== "string" || !value) {
     return null;
@@ -273,10 +262,6 @@ function normalizeSessionIconPath(value: unknown): string | null {
 
 function getStatePath(): string {
   return path.join(app.getPath("userData"), "state.json");
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 module.exports = {

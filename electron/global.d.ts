@@ -2,7 +2,13 @@ import type {
   AppCommandPayload,
   AppPreferences,
   AppStateSnapshot,
+  ClaudeExternalUrlRequest,
+  ClaudePathRevealRequest,
+  ClaudeRepoFileRequest,
   ClaudeSettingsContext,
+  ClaudeSettingsFileRequest,
+  ClaudeSettingsSaveRequest,
+  ClaudeSkillFileRequest,
   DirectoryReadResult,
   EphemeralToolExitPayload,
   EphemeralToolId,
@@ -19,40 +25,13 @@ import type {
   SessionSummary,
   SessionUpdatedPayload,
   TrackedPortStatus,
+  VoiceCallState,
+  VoiceConfig,
   WikiContext,
   WikiFileContents
 } from "./shared-types";
 
 type Unsubscribe = () => void;
-
-type ClaudePathRevealRequest =
-  | { scope: "repo-file"; repoId: string; filePath: string }
-  | { scope: "settings-file"; repoId: string | null; filePath: string }
-  | { scope: "session-search-result"; repoId: string; filePath: string };
-
-type ClaudeExternalUrlRequest = {
-  scope: "marketplace-source";
-  url: string;
-};
-
-type ClaudeSettingsFileRequest = {
-  repoId: string | null;
-  filePath: string;
-};
-
-type ClaudeSettingsSaveRequest = ClaudeSettingsFileRequest & {
-  contents: string;
-};
-
-type ClaudeSkillFileRequest = {
-  repoId: string | null;
-  skillFilePath: string;
-};
-
-type ClaudeRepoFileRequest = {
-  repoId: string;
-  filePath: string;
-};
 
 interface ClaudeWorkspaceApi {
   getState: () => Promise<AppStateSnapshot>;
@@ -155,6 +134,27 @@ interface ClaudeWorkspaceApi {
   onPlanDetected: (
     callback: (payload: { sessionId: string; markdown: string }) => void
   ) => Unsubscribe;
+  startVoiceCall: (config?: Partial<VoiceConfig>) => Promise<{
+    success: boolean;
+    port?: number;
+    error?: string;
+  }>;
+  stopVoiceCall: () => Promise<void>;
+  getVoiceCallState: () => Promise<VoiceCallState>;
+  getVoiceConfig: () => Promise<VoiceConfig>;
+  updateVoiceConfig: (patch: Partial<VoiceConfig>) => Promise<void>;
+  checkPython: () => Promise<{ found: boolean; path?: string; version?: string }>;
+  installVoiceDeps: () => Promise<{ success: boolean; error?: string }>;
+  getVoiceBotPort: () => Promise<number | null>;
+  onVoiceCallStateChanged: (
+    callback: (state: VoiceCallState) => void
+  ) => Unsubscribe;
+  onVoiceInstallProgress: (
+    callback: (line: string) => void
+  ) => Unsubscribe;
+  onVoiceError: (
+    callback: (error: { code: string; message: string }) => void
+  ) => Unsubscribe;
 }
 
 interface ClaudeTerminalOptions {
@@ -190,15 +190,33 @@ interface ClaudeFitAddonLike {
   fit: () => void;
 }
 
+interface PipecatClientLike {
+  connect: (params?: unknown) => Promise<unknown>;
+  disconnect: () => Promise<void>;
+  enableMic: (enabled: boolean) => void | Promise<void>;
+  readonly isMicEnabled?: boolean;
+}
+
+interface PipecatClientOptionsLike {
+  transport: unknown;
+  enableMic?: boolean;
+  enableCam?: boolean;
+  callbacks?: Record<string, (...args: any[]) => void>;
+}
+
 declare global {
   interface Window {
     claudeWorkspace: ClaudeWorkspaceApi;
+    PipecatClient: new (options: PipecatClientOptionsLike) => PipecatClientLike;
+    SmallWebRTCTransport: new (options?: Record<string, unknown>) => unknown;
   }
 
   const Terminal: new (options: ClaudeTerminalOptions) => ClaudeTerminalLike;
   const FitAddon: {
     FitAddon: new () => ClaudeFitAddonLike;
   };
+  const PipecatClient: new (options: PipecatClientOptionsLike) => PipecatClientLike;
+  const SmallWebRTCTransport: new (options?: Record<string, unknown>) => unknown;
 }
 
 export {};

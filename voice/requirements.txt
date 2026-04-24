@@ -1,0 +1,13 @@
+# Hydra Voice Agent — Pipecat dependencies
+# Install with: pip install -r requirements.txt
+
+# Core framework, transport, VAD, MCP, and providers
+pipecat-ai[webrtc,silero,mcp]
+pipecat-ai[deepgram,openai,anthropic,google,cartesia,elevenlabs,whisper]
+
+# Optional multi-agent handoff support
+pipecat-ai-subagents
+
+# Signaling server
+uvicorn
+fastapi

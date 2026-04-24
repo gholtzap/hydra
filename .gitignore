@@ -34,4 +34,6 @@ GEMINI.md
 .cursor/
 /LESSONS.md
 /.wiki
-
+auth-server/*
+.agents/
+opencode.json

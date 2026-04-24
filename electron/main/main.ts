@@ -49,6 +49,7 @@ import type {
 } from "../shared-types";
 import type { AppControllerHandle } from "./internal-api";
 import type { HydraMcpServer } from "./mcp-server";
+import type { VoiceManager } from "./voice-manager";
 import {
   extractPreferencesPatch,
   normalizeMarketplaceInstallArgs,
@@ -271,6 +272,13 @@ const { startMcpServer } = require("./mcp-server") as {
     appController: AppControllerHandle,
     options: { authToken: string }
   ) => Promise<HydraMcpServer>;
+};
+const { createVoiceManager } = require("./voice-manager") as {
+  createVoiceManager: (
+    mainWindow: ElectronBrowserWindow,
+    getPreferences: () => Record<string, unknown>,
+    updatePreferences: (patch: Record<string, unknown>) => void
+  ) => VoiceManager;
 };
 
 app.setName("Hydra");
@@ -503,6 +511,9 @@ function sanitizePreferencesPatch(patch: unknown): AppPreferencesPatch {
     nextPatch.themeCustomThemes =
       patch.themeCustomThemes as AppPreferencesPatch["themeCustomThemes"];
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "voiceConfig") && isPlainObject(patch.voiceConfig)) {
+    nextPatch.voiceConfig = patch.voiceConfig as AppPreferencesPatch["voiceConfig"];
+  }
 
   return nextPatch;
 }
@@ -618,6 +629,7 @@ class AppController {
   knownPlanFiles: Set<string>;
   plansDirWatcher: ReturnType<typeof fs.watch> | null;
   mcpServer: HydraMcpServer | null;
+  voiceManager: VoiceManager | null;
 
   constructor() {
     this.state = emptyState();
@@ -644,6 +656,7 @@ class AppController {
     this.knownPlanFiles = new Set();
     this.plansDirWatcher = null;
     this.mcpServer = null;
+    this.voiceManager = null;
     this.ptyHost = new PtyHostClient();
     this.ptyHost.onMessage((message) => this.handlePtyMessage(message));
   }
@@ -887,6 +900,10 @@ class AppController {
       return;
     }
     window.on("closed", () => {
+      if (this.voiceManager) {
+        void this.voiceManager.dispose();
+        this.voiceManager = null;
+      }
       this.window = null;
     });
 
@@ -904,6 +921,11 @@ class AppController {
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 
     window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
+    this.voiceManager = createVoiceManager(
+      window,
+      () => this.state.preferences as unknown as Record<string, unknown>,
+      (patch) => this.updatePreferences(patch)
+    );
   }
 
   setupIpc(): void {
@@ -3020,6 +3042,11 @@ const session: SessionRecord = {
   }
 
   async performShutdown(): Promise<void> {
+    if (this.voiceManager) {
+      await this.voiceManager.dispose();
+      this.voiceManager = null;
+    }
+
     for (const session of this.state.sessions) {
       if (session.runtimeState === "live") {
         this.cancelPendingAgentLaunch(session.id);

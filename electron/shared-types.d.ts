@@ -80,6 +80,17 @@ export type ThemeDefinition = {
   dark: ThemeSeedPalette;
 };
 
+export type VoiceCallState = "idle" | "connecting" | "listening" | "error";
+
+export interface VoiceConfig {
+  llmProvider: string;
+  sttProvider: string;
+  ttsProvider: string;
+  ttsVoice: string;
+  enableSubagents: boolean;
+  apiKeys: Record<string, string>;
+}
+
 export type AgentDefinition = {
   id: AgentId;
   label: string;
@@ -189,6 +200,7 @@ export type AppPreferences = {
   themeAppearance: ThemeAppearance;
   themeActiveId: string;
   themeCustomThemes: ThemeDefinition[];
+  voiceConfig: VoiceConfig;
 };
 
 export type AppPreferencesPatch = {
@@ -204,6 +216,7 @@ export type AppPreferencesPatch = {
   themeAppearance?: ThemeAppearance;
   themeActiveId?: string;
   themeCustomThemes?: ThemeDefinition[];
+  voiceConfig?: Partial<VoiceConfig>;
 };
 
 export type StoredAppState = {

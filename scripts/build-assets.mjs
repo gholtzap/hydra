@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Cross-platform replacement for the shell-based build:assets script.
-import { cpSync, mkdirSync, chmodSync } from "node:fs";
+import { cpSync, mkdirSync, chmodSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { platform } from "node:process";
@@ -11,8 +11,8 @@ function mkdir(dir) {
   mkdirSync(dir, { recursive: true });
 }
 
-function cp(src, dest) {
-  cpSync(join(root, src), join(root, dest));
+function cp(src, dest, options) {
+  cpSync(join(root, src), join(root, dest), options);
 }
 
 try {
@@ -26,6 +26,8 @@ try {
   // App launch runner scripts
   cp("electron/main/app-launch-runner.sh", "dist-electron/main/app-launch-runner.sh");
   cp("electron/main/app-launch-runner.ps1", "dist-electron/main/app-launch-runner.ps1");
+  rmSync(join(root, "dist-electron/main/voice"), { recursive: true, force: true });
+  cp("voice", "dist-electron/main/voice", { recursive: true });
 
   // Make shell script executable on non-Windows platforms
   if (platform !== "win32") {
@@ -38,6 +40,8 @@ try {
   cp("electron/renderer/vendor/xterm.css", "dist-electron/renderer/vendor/xterm.css");
   cp("electron/renderer/vendor/xterm.js", "dist-electron/renderer/vendor/xterm.js");
   cp("electron/renderer/vendor/addon-fit.js", "dist-electron/renderer/vendor/addon-fit.js");
+  cp("electron/renderer/vendor/pipecat-client.js", "dist-electron/renderer/vendor/pipecat-client.js");
+  cp("electron/renderer/vendor/pipecat-webrtc.js", "dist-electron/renderer/vendor/pipecat-webrtc.js");
 } catch (err) {
   process.stderr.write(`build-assets error: ${err.message}\n`);
   process.exit(1);

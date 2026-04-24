@@ -17,6 +17,8 @@ import type {
   SessionSummary,
   SessionTagColor,
   TrackedPortStatus,
+  VoiceCallState,
+  VoiceConfig,
   WikiContext,
   WikiTreeNode as SharedWikiTreeNode,
   WorkspaceRecord
@@ -294,7 +296,15 @@ const INITIAL_PREFERENCES: AppPreferences = {
   keybindings: {},
   themeAppearance: "system",
   themeActiveId: "workspace-default",
-  themeCustomThemes: []
+  themeCustomThemes: [],
+  voiceConfig: {
+    llmProvider: "openai",
+    sttProvider: "deepgram",
+    ttsProvider: "cartesia",
+    ttsVoice: "",
+    enableSubagents: false,
+    apiKeys: {}
+  }
 };
 
 const state: AppStateSnapshot = {
@@ -401,6 +411,11 @@ type UiState = {
   lassoPressedSessionId: string | null;
   lassoSuppressClickUntil: number;
   selectedSessionIds: Set<string>;
+  voiceCallState: VoiceCallState;
+  voiceMuted: boolean;
+  voiceSettingsOpen: boolean;
+  voiceTranscript: { role: "user" | "bot" | "system"; text: string; time: string }[];
+  voiceInstallLog: string;
 };
 
 const ui: UiState = {
@@ -500,7 +515,12 @@ const ui: UiState = {
   lassoContainerRepoId: null as string | null,
   lassoPressedSessionId: null as string | null,
   lassoSuppressClickUntil: 0,
-  selectedSessionIds: new Set<string>()
+  selectedSessionIds: new Set<string>(),
+  voiceCallState: "idle" as VoiceCallState,
+  voiceMuted: false,
+  voiceSettingsOpen: true,
+  voiceTranscript: [] as { role: "user" | "bot" | "system"; text: string; time: string }[],
+  voiceInstallLog: ""
 };
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
@@ -516,6 +536,7 @@ const appLaunchDialog = document.getElementById("app-launch-dialog") as HTMLDial
 const planReviewDialog = document.getElementById("plan-review-dialog") as HTMLDialogElement;
 const tokscaleDialog = document.getElementById("tokscale-dialog") as HTMLDialogElement;
 const lazygitDialog = document.getElementById("lazygit-dialog") as HTMLDialogElement;
+const voiceDialog = document.getElementById("voice-dialog") as HTMLDialogElement;
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
 const EPHEMERAL_TOOL_DIALOGS: Record<
@@ -1205,6 +1226,30 @@ planReviewDialog.addEventListener("cancel", (event) => {
   closePlanReviewDialog();
 });
 
+api.onVoiceCallStateChanged((voiceState) => {
+  ui.voiceCallState = voiceState;
+  renderSidebar();
+  if (voiceDialog.open) {
+    renderVoiceDialog();
+  }
+});
+
+api.onVoiceInstallProgress((line) => {
+  if (line) {
+    ui.voiceInstallLog += line + "\n";
+    if (voiceDialog.open) {
+      renderVoiceDialog();
+    }
+  }
+});
+
+api.onVoiceError((err) => {
+  ui.voiceTranscript.push({ role: "system", text: `Error: ${err.message}`, time: voiceTimeStamp() });
+  if (voiceDialog.open) {
+    renderVoiceDialog();
+  }
+});
+
 for (const [toolId, definition] of Object.entries(EPHEMERAL_TOOL_DIALOGS) as Array<
   [EphemeralToolId, (typeof EPHEMERAL_TOOL_DIALOGS)[EphemeralToolId]]
 >) {
@@ -1558,6 +1603,7 @@ function renderSidebar() {
               sidebarNavMatches(sidebarActionNavId("open-status")) ? "keyboard-active" : undefined
             )
           ),
+          renderVoiceRailButton(),
           renderSidebarUtilityButton(
             "open-settings",
             "Settings",
@@ -5845,6 +5891,25 @@ async function handleClick(event) {
     case "open-status":
       await selectStatus();
       break;
+    case "toggle-voice":
+      toggleVoiceModal();
+      break;
+    case "voice-mute-toggle":
+      toggleVoiceMute();
+      break;
+    case "voice-end":
+      closeVoiceModal();
+      break;
+    case "voice-settings-toggle":
+      ui.voiceSettingsOpen = !ui.voiceSettingsOpen;
+      renderVoiceDialog();
+      break;
+    case "voice-save-config":
+      await saveVoiceConfig();
+      break;
+    case "voice-retry":
+      await startVoiceSession();
+      break;
     case "open-settings":
       await openSettings(target.dataset.settingsTab || "general", {
         claudeView: (target.dataset.settingsClaudeView || undefined) as ClaudeSettingsView | undefined
@@ -8003,6 +8068,436 @@ function handleEphemeralToolOutput(
   }
 }
 
+// ── Voice modal ─────────────────────────────────────────────────
+
+let pipecatClient: InstanceType<typeof window.PipecatClient> | null = null;
+
+function voiceTimeStamp() {
+  const d = new Date();
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function renderVoiceRailButton() {
+  const voiceState = ui.voiceCallState;
+  return dom(
+    "button",
+    {
+      className: classNames(
+        "sidebar-rail-button",
+        "sidebar-voice-button",
+        voiceState !== "idle" ? `voice-${voiceState}` : undefined,
+        sidebarNavMatches(sidebarActionNavId("toggle-voice")) ? "keyboard-active" : undefined
+      ),
+      attrs: {
+        "data-action": "toggle-voice",
+        "data-tooltip": voiceState === "idle" ? "Voice Mode" : voiceState === "listening" ? "Voice Active" : voiceState === "connecting" ? "Connecting..." : "Voice Error",
+        title: "Voice Mode",
+        "aria-label": "Voice Mode"
+      }
+    },
+    renderUtilityIconElement("microphone")
+  );
+}
+
+function toggleVoiceModal() {
+  if (voiceDialog.open) {
+    closeVoiceModal();
+  } else {
+    openVoiceModal();
+  }
+}
+
+async function openVoiceModal() {
+  if (voiceDialog.open) return;
+
+  ui.voiceTranscript = [];
+  ui.voiceInstallLog = "";
+  ui.voiceMuted = false;
+
+  renderVoiceDialog();
+  voiceDialog.showModal();
+
+  voiceDialog.addEventListener("close", onVoiceDialogClose, { once: true });
+
+  await startVoiceSession();
+}
+
+function onVoiceDialogClose() {
+  disconnectPipecatClient();
+  if (ui.voiceCallState !== "idle") {
+    void api.stopVoiceCall();
+    ui.voiceCallState = "idle";
+  }
+  renderSidebar();
+}
+
+function closeVoiceModal() {
+  disconnectPipecatClient();
+  if (ui.voiceCallState !== "idle") {
+    void api.stopVoiceCall();
+    ui.voiceCallState = "idle";
+  }
+  if (voiceDialog.open) {
+    voiceDialog.close();
+  }
+  renderSidebar();
+}
+
+async function startVoiceSession() {
+  ui.voiceTranscript.push({ role: "system", text: "Checking Python...", time: voiceTimeStamp() });
+  renderVoiceDialog();
+
+  const pyCheck = await api.checkPython();
+  if (!pyCheck.found) {
+    ui.voiceTranscript.push({
+      role: "system",
+      text: "Python 3.10+ is required for voice mode. Install from python.org or run: brew install python3",
+      time: voiceTimeStamp()
+    });
+    renderVoiceDialog();
+    return;
+  }
+
+  ui.voiceTranscript.push({ role: "system", text: `Found ${pyCheck.version}. Starting voice bot...`, time: voiceTimeStamp() });
+  renderVoiceDialog();
+
+  const config = await api.getVoiceConfig();
+  const result = await api.startVoiceCall(config);
+
+  if (!result.success || !result.port) {
+    ui.voiceTranscript.push({
+      role: "system",
+      text: result.error || "Failed to start voice bot.",
+      time: voiceTimeStamp()
+    });
+    renderVoiceDialog();
+    return;
+  }
+
+  ui.voiceTranscript.push({ role: "system", text: "Connecting to voice bot...", time: voiceTimeStamp() });
+  renderVoiceDialog();
+
+  await connectPipecatClient(result.port);
+}
+
+async function connectPipecatClient(port: number) {
+  disconnectPipecatClient();
+
+  if (typeof window.PipecatClient === "undefined" || typeof window.SmallWebRTCTransport === "undefined") {
+    ui.voiceTranscript.push({
+      role: "system",
+      text: "Pipecat client SDK not loaded. Check that vendor scripts are present.",
+      time: voiceTimeStamp()
+    });
+    renderVoiceDialog();
+    return;
+  }
+
+  try {
+    pipecatClient = new window.PipecatClient({
+      transport: new window.SmallWebRTCTransport(),
+      enableCam: false,
+      enableMic: true,
+      callbacks: {
+        onConnected: () => {
+          ui.voiceTranscript.push({ role: "system", text: "Connected. Start speaking.", time: voiceTimeStamp() });
+          renderVoiceDialog();
+        },
+        onDisconnected: () => {
+          ui.voiceTranscript.push({ role: "system", text: "Disconnected.", time: voiceTimeStamp() });
+          renderVoiceDialog();
+        },
+        onBotReady: () => {
+          // Bot pipeline is ready
+        },
+        onUserTranscript: (data: { text: string; final: boolean }) => {
+          if (data.final && data.text.trim()) {
+            ui.voiceTranscript.push({ role: "user", text: data.text.trim(), time: voiceTimeStamp() });
+            renderVoiceDialog();
+            scrollVoiceTranscript();
+          }
+        },
+        onBotOutput: (data: { text: string; spoken: boolean }) => {
+          if (data.text.trim()) {
+            ui.voiceTranscript.push({ role: "bot", text: data.text.trim(), time: voiceTimeStamp() });
+            renderVoiceDialog();
+            scrollVoiceTranscript();
+          }
+        },
+        onLocalAudioLevel: (level: number) => {
+          const bar = document.getElementById("voice-mic-bar");
+          if (bar) {
+            bar.style.width = `${Math.min(100, level * 100)}%`;
+          }
+        },
+        onError: (error: { message?: string }) => {
+          ui.voiceTranscript.push({
+            role: "system",
+            text: `Error: ${error.message || "Unknown error"}`,
+            time: voiceTimeStamp()
+          });
+          renderVoiceDialog();
+        },
+        onTrackStarted: (track: MediaStreamTrack, participant: { local?: boolean } | undefined) => {
+          if (!participant?.local && track.kind === "audio") {
+            const audio = document.createElement("audio");
+            audio.srcObject = new MediaStream([track]);
+            audio.autoplay = true;
+            const host = document.getElementById("voice-audio-host");
+            if (host) {
+              host.innerHTML = "";
+              host.appendChild(audio);
+            }
+          }
+        }
+      }
+    });
+
+    await pipecatClient.connect({
+      webrtcRequestParams: {
+        endpoint: `http://localhost:${port}/api/offer`
+      }
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ui.voiceTranscript.push({ role: "system", text: `Connection failed: ${msg}`, time: voiceTimeStamp() });
+    renderVoiceDialog();
+  }
+}
+
+function disconnectPipecatClient() {
+  if (pipecatClient) {
+    try {
+      pipecatClient.disconnect();
+    } catch {
+      // Ignore disconnect errors
+    }
+    pipecatClient = null;
+  }
+
+  const host = document.getElementById("voice-audio-host");
+  if (host) {
+    host.innerHTML = "";
+  }
+}
+
+function toggleVoiceMute() {
+  if (!pipecatClient) return;
+  ui.voiceMuted = !ui.voiceMuted;
+  pipecatClient.enableMic(!ui.voiceMuted);
+  renderVoiceDialog();
+}
+
+async function saveVoiceConfig() {
+  const form = document.getElementById("voice-settings-form") as HTMLFormElement | null;
+  if (!form) return;
+
+  const data = new FormData(form);
+  const patch: Partial<VoiceConfig> = {
+    llmProvider: (data.get("llmProvider") as string) || "openai",
+    sttProvider: (data.get("sttProvider") as string) || "deepgram",
+    ttsProvider: (data.get("ttsProvider") as string) || "cartesia",
+    ttsVoice: (data.get("ttsVoice") as string) || "",
+    enableSubagents: data.get("enableSubagents") === "on",
+    apiKeys: {
+      OPENAI_API_KEY: (data.get("OPENAI_API_KEY") as string) || "",
+      ANTHROPIC_API_KEY: (data.get("ANTHROPIC_API_KEY") as string) || "",
+      GOOGLE_API_KEY: (data.get("GOOGLE_API_KEY") as string) || "",
+      DEEPGRAM_API_KEY: (data.get("DEEPGRAM_API_KEY") as string) || "",
+      CARTESIA_API_KEY: (data.get("CARTESIA_API_KEY") as string) || "",
+      ELEVENLABS_API_KEY: (data.get("ELEVENLABS_API_KEY") as string) || ""
+    }
+  };
+
+  await api.updateVoiceConfig(patch);
+
+  ui.voiceTranscript.push({ role: "system", text: "Settings saved. Reconnecting...", time: voiceTimeStamp() });
+  renderVoiceDialog();
+
+  // Restart the session with new config
+  disconnectPipecatClient();
+  if (ui.voiceCallState !== "idle") {
+    await api.stopVoiceCall();
+  }
+  await startVoiceSession();
+}
+
+function scrollVoiceTranscript() {
+  requestAnimationFrame(() => {
+    const el = document.getElementById("voice-transcript-scroll");
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  });
+}
+
+function renderVoiceDialog() {
+  const host = document.getElementById("voice-dialog-host");
+  if (!host) return;
+
+  const voiceState = ui.voiceCallState;
+  const config = state.preferences.voiceConfig as VoiceConfig | undefined;
+  const cfg: VoiceConfig = config || {
+    llmProvider: "openai", sttProvider: "deepgram", ttsProvider: "cartesia",
+    ttsVoice: "", enableSubagents: false, apiKeys: {}
+  };
+
+  const isActive = voiceState === "listening" || voiceState === "connecting";
+
+  replaceDomChildren(
+    host,
+    dom(
+      "div",
+      { className: "voice-modal" },
+      // Header
+      dom(
+        "div",
+        { className: "voice-modal-header" },
+        dom("h2", {}, "Voice Mode"),
+        dom(
+          "span",
+          {
+            className: classNames(
+              "voice-status",
+              voiceState === "connecting" ? "voice-status-connecting" : undefined,
+              voiceState === "listening" ? "voice-status-listening" : undefined,
+              voiceState === "error" ? "voice-status-error" : undefined
+            )
+          },
+          voiceState === "idle" ? "" : voiceState === "connecting" ? "Connecting..." : voiceState === "listening" ? "Listening" : "Error"
+        ),
+        dom(
+          "div",
+          { className: "voice-modal-header-actions" },
+          dom("button", {
+            className: "voice-btn",
+            attrs: { "data-action": "voice-settings-toggle", title: "Toggle Settings" }
+          }, renderUtilityIconElement("settings")),
+          dom("button", {
+            className: "voice-btn voice-btn-danger",
+            attrs: { "data-action": "voice-end", title: "Close" }
+          }, "\u2715")
+        )
+      ),
+      // Body
+      dom(
+        "div",
+        { className: "voice-modal-body" },
+        // Left: transcript panel
+        dom(
+          "div",
+          { className: "voice-transcript-panel" },
+          // Transcript scroll area
+          dom(
+            "div",
+            { className: "voice-transcript-scroll", attrs: { id: "voice-transcript-scroll" } },
+            ...ui.voiceTranscript.map((entry) =>
+              dom(
+                "div",
+                { className: classNames("voice-transcript-entry", entry.role) },
+                dom("div", {}, entry.text),
+                dom("div", { className: "voice-transcript-time" }, entry.time)
+              )
+            ),
+            // Install log
+            ui.voiceInstallLog
+              ? dom("div", { className: "voice-install-log" }, ui.voiceInstallLog)
+              : null
+          ),
+          // Controls bar
+          dom(
+            "div",
+            { className: "voice-controls" },
+            dom(
+              "div",
+              { className: "voice-mic-level" },
+              dom("div", { className: "voice-mic-level-bar", attrs: { id: "voice-mic-bar" } })
+            ),
+            isActive
+              ? dom("button", {
+                  className: classNames("voice-btn", ui.voiceMuted ? "voice-btn-primary" : undefined),
+                  attrs: { "data-action": "voice-mute-toggle" }
+                }, ui.voiceMuted ? "Unmute" : "Mute")
+              : null,
+            voiceState === "error"
+              ? dom("button", {
+                  className: "voice-btn voice-btn-primary",
+                  attrs: { "data-action": "voice-retry" }
+                }, "Retry")
+              : null,
+            isActive
+              ? dom("button", {
+                  className: "voice-btn voice-btn-danger",
+                  attrs: { "data-action": "voice-end" }
+                }, "End Call")
+              : null
+          )
+        ),
+        // Right: settings panel
+        dom(
+          "div",
+          { className: classNames("voice-settings-panel", ui.voiceSettingsOpen ? undefined : "collapsed") },
+          trustedFragment(`
+            <form id="voice-settings-form">
+              <div class="voice-settings-group">
+                <label>LLM Provider</label>
+                <select name="llmProvider">
+                  <option value="openai" ${cfg.llmProvider === "openai" ? "selected" : ""}>OpenAI</option>
+                  <option value="anthropic" ${cfg.llmProvider === "anthropic" ? "selected" : ""}>Anthropic</option>
+                  <option value="google" ${cfg.llmProvider === "google" ? "selected" : ""}>Google</option>
+                  <option value="ollama" ${cfg.llmProvider === "ollama" ? "selected" : ""}>Ollama (local)</option>
+                </select>
+              </div>
+              <div class="voice-settings-group">
+                <label>STT Provider</label>
+                <select name="sttProvider">
+                  <option value="deepgram" ${cfg.sttProvider === "deepgram" ? "selected" : ""}>Deepgram</option>
+                  <option value="google" ${cfg.sttProvider === "google" ? "selected" : ""}>Google</option>
+                  <option value="whisper" ${cfg.sttProvider === "whisper" ? "selected" : ""}>Whisper (local)</option>
+                </select>
+              </div>
+              <div class="voice-settings-group">
+                <label>TTS Provider</label>
+                <select name="ttsProvider">
+                  <option value="cartesia" ${cfg.ttsProvider === "cartesia" ? "selected" : ""}>Cartesia</option>
+                  <option value="elevenlabs" ${cfg.ttsProvider === "elevenlabs" ? "selected" : ""}>ElevenLabs</option>
+                  <option value="deepgram" ${cfg.ttsProvider === "deepgram" ? "selected" : ""}>Deepgram</option>
+                </select>
+              </div>
+              <div class="voice-settings-group">
+                <label>TTS Voice ID (optional)</label>
+                <input type="text" name="ttsVoice" value="${escapeAttribute(cfg.ttsVoice || "")}" placeholder="Default voice" />
+              </div>
+              <div class="voice-settings-group">
+                <label>API Keys</label>
+                <input type="password" name="OPENAI_API_KEY" value="${escapeAttribute(cfg.apiKeys.OPENAI_API_KEY || "")}" placeholder="OpenAI API Key" style="margin-bottom:6px" />
+                <input type="password" name="ANTHROPIC_API_KEY" value="${escapeAttribute(cfg.apiKeys.ANTHROPIC_API_KEY || "")}" placeholder="Anthropic API Key" style="margin-bottom:6px" />
+                <input type="password" name="GOOGLE_API_KEY" value="${escapeAttribute(cfg.apiKeys.GOOGLE_API_KEY || "")}" placeholder="Google API Key" style="margin-bottom:6px" />
+                <input type="password" name="DEEPGRAM_API_KEY" value="${escapeAttribute(cfg.apiKeys.DEEPGRAM_API_KEY || "")}" placeholder="Deepgram API Key" style="margin-bottom:6px" />
+                <input type="password" name="CARTESIA_API_KEY" value="${escapeAttribute(cfg.apiKeys.CARTESIA_API_KEY || "")}" placeholder="Cartesia API Key" style="margin-bottom:6px" />
+                <input type="password" name="ELEVENLABS_API_KEY" value="${escapeAttribute(cfg.apiKeys.ELEVENLABS_API_KEY || "")}" placeholder="ElevenLabs API Key" />
+              </div>
+              <div class="voice-settings-group">
+                <div class="voice-settings-toggle">
+                  <label style="margin:0;text-transform:none">Enable Subagents</label>
+                  <input type="checkbox" name="enableSubagents" ${cfg.enableSubagents ? "checked" : ""} />
+                </div>
+              </div>
+              <button type="button" class="voice-btn voice-btn-primary" data-action="voice-save-config" style="width:100%">
+                Save &amp; Reconnect
+              </button>
+            </form>
+          `)
+        )
+      ),
+      // Hidden audio host for bot playback
+      dom("div", { attrs: { id: "voice-audio-host" }, className: "hidden" })
+    )
+  );
+
+  scrollVoiceTranscript();
+}
+
 async function openEphemeralToolOverlay(toolId: EphemeralToolId, repoId: string | null) {
   if (!repoId || overlayDialog(toolId).open) {
     return;
@@ -10021,6 +10516,7 @@ function syncSidebarNavItemFromTarget(target) {
     case "open-workspace":
     case "create-project":
     case "open-status":
+    case "toggle-voice":
     case "open-settings":
     case "collapse-sidebar":
       ui.sidebarNavItem = sidebarActionNavId(action);
@@ -11020,6 +11516,14 @@ function renderUtilityIcon(kind) {
           <path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M17.3 6.7l-1.4 1.4M8.1 15.9l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
         </svg>
       `;
+    case "microphone":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.7"/>
+          <path d="M5 12a7 7 0 0 0 14 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+          <path d="M12 19v3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+      `;
     case "collapse":
       return `
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -11148,6 +11652,9 @@ async function activateSidebarNavItem() {
         break;
       case "open-settings":
         await openSettings("general");
+        break;
+      case "toggle-voice":
+        toggleVoiceModal();
         break;
       case "collapse-sidebar":
         collapseSidebarChrome();

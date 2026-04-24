@@ -43,3 +43,4 @@ auth-server/node_modules
 auth-server/.dev.vars
 .agents/
 skills-lock.json
+opencode.json

@@ -311,10 +311,16 @@ type RepoSessionStats = {
   attentionCount: number;
 };
 
+type RepoIndex = {
+  byId: Map<string, RepoSnapshot>;
+  sorted: RepoSnapshot[];
+};
+
 type SessionIndex = {
   byId: Map<string, SessionSummary>;
   byRepoId: Map<string, SessionSummary[]>;
   repoStatsById: Map<string, RepoSessionStats>;
+  allSorted: SessionSummary[];
   inbox: SessionSummary[];
   mostRecent: SessionSummary | null;
 };
@@ -325,6 +331,7 @@ const EMPTY_REPO_SESSION_STATS: RepoSessionStats = {
   attentionCount: 0
 };
 
+let repoIndex: RepoIndex = buildRepoIndex(state.repos);
 let sessionIndex: SessionIndex = buildSessionIndex(state.sessions);
 
 type UiState = {
@@ -1447,6 +1454,7 @@ async function initialize() {
 function replaceState(nextState) {
   state.workspaces = nextState.workspaces || [];
   state.repos = nextState.repos || [];
+  rebuildRepoIndex();
   state.sessions = nextState.sessions || [];
   rebuildSessionIndex();
   state.preferences = nextState.preferences || {};
@@ -3651,21 +3659,17 @@ function renderDialogs() {
 
 function renderQuickSwitcherDialog() {
   const normalized = ui.quickSwitcherQuery.trim().toLowerCase();
-  const sessions = state.sessions
-    .filter((session) => {
-      if (!normalized) {
-        return true;
-      }
-      const repoName = (repoById(session.repoID)?.name || "").toLowerCase();
-      return session.title.toLowerCase().includes(normalized) || repoName.includes(normalized);
-    })
-    .sort(compareSessions);
-  const repos = state.repos.filter((repo) => {
-    if (!normalized) {
-      return true;
-    }
-    return repo.name.toLowerCase().includes(normalized) || repo.path.toLowerCase().includes(normalized);
-  });
+  const sessions = normalized
+    ? sessionIndex.allSorted.filter((session) => {
+        const repoName = (repoById(session.repoID)?.name || "").toLowerCase();
+        return session.title.toLowerCase().includes(normalized) || repoName.includes(normalized);
+      })
+    : sessionIndex.allSorted;
+  const repos = normalized
+    ? sortedRepos().filter((repo) =>
+        repo.name.toLowerCase().includes(normalized) || repo.path.toLowerCase().includes(normalized)
+      )
+    : sortedRepos();
 
   replaceDomChildren(
     quickSwitcherDialog,
@@ -10083,7 +10087,7 @@ function repoById(repoId: string | null | undefined): RepoSnapshot | null {
     return null;
   }
 
-  return state.repos.find((repo) => repo.id === repoId) || null;
+  return repoIndex.byId.get(repoId) || null;
 }
 
 function currentRepoId(): string | null {
@@ -10626,7 +10630,7 @@ function focusCurrentSectionElement() {
 }
 
 function sortedRepos() {
-  return [...state.repos].sort(compareRepos);
+  return repoIndex.sorted;
 }
 
 function compareRepos(left, right) {
@@ -10847,6 +10851,23 @@ function scrollMainListSelectionIntoView() {
   target?.scrollIntoView({ block: "nearest" });
 }
 
+function rebuildRepoIndex(): void {
+  repoIndex = buildRepoIndex(state.repos);
+}
+
+function buildRepoIndex(repos: RepoSnapshot[]): RepoIndex {
+  const byId = new Map<string, RepoSnapshot>();
+
+  for (const repo of repos) {
+    byId.set(repo.id, repo);
+  }
+
+  return {
+    byId,
+    sorted: [...repos].sort(compareRepos)
+  };
+}
+
 function rebuildSessionIndex(): void {
   sessionIndex = buildSessionIndex(state.sessions);
 }
@@ -10855,6 +10876,7 @@ function buildSessionIndex(sessions: SessionSummary[]): SessionIndex {
   const byId = new Map<string, SessionSummary>();
   const byRepoId = new Map<string, SessionSummary[]>();
   const repoStatsById = new Map<string, RepoSessionStats>();
+  const allSorted = [...sessions].sort(compareSessions);
   const inbox: SessionSummary[] = [];
   let mostRecent: SessionSummary | null = null;
 
@@ -10897,6 +10919,7 @@ function buildSessionIndex(sessions: SessionSummary[]): SessionIndex {
     byId,
     byRepoId,
     repoStatsById,
+    allSorted,
     inbox,
     mostRecent
   };

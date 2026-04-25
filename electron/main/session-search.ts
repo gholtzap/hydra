@@ -18,6 +18,8 @@ const INSTALL_COMMAND = process.platform === "win32"
 const MAX_RESULTS = 50;
 const MAX_CODEX_METADATA_BYTES = 64 * 1024;
 const COMMAND_OUTPUT_MAX_BUFFER = 8 * 1024 * 1024;
+const SESSION_FILE_CACHE_TTL_MS = 5_000;
+const SESSION_FILE_CACHE_MAX_ENTRIES = 12;
 
 type SearchToolPaths = {
   fzfPath: string | null;
@@ -26,6 +28,13 @@ type SearchToolPaths = {
 };
 
 type SessionSearchFileRecord = Omit<SessionSearchResult, "lineNumber" | "preview">;
+type SessionSearchFileCacheEntry = {
+  cachedAt: number;
+  files: SessionSearchFileRecord[];
+  pending: Promise<SessionSearchFileRecord[]> | null;
+};
+
+const sessionSearchFileCache = new Map<string, SessionSearchFileCacheEntry>();
 
 async function searchProjectSessions(repoPath: string): Promise<SessionSearchResponse> {
   const trimmedRepoPath = typeof repoPath === "string" ? repoPath.trim() : "";
@@ -50,11 +59,10 @@ async function searchProjectSessions(repoPath: string): Promise<SessionSearchRes
     };
   }
 
-  const claudeFiles = await collectClaudeFiles(trimmedRepoPath);
-  const codexFiles = await collectCodexFiles(trimmedRepoPath, tools.rgPath);
-  const allFiles = [...claudeFiles, ...codexFiles];
-  const matches = await collectMatches(trimmedRepoPath, allFiles, tools.rgPath);
-  const results = await rankMatches(matches, trimmedRepoPath, tools.fzfPath);
+  const normalizedRepoPath = normalizeRepoSearchPath(trimmedRepoPath);
+  const allFiles = await getSessionSearchFileRecords(normalizedRepoPath, tools.rgPath);
+  const matches = await collectMatches(normalizedRepoPath, allFiles, tools.rgPath);
+  const results = await rankMatches(matches, normalizedRepoPath, tools.fzfPath);
 
   return {
     ok: true,
@@ -97,9 +105,8 @@ async function queryProjectSessions(repoPath: string, query: string): Promise<Se
     };
   }
 
-  const claudeFiles = await collectClaudeFiles(trimmedRepoPath);
-  const codexFiles = await collectCodexFiles(trimmedRepoPath, tools.rgPath);
-  const allFiles = [...claudeFiles, ...codexFiles];
+  const normalizedRepoPath = normalizeRepoSearchPath(trimmedRepoPath);
+  const allFiles = await getSessionSearchFileRecords(normalizedRepoPath, tools.rgPath);
   const matches = await collectMatches(trimmedQuery, allFiles, tools.rgPath);
   const results = await rankMatches(matches, trimmedQuery, tools.fzfPath);
 
@@ -109,6 +116,107 @@ async function queryProjectSessions(repoPath: string, query: string): Promise<Se
     missingTools: [],
     results
   };
+}
+
+function normalizeRepoSearchPath(repoPath: string): string {
+  return path.resolve(repoPath);
+}
+
+function touchSessionSearchFileCache(
+  repoPath: string,
+  entry: SessionSearchFileCacheEntry
+): void {
+  sessionSearchFileCache.delete(repoPath);
+  sessionSearchFileCache.set(repoPath, entry);
+}
+
+function pruneSessionSearchFileCache(nowMs: number = Date.now()): void {
+  for (const [repoPath, entry] of sessionSearchFileCache) {
+    if (!entry.pending && nowMs - entry.cachedAt > SESSION_FILE_CACHE_TTL_MS) {
+      sessionSearchFileCache.delete(repoPath);
+    }
+  }
+
+  while (sessionSearchFileCache.size > SESSION_FILE_CACHE_MAX_ENTRIES) {
+    const oldestSettledEntry = Array.from(sessionSearchFileCache.entries()).find(
+      ([, entry]) => !entry.pending
+    );
+    if (!oldestSettledEntry) {
+      break;
+    }
+
+    sessionSearchFileCache.delete(oldestSettledEntry[0]);
+  }
+}
+
+function invalidateSessionSearchCache(repoPath?: string | null): void {
+  if (!repoPath || !repoPath.trim()) {
+    sessionSearchFileCache.clear();
+    return;
+  }
+
+  sessionSearchFileCache.delete(normalizeRepoSearchPath(repoPath.trim()));
+}
+
+async function getSessionSearchFileRecords(
+  repoPath: string,
+  rgPath: string | null
+): Promise<SessionSearchFileRecord[]> {
+  const normalizedRepoPath = normalizeRepoSearchPath(repoPath);
+  const nowMs = Date.now();
+  pruneSessionSearchFileCache(nowMs);
+
+  const existingEntry = sessionSearchFileCache.get(normalizedRepoPath);
+  if (existingEntry?.pending) {
+    return existingEntry.pending;
+  }
+
+  if (existingEntry && nowMs - existingEntry.cachedAt <= SESSION_FILE_CACHE_TTL_MS) {
+    touchSessionSearchFileCache(normalizedRepoPath, existingEntry);
+    return existingEntry.files;
+  }
+
+  const pending = loadSessionSearchFileRecords(normalizedRepoPath, rgPath);
+  touchSessionSearchFileCache(normalizedRepoPath, {
+    cachedAt: existingEntry?.cachedAt ?? 0,
+    files: existingEntry?.files ?? [],
+    pending
+  });
+
+  try {
+    const files = await pending;
+    touchSessionSearchFileCache(normalizedRepoPath, {
+      cachedAt: Date.now(),
+      files,
+      pending: null
+    });
+    pruneSessionSearchFileCache();
+    return files;
+  } catch (error) {
+    const currentEntry = sessionSearchFileCache.get(normalizedRepoPath);
+    if (currentEntry?.pending === pending) {
+      if (existingEntry) {
+        touchSessionSearchFileCache(normalizedRepoPath, {
+          cachedAt: existingEntry.cachedAt,
+          files: existingEntry.files,
+          pending: null
+        });
+      } else {
+        sessionSearchFileCache.delete(normalizedRepoPath);
+      }
+    }
+
+    throw error;
+  }
+}
+
+async function loadSessionSearchFileRecords(
+  repoPath: string,
+  rgPath: string | null
+): Promise<SessionSearchFileRecord[]> {
+  const claudeFiles = await collectClaudeFiles(repoPath);
+  const codexFiles = await collectCodexFiles(repoPath, rgPath);
+  return [...claudeFiles, ...codexFiles];
 }
 
 async function resolveRequiredTools(): Promise<SearchToolPaths> {
@@ -469,6 +577,7 @@ async function readCodexMetadataSnippet(filePath: string): Promise<string> {
 
 module.exports = {
   INSTALL_COMMAND,
+  invalidateSessionSearchCache,
   isSessionSearchResultPathForRepo,
   queryProjectSessions,
   searchProjectSessions

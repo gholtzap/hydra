@@ -11299,8 +11299,8 @@ function renderUtilityIcon(kind) {
     case "settings":
       return `
         <svg viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/>
-          <path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M17.3 6.7l-1.4 1.4M8.1 15.9l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+          <path d="M10.4 3.9h3.2l.46 2.17c.51.15.99.35 1.44.61l1.95-1.07 2.26 2.26-1.07 1.95c.26.45.46.93.61 1.44l2.17.46v3.2l-2.17.46a6.77 6.77 0 0 1-.61 1.44l1.07 1.95-2.26 2.26-1.95-1.07c-.45.26-.93.46-1.44.61l-.46 2.17h-3.2l-.46-2.17a6.77 6.77 0 0 1-1.44-.61l-1.95 1.07-2.26-2.26 1.07-1.95a6.77 6.77 0 0 1-.61-1.44l-2.17-.46v-3.2l2.17-.46c.15-.51.35-.99.61-1.44L6.49 7.61l2.26-2.26 1.95 1.07c.45-.26.93-.46 1.44-.61Z" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linejoin="round"/>
+          <circle cx="12" cy="12" r="2.7" fill="none" stroke="currentColor" stroke-width="1.7"/>
         </svg>
       `;
     case "collapse":

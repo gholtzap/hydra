@@ -100,6 +100,20 @@
   --terminal-shell-top: transparent;
   --terminal-shell-bottom: transparent;
   --terminal-scrollbar: oklch(0.5600 0.0060 80 / 0.25);
+  --workspace-backdrop: oklch(0.9820 0.0030 88);
+  --workspace-toolbar-surface: oklch(0.9940 0.0020 92 / 0.84);
+  --workspace-toolbar-border: oklch(0.7800 0.0080 82 / 0.24);
+  --workspace-menu-surface: oklch(0.9920 0.0020 92 / 0.98);
+  --workspace-menu-border: oklch(0.7600 0.0080 82 / 0.18);
+  --workspace-separator: oklch(0.7300 0.0080 82 / 0.20);
+  --workspace-pane-outline: oklch(0.7600 0.0060 86 / 0.16);
+  --workspace-pane-shadow: 0 16px 40px hsl(0 0% 0% / 0.05);
+  --workspace-pane-active-shadow:
+    0 18px 42px hsl(0 0% 0% / 0.08),
+    0 0 0 1px color-mix(in oklab, var(--ring) 24%, transparent);
+  --workspace-pane-inactive-opacity: 0.84;
+  --workspace-pane-inactive-terminal-opacity: 0.78;
+  --workspace-terminal-overlay: oklch(0.9950 0.0020 95 / 0.72);
   --session-tag-red: oklch(0.6300 0.2200 28);
   --session-tag-orange: oklch(0.7200 0.1800 52);
   --session-tag-yellow: oklch(0.8400 0.1600 96);
@@ -199,6 +213,20 @@
   --terminal-shell-top: transparent;
   --terminal-shell-bottom: transparent;
   --terminal-scrollbar: oklch(0.6800 0.0060 80 / 0.25);
+  --workspace-backdrop: oklch(0.1600 0.0040 82);
+  --workspace-toolbar-surface: oklch(0.2300 0.0040 84 / 0.82);
+  --workspace-toolbar-border: oklch(0.7600 0.0080 90 / 0.12);
+  --workspace-menu-surface: oklch(0.2240 0.0040 84 / 0.98);
+  --workspace-menu-border: oklch(0.7600 0.0080 90 / 0.14);
+  --workspace-separator: oklch(0.7200 0.0080 90 / 0.12);
+  --workspace-pane-outline: oklch(0.7800 0.0080 90 / 0.12);
+  --workspace-pane-shadow: 0 24px 58px hsl(0 0% 0% / 0.24);
+  --workspace-pane-active-shadow:
+    0 26px 64px hsl(0 0% 0% / 0.34),
+    0 0 0 1px color-mix(in oklab, var(--ring) 22%, transparent);
+  --workspace-pane-inactive-opacity: 0.8;
+  --workspace-pane-inactive-terminal-opacity: 0.74;
+  --workspace-terminal-overlay: oklch(0.1800 0.0040 84 / 0.60);
 }
 
 * {
@@ -381,10 +409,11 @@ textarea {
   min-height: 0;
   width: var(--sidebar-column-width);
   justify-self: start;
-  overflow: hidden;
-  padding: 10px 8px;
+  overflow: visible;
+  padding: 8px 6px;
   border-right: 1px solid var(--border);
   background: var(--sidebar-surface);
+  z-index: 1;
   transition:
     transform 140ms ease,
     padding 140ms ease,
@@ -401,6 +430,7 @@ textarea {
   padding-inline: 0;
   border-right-color: transparent;
   opacity: 0;
+  overflow: hidden;
 }
 
 #sidebar:focus,
@@ -417,7 +447,7 @@ textarea {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 8px;
+  padding: 6px;
   overflow: hidden;
 }
 
@@ -429,7 +459,7 @@ textarea {
 }
 
 .sidebar-shell-expanded {
-  gap: 12px;
+  gap: 8px;
 }
 
 .sidebar-rail {
@@ -452,7 +482,10 @@ textarea {
 
 .sidebar-rail-top {
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   padding-right: 2px;
 }
 
@@ -578,10 +611,10 @@ textarea {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px 14px 12px;
+  gap: 10px;
+  padding: 12px 12px 10px;
   border: 1px solid var(--border);
-  border-radius: 22px;
+  border-radius: 18px;
   background: var(--surface-soft);
   min-height: 0;
 }
@@ -655,7 +688,16 @@ textarea {
   flex-direction: column;
   gap: 6px;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.sidebar-rail-top::-webkit-scrollbar,
+.sidebar-project-drawer-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .sidebar-project-drawer-empty {
@@ -1106,8 +1148,7 @@ textarea {
   display: grid;
   place-items: center;
   border: 1px solid var(--border);
-  background:
-    linear-gradient(180deg, var(--surface-active), var(--panel));
+  background: color-mix(in oklab, var(--surface-active) 76%, var(--panel));
   color: var(--text);
   font-size: 11px;
   font-weight: 700;
@@ -1167,10 +1208,10 @@ textarea {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   min-height: 0;
   height: 100%;
-  padding: 4px 2px;
+  padding: 2px;
 }
 
 #detail.section-focused > .detail-panel,
@@ -1185,9 +1226,9 @@ textarea {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
-  padding-bottom: 12px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -1390,7 +1431,7 @@ textarea {
 
 .card-grid {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
 
@@ -1411,14 +1452,17 @@ textarea {
 .session-workspace-detail {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-height: 0;
   min-width: 0;
   flex: 1 1 0%;
   overflow: hidden;
+  padding: 8px;
+  border-radius: 20px;
+  background: var(--workspace-backdrop);
 }
 
-/* ── Compact workspace toolbar ─────────────────── */
+/* ── Quiet workspace toolbar ───────────────────── */
 
 .ws-toolbar {
   display: flex;
@@ -1426,8 +1470,13 @@ textarea {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
-  padding: 4px 4px 6px;
-  border-bottom: 1px solid var(--border);
+  padding: 4px;
+  border-radius: 16px;
+  background: var(--workspace-toolbar-surface);
+  box-shadow:
+    inset 0 0 0 1px var(--workspace-toolbar-border),
+    0 16px 32px hsl(0 0% 0% / 0.04);
+  backdrop-filter: blur(18px);
   flex: none;
   min-height: 0;
   transition:
@@ -1437,10 +1486,12 @@ textarea {
 
 #session-workspace-toolbar {
   min-height: 0;
+  position: relative;
+  z-index: 30;
 }
 
 #detail.navbar-collapsed .session-workspace-detail {
-  gap: 0;
+  gap: 6px;
 }
 
 #detail.navbar-collapsed #session-workspace-toolbar {
@@ -1457,34 +1508,51 @@ textarea {
 .ws-toolbar-info {
   display: flex;
   align-items: center;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ws-toolbar-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ws-toolbar-title {
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  letter-spacing: 0.01em;
+}
+
+.ws-toolbar-meta-row {
+  display: flex;
+  align-items: center;
   gap: 6px;
   min-width: 0;
   overflow: hidden;
 }
 
-.ws-toolbar-title {
-  font-size: 13px;
-  font-weight: 700;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
 .ws-toolbar-sep {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 10px;
   flex: none;
-  opacity: 0.5;
+  opacity: 0.55;
 }
 
 .ws-toolbar-repo {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+  font-weight: 500;
 }
 
 .ws-toolbar-meta {
@@ -1499,7 +1567,7 @@ textarea {
 .ws-toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex: none;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -1509,29 +1577,41 @@ textarea {
   display: flex;
   align-items: center;
   gap: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  padding: 2px;
+  border-radius: 999px;
   overflow: hidden;
-  margin-right: 4px;
+  background: color-mix(in oklab, var(--surface-soft) 64%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--workspace-toolbar-border) 85%, transparent);
 }
 
 .ws-layout-btn {
-  padding: 4px 8px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: none;
-  border-radius: 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  border-radius: 999px;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 80ms, color 80ms;
+  display: grid;
+  place-items: center;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.ws-layout-btn svg,
+.ws-action-btn svg,
+.pane-action-btn svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
 }
 
 .ws-layout-btn:hover {
-  background: var(--surface-muted);
+  background: color-mix(in oklab, var(--surface-active) 92%, transparent);
   color: var(--text);
-  border: none;
 }
 
 .ws-layout-btn:disabled {
@@ -1540,46 +1620,170 @@ textarea {
 }
 
 .ws-layout-btn + .ws-layout-btn {
-  border-left: 1px solid var(--border);
+  margin-left: 1px;
 }
 
 .ws-action-btn {
-  padding: 4px 10px;
+  min-height: 28px;
+  padding: 0 11px;
   font-size: 11px;
   font-weight: 600;
-  border-radius: 7px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--surface-soft) 72%, transparent);
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--workspace-toolbar-border) 85%, transparent);
 }
 
-.ws-action-btn .session-restart-icon,
+.ws-action-btn:hover,
+.ws-action-btn:focus-visible {
+  background: color-mix(in oklab, var(--surface-active) 88%, transparent);
+  color: var(--text);
+}
+
+.ws-action-btn-icon {
+  width: 28px;
+  padding: 0;
+}
+
+.ws-action-btn-strong {
+  background: color-mix(in oklab, var(--surface-active) 88%, transparent);
+  color: var(--text);
+}
+
+.ws-action-btn-strong:hover,
+.ws-action-btn-strong:focus-visible {
+  background: color-mix(in oklab, var(--surface-active) 94%, var(--primary) 6%);
+}
+
+.ws-action-label {
+  white-space: nowrap;
+}
+
+.ws-toolbar-menu {
+  position: relative;
+}
+
+.ws-toolbar-menu summary {
+  list-style: none;
+}
+
+.ws-toolbar-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.ws-toolbar-menu-trigger {
+  animation: none;
+  transition: none;
+}
+
+.ws-toolbar-menu[open] > .ws-toolbar-menu-trigger {
+  background: color-mix(in oklab, var(--surface-active) 94%, transparent);
+  color: var(--text);
+}
+
+.ws-toolbar-menu-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 40;
+  width: max-content;
+  min-width: 196px;
+  max-width: min(220px, 72vw);
+  padding: 8px;
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow:
+    0 24px 56px hsl(0 0% 0% / 0.18),
+    inset 0 0 0 1px var(--workspace-menu-border);
+  opacity: 1;
+  pointer-events: auto;
+  animation: none;
+  transition: none;
+  backdrop-filter: none;
+}
+
+.ws-toolbar-menu-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 2px 4px 6px;
+}
+
+.ws-toolbar-menu-divider {
+  height: 1px;
+  margin: 8px 0;
+  background: color-mix(in oklab, var(--workspace-menu-border) 100%, transparent);
+}
+
+.ws-menu-item,
+.ws-toolbar-menu-row {
+  width: 100%;
+  border-radius: 12px;
+}
+
+.ws-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  text-align: left;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 8px;
+  margin: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+}
+
+.ws-menu-item:hover,
+.ws-menu-item:focus-visible {
+  background: color-mix(in oklab, var(--surface-active) 92%, transparent);
+}
+
+.ws-menu-item-danger {
+  color: var(--status-danger-fg);
+}
+
+.ws-toolbar-menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 2px 0;
+}
+
+.ws-toolbar-menu-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.ws-toolbar-menu-select {
+  min-width: 112px;
+  max-width: 132px;
+  background: color-mix(in oklab, var(--surface-soft) 88%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--workspace-menu-border) 100%, transparent);
+}
+
+.ws-menu-item .session-restart-icon,
 .pane-action-btn .session-restart-icon {
   width: 12px;
   height: 12px;
 }
 
-.ws-action-btn-active {
-  background: var(--surface-muted);
-  border-color: var(--surface-active-border);
-  color: var(--text);
-}
-
-.ws-action-btn.primary {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--primary-foreground);
-}
-
-.ws-action-btn.primary:hover {
-  opacity: 0.88;
-}
-
-.ws-action-danger {
-  color: var(--status-danger-fg);
-  border-color: var(--border);
-  background: transparent;
-}
-
-.ws-action-danger:hover {
-  background: var(--status-danger-bg);
+.ws-menu-item .session-restart-label {
+  display: inline;
 }
 
 .session-workspace-canvas {
@@ -1587,6 +1791,10 @@ textarea {
   min-height: 0;
   min-width: 0;
   display: flex;
+  padding: 2px;
+  border-radius: 18px;
+  background: color-mix(in oklab, var(--workspace-toolbar-surface) 48%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--workspace-separator) 80%, transparent);
   overflow: hidden;
 }
 
@@ -1602,6 +1810,7 @@ textarea {
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
+  overflow: visible;
 }
 
 .session-workspace-split-row {
@@ -1633,53 +1842,77 @@ textarea {
 
 .pane-resize-handle {
   flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   background: transparent;
   position: relative;
-  z-index: 10;
+  overflow: visible;
+  z-index: 12;
   user-select: none;
 }
 
 .pane-resize-handle-row {
-  width: 10px;
+  width: 0;
   align-self: stretch;
   cursor: col-resize;
 }
 
 .pane-resize-handle-column {
-  height: 10px;
+  height: 0;
   align-self: stretch;
   cursor: row-resize;
+}
+
+.pane-resize-handle::before,
+.pane-resize-handle::after {
+  content: '';
+  position: absolute;
+}
+
+.pane-resize-handle-row::before {
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  width: 12px;
+}
+
+.pane-resize-handle-column::before {
+  left: 0;
+  right: 0;
+  top: -6px;
+  height: 12px;
 }
 
 .pane-resize-handle::after {
   content: '';
   border-radius: 999px;
-  background: var(--border);
-  opacity: 0.35;
+  background: var(--workspace-separator);
+  opacity: 0.78;
   transition: background 100ms ease, opacity 100ms ease, transform 100ms ease;
 }
 
 .pane-resize-handle-row::after {
-  width: 3px;
-  height: 28px;
+  top: 0;
+  bottom: 0;
+  left: -0.5px;
+  width: 1px;
+  height: auto;
 }
 
 .pane-resize-handle-column::after {
-  width: 28px;
-  height: 3px;
+  left: 0;
+  right: 0;
+  top: -0.5px;
+  width: auto;
+  height: 1px;
 }
 
 .pane-resize-handle:hover::after {
   background: var(--ring);
   opacity: 0.8;
-  transform: scaleY(1.6);
+  transform: scaleY(1.25);
 }
 
 .pane-resize-handle-column:hover::after {
-  transform: scaleX(1.6) scaleY(1);
+  transform: scaleX(1.25) scaleY(1);
 }
 
 .pane-resize-handle-active::after {
@@ -1693,38 +1926,75 @@ textarea {
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--surface-soft);
+  border-radius: 14px;
+  border: 0;
+  background: color-mix(in oklab, var(--terminal-background) 96%, var(--surface-soft) 4%);
+  box-shadow: var(--workspace-pane-shadow);
   overflow: hidden;
-  transition:
-    border-color 120ms ease,
-    box-shadow 120ms ease;
+}
+
+.session-pane::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--workspace-pane-outline);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.session-workspace-detail .session-pane:not(.session-pane-active) {
+  opacity: var(--workspace-pane-inactive-opacity);
+  filter: saturate(0.82);
+}
+
+.session-workspace-detail .session-pane:not(.session-pane-active) .pane-bar,
+.session-workspace-detail .session-pane:not(.session-pane-active) .session-pane-main {
+  opacity: 0.92;
+}
+
+.session-workspace-detail .session-pane:not(.session-pane-active) .session-pane-terminal-wrap {
+  opacity: var(--workspace-pane-inactive-terminal-opacity);
+}
+
+.session-workspace-detail .session-pane:hover,
+.session-workspace-detail .session-pane:focus-within {
+  opacity: 0.92;
+  filter: none;
 }
 
 .session-pane-pinned {
-  border-color: color-mix(in oklab, var(--accent-2) 28%, var(--border));
-  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent-2) 18%, transparent);
+  box-shadow:
+    var(--workspace-pane-shadow),
+    0 0 0 1px color-mix(in oklab, var(--accent-2) 16%, transparent);
 }
 
 .session-pane-pinned::before {
   content: "";
   position: absolute;
   inset: 0;
-  border-top: 2px solid color-mix(in oklab, var(--accent-2) 72%, white 8%);
+  border-top: 1px solid color-mix(in oklab, var(--accent-2) 42%, transparent);
   pointer-events: none;
   z-index: 1;
 }
 
 .session-pane-active {
-  border-color: var(--surface-active-border);
-  box-shadow: 0 0 0 1px color-mix(in oklab, var(--surface-active-border) 80%, transparent);
+  opacity: 1;
+  filter: none;
+  transform: translateY(-1px);
+  box-shadow: var(--workspace-pane-active-shadow);
+}
+
+.session-pane-active .pane-bar,
+.session-pane-active .session-pane-main,
+.session-pane-active .session-pane-terminal-wrap {
+  opacity: 1;
 }
 
 .session-pane-focused {
-  border-color: color-mix(in oklab, var(--ring) 60%, var(--surface-active-border));
   box-shadow:
-    0 0 0 1.5px color-mix(in oklab, var(--ring) 32%, transparent);
+    var(--workspace-pane-active-shadow),
+    0 0 0 1px color-mix(in oklab, var(--ring) 30%, transparent);
 }
 
 .session-pane-main {
@@ -1732,24 +2002,35 @@ textarea {
   flex-direction: column;
   gap: 0;
   padding: 0;
-  border-bottom: 1px solid var(--border);
+  background: var(--workspace-terminal-overlay);
 }
 
 .session-pane-main.section-focused,
 .session-pane-terminal-wrap.section-focused {
-  box-shadow:
-    inset 0 0 0 1px var(--surface-active-border),
-    inset 0 0 0 4px var(--focus-ring);
+  box-shadow: none;
+}
+
+.session-pane-main.section-focused .pane-bar {
+  color: var(--text);
+}
+
+.session-pane-terminal-wrap.section-focused::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ring) 22%, transparent);
+  pointer-events: none;
+  z-index: 1;
 }
 
 /* ── Compact pane header bar ───────────────────── */
 
 .pane-bar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
-  padding: 5px 6px 5px 10px;
+  gap: 10px;
+  padding: 10px 10px 7px;
   cursor: grab;
   user-select: none;
 }
@@ -1760,116 +2041,198 @@ textarea {
 
 .pane-bar-left {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 10px;
   min-width: 0;
   overflow: hidden;
 }
 
-.pane-grip {
-  color: var(--text-muted);
-  font-size: 9px;
-  flex: none;
-  opacity: 0.4;
-  letter-spacing: 1px;
-  line-height: 1;
-  transition: opacity 80ms;
+.pane-title-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
-.session-pane:hover .pane-grip {
-  opacity: 0.7;
+.pane-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .pane-title {
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 650;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+  flex: 0 1 auto;
+  letter-spacing: 0.01em;
+}
+
+.pane-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.pane-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--badge-bg) 90%, transparent);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.pane-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.9;
+}
+
+.pane-status-running {
+  color: var(--status-live-fg);
+  background: color-mix(in oklab, var(--status-live-bg) 76%, transparent);
+}
+
+.pane-status-needs_input,
+.pane-status-blocked,
+.pane-status-failed {
+  color: var(--status-danger-fg);
+  background: color-mix(in oklab, var(--status-danger-bg) 82%, transparent);
+}
+
+.pane-status-done,
+.pane-status-idle {
+  color: var(--status-muted-fg);
+  background: color-mix(in oklab, var(--status-muted-bg) 86%, transparent);
+}
+
+.pane-plan-pill {
+  min-height: 20px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--surface-active) 92%, transparent);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--workspace-pane-outline) 100%, transparent);
 }
 
 .pane-title-input {
   min-width: 0;
   width: 220px;
-  max-width: min(30vw, 280px);
-  padding: 4px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--surface-active-border);
-  background: var(--panel);
+  max-width: min(28vw, 280px);
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--ring) 24%, transparent);
+  background: color-mix(in oklab, var(--workspace-toolbar-surface) 88%, transparent);
   color: var(--text);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 650;
 }
 
 .pane-title-input:focus {
   outline: none;
-  box-shadow:
-    0 0 0 1px var(--surface-active-border),
-    0 0 0 4px var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .pane-bar-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex: none;
+  opacity: 0;
+  transform: translateY(-2px);
+}
+
+.session-pane:hover .pane-bar-right,
+.session-pane:focus-within .pane-bar-right,
+.session-pane-active .pane-bar-right,
+.session-pane-focused .pane-bar-right {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .pane-action-btn {
-  padding: 2px 8px;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--workspace-toolbar-surface) 84%, transparent);
+  color: var(--text-muted);
+  cursor: pointer;
   font-size: 11px;
   font-weight: 600;
-  border-radius: 6px;
-  line-height: 1.4;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--workspace-pane-outline) 100%, transparent);
 }
 
 .pane-action-btn.primary {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--primary-foreground);
+  background: color-mix(in oklab, var(--surface-active) 94%, transparent);
+  color: var(--text);
 }
 
-.pane-hide-btn {
-  width: 22px;
-  height: 22px;
+.pane-action-btn:hover,
+.pane-action-btn:focus-visible,
+.pane-plan-pill:hover,
+.pane-plan-pill:focus-visible {
+  background: color-mix(in oklab, var(--surface-active) 94%, transparent);
+  color: var(--text);
+}
+
+.pane-action-btn-icon {
+  width: 26px;
   padding: 0;
-  display: grid;
-  place-items: center;
-  border-radius: 6px;
-  font-size: 15px;
-  font-weight: 400;
-  color: var(--text-muted);
-  background: transparent;
-  border: 1px solid transparent;
-  line-height: 1;
-  opacity: 0;
-  transition: opacity 80ms, background 80ms, color 80ms;
+}
+
+.pane-action-btn-icon .session-restart-label {
+  display: none;
 }
 
 .pane-show-navbar-btn {
-  opacity: 0.7;
-  transition: opacity 80ms, background 80ms, color 80ms;
+  padding-right: 11px;
 }
 
-.pane-show-navbar-btn:hover {
-  opacity: 1;
+.pane-toolbar-label {
+  white-space: nowrap;
 }
 
 .session-pin-indicator {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 7px;
+  padding: 0 7px;
+  min-height: 20px;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--badge-bg);
+  border: 0;
+  background: color-mix(in oklab, var(--badge-bg) 88%, transparent);
   color: var(--text-muted);
   font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-weight: 650;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   flex: none;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--workspace-pane-outline) 90%, transparent);
 }
 
 .session-pin-icon {
@@ -1883,7 +2246,8 @@ textarea {
 }
 
 .session-pin-indicator-compact {
-  padding: 1px 6px;
+  min-height: 20px;
+  padding: 0 7px;
 }
 
 .session-tag-dot {
@@ -1974,11 +2338,7 @@ textarea {
   place-items: center;
   border-radius: inherit;
   border: 1px solid color-mix(in oklab, var(--border-strong) 55%, transparent);
-  background: linear-gradient(
-    180deg,
-    color-mix(in oklab, var(--surface-soft) 94%, white 6%),
-    color-mix(in oklab, var(--surface-muted) 92%, var(--border) 8%)
-  );
+  background: color-mix(in oklab, var(--surface-soft) 84%, var(--surface-muted));
   color: color-mix(in oklab, var(--text-muted) 84%, var(--text) 16%);
 }
 
@@ -2314,12 +2674,13 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 10px;
-  margin: 0 6px 4px;
-  border-radius: 10px;
-  background: var(--warn-bg);
-  border: 1px solid var(--warn-border);
-  font-size: 12px;
+  padding: 7px 10px;
+  margin: 0 10px 8px;
+  border-radius: 14px;
+  background: color-mix(in oklab, var(--warn-bg) 88%, var(--workspace-toolbar-surface));
+  border: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--warn-border) 88%, transparent);
+  font-size: 11px;
 }
 
 .session-pane-terminal-wrap {
@@ -2336,11 +2697,8 @@ textarea {
   width: 100%;
   height: 100%;
   min-height: 100px;
-  background:
-    radial-gradient(circle at top left, var(--terminal-shell-top), transparent 24%),
-    radial-gradient(circle at bottom right, var(--terminal-shell-bottom), transparent 24%),
-    var(--terminal-background);
-  padding: 6px 8px;
+  background: var(--terminal-background);
+  padding: 10px 12px;
 }
 
 .session-terminal {
@@ -2358,11 +2716,12 @@ textarea {
   justify-content: space-between;
   gap: 10px;
   padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--warn-border);
-  background: color-mix(in oklab, var(--warn-bg) 92%, var(--terminal-background));
+  border-radius: 14px;
+  border: 0;
+  background: color-mix(in oklab, var(--warn-bg) 92%, var(--workspace-toolbar-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--warn-border) 100%, transparent);
   backdrop-filter: blur(10px);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .session-terminal-shell,
@@ -2376,7 +2735,7 @@ textarea {
 .session-pane-drop-indicator {
   position: absolute;
   inset: 6px;
-  border-radius: 8px;
+  border-radius: 12px;
   border: 2px dashed transparent;
   background: transparent;
   display: flex;
@@ -2434,7 +2793,7 @@ textarea {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .status-alert,
@@ -2468,13 +2827,11 @@ textarea {
 }
 
 .status-stat-card-live {
-  background:
-    linear-gradient(180deg, var(--status-live-bg), var(--surface-soft));
+  background: color-mix(in oklab, var(--status-live-bg) 82%, var(--surface-soft));
 }
 
 .status-stat-card-danger {
-  background:
-    linear-gradient(180deg, var(--status-danger-bg), var(--surface-soft));
+  background: color-mix(in oklab, var(--status-danger-bg) 82%, var(--surface-soft));
 }
 
 .status-stat-label {
@@ -2648,8 +3005,8 @@ textarea {
 .settings-dialog-header-shell {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px 16px 12px;
+  gap: 10px;
+  padding: 14px 14px 10px;
 }
 
 .settings-dialog-body-sticky-header .settings-dialog-header-shell {
@@ -2664,8 +3021,8 @@ textarea {
 .settings-dialog-content {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 12px 14px 14px;
 }
 
 .dialog-header {
@@ -2703,7 +3060,7 @@ textarea {
 .dialog-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
 }
 
@@ -3036,8 +3393,8 @@ textarea {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
+  padding: 9px 10px;
+  border-radius: 10px;
   background: var(--surface-muted);
   border: 1px solid var(--border);
 }
@@ -3060,25 +3417,25 @@ textarea {
 .settings-shell {
   display: grid;
   grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
-  gap: 16px;
+  gap: 12px;
   min-height: 540px;
 }
 
 .settings-sidebar {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
-  padding: 12px;
+  padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 18px;
-  background: linear-gradient(180deg, var(--sidebar-surface), var(--surface-soft));
+  border-radius: 16px;
+  background: color-mix(in oklab, var(--sidebar-surface) 84%, var(--surface-soft));
 }
 
 .settings-sidebar-sections {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   overflow: auto;
   min-height: 0;
   padding-right: 4px;
@@ -3164,8 +3521,7 @@ textarea {
 
 .theme-card.active,
 .theme-card.active:hover {
-  background:
-    linear-gradient(180deg, var(--surface-active), var(--surface-soft));
+  background: color-mix(in oklab, var(--surface-active) 86%, var(--surface-soft));
   border-color: var(--surface-active-border);
   box-shadow: inset 0 0 0 1px var(--surface-active-border);
 }
@@ -3216,8 +3572,7 @@ textarea {
   padding: 8px;
   border: 1px solid var(--theme-preview-border);
   border-radius: 12px;
-  background:
-    linear-gradient(180deg, var(--theme-preview-bg), var(--theme-preview-surface));
+  background: color-mix(in oklab, var(--theme-preview-bg) 72%, var(--theme-preview-surface));
 }
 
 .theme-preview-sidebar {
@@ -3398,7 +3753,7 @@ textarea {
 .settings-surface {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   min-width: 0;
 }
 
@@ -3616,8 +3971,8 @@ textarea {
 .agent-default-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px;
+  gap: 10px;
+  padding: 12px;
 }
 
 .account-summary-card {
@@ -3719,7 +4074,7 @@ textarea {
 .agent-default-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .claude-settings-stack {
@@ -4002,7 +4357,7 @@ textarea {
 .settings-guided-panel {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -4017,30 +4372,30 @@ textarea {
 .settings-group-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .settings-group-body {
-  padding-left: 12px;
+  padding-left: 10px;
   border-left: 1px solid var(--border);
 }
 
 .settings-group-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px;
+  gap: 10px;
+  padding: 12px;
 }
 
 .settings-field-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: 8px;
+  padding: 10px 12px;
 }
 
 .settings-update-card {
-  gap: 12px;
+  gap: 10px;
 }
 
 .settings-update-header {
@@ -4055,10 +4410,35 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 12px;
+  padding: 10px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface-muted);
+}
+
+.settings-toggle-card {
+  gap: 10px;
+  padding-bottom: 0;
+  overflow: hidden;
+}
+
+.settings-group-body-compact {
+  gap: 0;
+  padding-left: 0;
+  margin-inline: -12px;
+  border-left: 0;
+}
+
+.settings-group-body-compact .value-row {
+  padding: 10px 12px;
+}
+
+.settings-group-body-compact .inline-toggle {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .settings-update-status .muted {

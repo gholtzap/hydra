@@ -1,6 +1,6 @@
 {
   "name": "hydra",
-  "version": "0.2.7",
+  "version": "0.2.11",
   "private": true,
   "description": "Hydra desktop shell built with Electron",
   "main": "dist-electron/main/main.js",

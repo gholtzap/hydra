@@ -205,7 +205,12 @@ const {
   isPathWithinRoot: (filePath: string, rootPath: string) => boolean;
   normalizeSessionTagColor: (value: unknown) => SessionTagColor | null;
 };
-const { isSessionSearchResultPathForRepo, queryProjectSessions } = require("./session-search") as {
+const {
+  invalidateSessionSearchCache,
+  isSessionSearchResultPathForRepo,
+  queryProjectSessions
+} = require("./session-search") as {
+  invalidateSessionSearchCache: (repoPath?: string | null) => void;
   isSessionSearchResultPathForRepo: (filePath: string, repoPath: string) => Promise<boolean>;
   queryProjectSessions: (repoPath: string, query: string) => Promise<SessionSearchResponse>;
 };
@@ -603,6 +608,8 @@ class AppController {
   saveTimer: NodeJS.Timeout | null;
   allowQuit: boolean;
   downloadedUpdateVersion: string | null;
+  downloadedUpdatePromptVisible: boolean;
+  downloadedUpdatePromptSuppressedKey: string | null;
   updateInstallWatchdog: NodeJS.Timeout | null;
   updateInstallInProgress: boolean;
   pendingAgentLaunch: Set<string>;
@@ -632,6 +639,8 @@ class AppController {
     this.saveTimer = null;
     this.allowQuit = false;
     this.downloadedUpdateVersion = null;
+    this.downloadedUpdatePromptVisible = false;
+    this.downloadedUpdatePromptSuppressedKey = null;
     this.updateInstallWatchdog = null;
     this.updateInstallInProgress = false;
     this.pendingAgentLaunch = new Set();
@@ -667,15 +676,55 @@ class AppController {
   }
 
   describeDownloadedUpdate(version?: string | null): string {
-    const normalizedVersion = typeof version === "string" ? version.trim() : "";
+    const normalizedVersion = normalizeUpdateVersion(version);
     return normalizedVersion ? `Hydra ${normalizedVersion}` : "the downloaded update";
   }
 
+  downloadedUpdatePromptKey(version?: string | null): string {
+    return normalizeUpdateVersion(version) || "__unknown_downloaded_update__";
+  }
+
   noteDownloadedUpdate(version?: string | null): void {
-    const normalizedVersion = typeof version === "string" ? version.trim() : "";
-    this.downloadedUpdateVersion = normalizedVersion || null;
+    const normalizedVersion = normalizeUpdateVersion(version);
+    if (this.downloadedUpdateVersion !== normalizedVersion) {
+      this.downloadedUpdatePromptSuppressedKey = null;
+    }
+    this.downloadedUpdateVersion = normalizedVersion;
     this.updateInstallInProgress = false;
     this.clearUpdateInstallWatchdog();
+  }
+
+  async promptToInstallDownloadedUpdate(version?: string | null): Promise<void> {
+    const targetVersion = normalizeUpdateVersion(version) || this.downloadedUpdateVersion;
+    const promptKey = this.downloadedUpdatePromptKey(targetVersion);
+    if (
+      this.downloadedUpdatePromptVisible
+      || this.downloadedUpdatePromptSuppressedKey === promptKey
+    ) {
+      return;
+    }
+
+    this.downloadedUpdatePromptVisible = true;
+    const targetUpdate = this.describeDownloadedUpdate(targetVersion);
+
+    try {
+      const { response } = await dialog.showMessageBox({
+        type: "info",
+        title: "Update ready",
+        message: `${targetUpdate} has been downloaded. Restart to install it.`,
+        detail: `Current version: ${app.getVersion()}. Updater log: ${updaterLogFilePath()}`,
+        buttons: ["Restart now", "Later"]
+      });
+      this.downloadedUpdatePromptSuppressedKey = promptKey;
+
+      if (response === 0) {
+        await this.restartToInstallUpdate(targetVersion);
+      }
+    } catch (error: unknown) {
+      logUpdater("error", `failed to show downloaded update dialog: ${formatUpdaterLogMessage(error)}`);
+    } finally {
+      this.downloadedUpdatePromptVisible = false;
+    }
   }
 
   clearUpdateInstallWatchdog(): void {
@@ -1922,7 +1971,7 @@ class AppController {
       claudeSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
       agentSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
       status: "running",
-      runtimeState: "live",
+      runtimeState: "launching",
       blocker: null,
       unreadCount: 0,
       createdAt: now(),
@@ -1939,10 +1988,22 @@ class AppController {
     };
 
     this.state.sessions.unshift(session);
-    this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(session.transcript));
-    this.launchRuntime(session, repo);
-    this.scheduleSave();
+    const launchMsg = "Launching opencode...\n";
+    this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(launchMsg));
+    session.transcript = launchMsg;
     this.broadcastState();
+
+    if (startupAgentId) {
+      invalidateSessionSearchCache(repo.path);
+    }
+
+    setImmediate(() => {
+      this.launchRuntime(session, repo);
+      session.runtimeState = "live";
+      this.scheduleSave();
+      this.broadcastState();
+    });
+
     return session.id;
   }
 
@@ -2673,6 +2734,14 @@ class AppController {
     this.queuedSessionLaunches.delete(sessionId);
     this.resetSignalTracking(sessionId);
     this.sessionSizes.delete(sessionId);
+
+    // Agent/appLaunch sessions fall back to a plain shell instead of blocking
+    // the terminal with a "paused" overlay.
+    if (session.launchProfile === "agent" || session.launchProfile === "appLaunch") {
+      this.fallbackToShell(session, exitCode);
+      return;
+    }
+
     session.runtimeState = "stopped";
     session.stoppedAt = now();
     session.updatedAt = now();
@@ -2698,6 +2767,50 @@ class AppController {
 
     this.scheduleSave();
     this.sendSessionUpdated(sessionId);
+  }
+
+  /** Transition an agent session into a live shell after the agent process exits. */
+  private fallbackToShell(session: SessionRecord, exitCode: number): void {
+    const repo = this.repoById(session.repoID);
+    if (!repo) {
+      // No repo — can't launch a shell, fall through to stopped state.
+      session.runtimeState = "stopped";
+      session.stoppedAt = now();
+      session.updatedAt = now();
+      session.status = exitCode === 0 ? "done" : "failed";
+      session.blocker = null;
+      this.scheduleSave();
+      this.sendSessionUpdated(session.id);
+      return;
+    }
+
+    const banner =
+      exitCode === 0
+        ? `\r\n[Agent exited. Shell is ready.]\r\n`
+        : `\r\n[Agent exited with status ${exitCode}. Shell is ready.]\r\n`;
+
+    session.launchProfile = "shell";
+    session.launchesClaudeOnStart = false;
+    session.status = "running";
+    session.blocker = null;
+    session.runtimeState = "live";
+    session.updatedAt = now();
+
+    session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${banner}`);
+    session.transcript = trimTranscript(
+      this.terminalBuffer(session.id, session.transcript).consume(banner)
+    );
+
+    this.sendSessionOutput(session.id, banner);
+
+    this.ptyHost.createSession({
+      sessionId: session.id,
+      cwd: repo.path,
+      shellPath: resolvedShellPath(this.state.preferences)
+    });
+
+    this.scheduleSave();
+    this.sendSessionUpdated(session.id);
   }
 
   startRestartedSession(sessionId: string): void {
@@ -2728,6 +2841,8 @@ class AppController {
     session.stoppedAt = null;
     session.launchCount = 1;
     session.updatedAt = now();
+
+    invalidateSessionSearchCache(repo.path);
     session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${bannerChunk}`);
     session.transcript = trimTranscript(this.terminalBuffer(session.id, session.transcript).consume(bannerChunk));
     this.resetSignalTracking(session.id);
@@ -3925,18 +4040,7 @@ autoUpdater.on("error", (error: unknown) => {
 
 autoUpdater.on("update-downloaded", (info: { version?: string }) => {
   controller.noteDownloadedUpdate(info.version);
-  const targetUpdate = controller.describeDownloadedUpdate(info.version);
-  dialog.showMessageBox({
-    type: "info",
-    title: "Update ready",
-    message: `${targetUpdate} has been downloaded. Restart to install it.`,
-    detail: `Current version: ${app.getVersion()}. Updater log: ${updaterLogFilePath()}`,
-    buttons: ["Restart now", "Later"]
-  }).then(({ response }) => {
-    if (response === 0) {
-      void controller.restartToInstallUpdate(info.version);
-    }
-  });
+  void controller.promptToInstallDownloadedUpdate(info.version);
 });
 
 app.on("before-quit", (event) => {

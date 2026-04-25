@@ -14,6 +14,7 @@ import type {
   KeybindingMap,
   RepoAppLaunchConfig,
   RepoSnapshot,
+  SessionSearchSource,
   SessionSearchResult as SharedSessionSearchResult,
   SessionSummary,
   SessionTagColor,
@@ -25,6 +26,10 @@ import type {
 
 const api = window.claudeWorkspace;
 let sessionSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let sessionSearchRenderStateCache: {
+  results: SessionSearchResult[];
+  state: SessionSearchRenderState;
+} | null = null;
 const SECTION_ORDER = ["sidebar", "sidebar-drawer", "main", "terminal"] as const;
 type SectionId = (typeof SECTION_ORDER)[number];
 const MAX_VISIBLE_SESSION_PANES = 9;
@@ -242,6 +247,19 @@ type SessionSearchResult = SharedSessionSearchResult & {
 };
 type SettingsTab = "general" | "account" | "themes" | "keybindings" | "claude";
 
+type SessionSearchFilter = "all" | SessionSearchSource;
+
+type SessionSearchIndexedResult = {
+  result: SessionSearchResult;
+  originalIndex: number;
+  normalizedPreview: string;
+};
+
+type SessionSearchRenderState = {
+  filteredResults: Record<SessionSearchFilter, SessionSearchIndexedResult[]>;
+  counts: Record<SessionSearchFilter, number>;
+};
+
 function createEphemeralToolOverlayState(): EphemeralToolOverlayState {
   return {
     sessionId: null,
@@ -308,6 +326,44 @@ const state: AppStateSnapshot = {
   tokscaleInstalled: false
 };
 
+type RepoSessionStats = {
+  liveCount: number;
+  attentionCount: number;
+};
+
+type RepoIndex = {
+  byId: Map<string, RepoSnapshot>;
+  sorted: RepoSnapshot[];
+};
+
+type SessionIndex = {
+  byId: Map<string, SessionSummary>;
+  byRepoId: Map<string, SessionSummary[]>;
+  repoStatsById: Map<string, RepoSessionStats>;
+  allSorted: SessionSummary[];
+  inbox: SessionSummary[];
+  mostRecent: SessionSummary | null;
+};
+
+type WorkspaceLayoutIndex = {
+  normalized: WorkspaceLayoutNode | null;
+  signature: string;
+  visibleIds: string[];
+  visibleIdSet: Set<string>;
+};
+
+const EMPTY_SESSION_LIST: SessionSummary[] = [];
+const EMPTY_REPO_SESSION_STATS: RepoSessionStats = {
+  liveCount: 0,
+  attentionCount: 0
+};
+
+let repoIndex: RepoIndex = buildRepoIndex(state.repos);
+let sessionIndex: SessionIndex = buildSessionIndex(state.sessions);
+let workspaceLayoutIndex: WorkspaceLayoutIndex = buildWorkspaceLayoutIndex(
+  state.preferences.sessionWorkspaceLayout || null
+);
+
 type UiState = {
   selection: RendererSelection;
   focusSection: SectionId;
@@ -327,7 +383,7 @@ type UiState = {
   sessionSearchLoading: boolean;
   sessionSearchSelectedIndex: number;
   sessionSearchLoadId: number;
-  sessionSearchFilter: "all" | "claude" | "codex";
+  sessionSearchFilter: SessionSearchFilter;
   commandPaletteQuery: string;
   settingsTab: SettingsTab;
   settingsClaudeView: ClaudeSettingsView;
@@ -428,7 +484,7 @@ const ui: UiState = {
   sessionSearchLoading: false,
   sessionSearchSelectedIndex: 0,
   sessionSearchLoadId: 0,
-  sessionSearchFilter: "all" as "all" | "claude" | "codex",
+  sessionSearchFilter: "all" as SessionSearchFilter,
   commandPaletteQuery: "",
   settingsTab: "general" as SettingsTab,
   settingsClaudeView: "files" as ClaudeSettingsView,
@@ -1454,7 +1510,9 @@ async function initialize() {
 function replaceState(nextState) {
   state.workspaces = nextState.workspaces || [];
   state.repos = nextState.repos || [];
+  rebuildRepoIndex();
   state.sessions = nextState.sessions || [];
+  rebuildSessionIndex();
   state.preferences = nextState.preferences || {};
   state.lazygitInstalled = !!nextState.lazygitInstalled;
   state.tokscaleInstalled = !!nextState.tokscaleInstalled;
@@ -1524,13 +1582,13 @@ function sidebarSignature() {
   const expandedRepo = expandedSidebarRepo();
   const inboxCount = inboxSessions().length;
   const railSig = state.repos.map((repo) => {
-    const sessions = sessionsForRepo(repo.id);
-    return `${repo.id}:${sessions.filter((s) => s.runtimeState === "live").length}:${sessions.filter((s) => s.blocker || s.unreadCount > 0).length}`;
+    const stats = repoSessionStats(repo.id);
+    return `${repo.id}:${stats.liveCount}:${stats.attentionCount}`;
   }).join(",");
   const drawerSig = expandedRepo
     ? sessionsForRepo(expandedRepo.id).map((session) => sidebarDrawerSessionSignature(session)).join(",")
     : "";
-  const selSig = `${ui.selection.type}:${(ui.selection as any).id ?? ""}`;
+  const selSig = `${ui.selection.type}:${ui.selection.id ?? ""}`;
   const multiSelSig = ui.selectedSessionIds.size ? [...ui.selectedSessionIds].sort().join(",") : "";
   return `${inboxCount}|${railSig}|${drawerSig}|${selSig}|${ui.sidebarNavItem}|${ui.sidebarExpandedRepoId}|${multiSelSig}`;
 }
@@ -1645,7 +1703,7 @@ function renderSidebarUtilityButton(
 }
 
 function renderInboxRailButton() {
-  const count = inboxSessions().length;
+  const count = sessionIndex.inbox.length;
 
   return dom(
     "button",
@@ -1681,9 +1739,7 @@ function renderProjectRailButtons() {
 }
 
 function renderProjectRailButton(repo) {
-  const sessions = sessionsForRepo(repo.id);
-  const liveCount = sessions.filter((session) => session.runtimeState === "live").length;
-  const attentionCount = sessions.filter((session) => session.blocker || session.unreadCount > 0).length;
+  const { liveCount, attentionCount } = repoSessionStats(repo.id);
   const active = currentRepoId() === repo.id;
   const expanded = ui.sidebarExpandedRepoId === repo.id;
   const badgeLabel = attentionCount ? (attentionCount > 9 ? "9+" : String(attentionCount)) : "";
@@ -2840,22 +2896,22 @@ function updateSessionWorkspaceToolbar() {
       dom(
         "div",
         { className: "ws-toolbar-info" },
-        renderSessionVisualButtonElement(
-          session,
-          "session-visual-toolbar",
-          "import-session-icon",
-          session.sessionIconUrl ? "Replace session icon" : "Upload session icon"
-        ),
-        dom("span", { className: "ws-toolbar-title" }, session.title),
-        session.isPinned
-          ? renderSessionPinIndicatorElement("Pinned", "session-pin-indicator-toolbar")
-          : null,
-        dom("span", { className: "ws-toolbar-sep" }, "/"),
-        dom("span", { className: "ws-toolbar-repo" }, repo?.name || "Unknown"),
+        renderSessionVisualElement(session, "session-visual-toolbar", { includePlaceholder: true }),
         dom(
-          "span",
-          { className: "ws-toolbar-meta" },
-          `${visibleSessionCount} ${pluralize(visibleSessionCount, "pane", "panes")}`
+          "div",
+          { className: "ws-toolbar-copy" },
+          dom("span", { className: "ws-toolbar-title" }, session.title),
+          dom(
+            "div",
+            { className: "ws-toolbar-meta-row" },
+            dom("span", { className: "ws-toolbar-repo" }, repo?.name || "Unknown"),
+            dom("span", { className: "ws-toolbar-sep", attrs: { "aria-hidden": "true" } }, "\u2022"),
+            dom(
+              "span",
+              { className: "ws-toolbar-meta" },
+              `${visibleSessionCount} ${pluralize(visibleSessionCount, "pane", "panes")}`
+            )
+          )
         )
       ),
       dom(
@@ -2866,13 +2922,29 @@ function updateSessionWorkspaceToolbar() {
           { className: "ws-layout-group", attrs: { role: "group", "aria-label": "Layout" } },
           dom(
             "button",
-            { className: "ws-layout-btn", attrs: { "data-action": "workspace-layout-columns", title: "Side by side" } },
-            "Cols"
+            {
+              className: "ws-layout-btn",
+              attrs: {
+                "data-action": "workspace-layout-columns",
+                "aria-label": "Side by side",
+                title: "Side by side",
+                type: "button"
+              }
+            },
+            renderSessionChromeIconElement("columns")
           ),
           dom(
             "button",
-            { className: "ws-layout-btn", attrs: { "data-action": "workspace-layout-stack", title: "Stacked vertically" } },
-            "Stack"
+            {
+              className: "ws-layout-btn",
+              attrs: {
+                "data-action": "workspace-layout-stack",
+                "aria-label": "Stacked vertically",
+                title: "Stacked vertically",
+                type: "button"
+              }
+            },
+            renderSessionChromeIconElement("stack")
           ),
           dom(
             "button",
@@ -2880,85 +2952,178 @@ function updateSessionWorkspaceToolbar() {
               className: "ws-layout-btn",
               attrs: {
                 "data-action": "workspace-layout-grid",
-                title: "2x2 Grid",
+                "aria-label": "Grid",
+                title: "Grid",
+                type: "button",
                 disabled: visibleSessionCount > 1 ? undefined : true
               }
             },
-            "Grid"
+            renderSessionChromeIconElement("grid")
           )
         ),
         dom(
           "button",
           {
-            className: classNames("ws-action-btn", session.isPinned ? "ws-action-btn-active" : undefined),
-            attrs: { "data-action": "toggle-session-pin", "data-session-id": session.id }
+            className: "ws-action-btn ws-action-btn-strong",
+            attrs: {
+              "data-action": "open-launcher",
+              "data-repo-id": repo?.id || "",
+              type: "button"
+            }
           },
-          session.isPinned ? "Unpin" : "Pin"
+          renderSessionChromeIconElement("plus"),
+          dom("span", { className: "ws-action-label" }, "Session")
         ),
-        renderSessionTagSelectElement(session, "session-tag-select-toolbar"),
-        session.sessionIconUrl
-          ? dom(
+        dom(
+          "details",
+          { className: "ws-toolbar-menu" },
+          dom(
+            "summary",
+            {
+              className: "ws-action-btn ws-action-btn-icon ws-toolbar-menu-trigger",
+              attrs: { "aria-label": "Workspace tools", title: "Workspace tools" }
+            },
+            renderSessionChromeIconElement("more")
+          ),
+          dom(
+            "div",
+            { className: "ws-toolbar-menu-popover" },
+            dom("div", { className: "ws-toolbar-menu-section-title" }, "Workspace"),
+            dom(
               "button",
               {
-                className: "ws-action-btn",
-                attrs: { "data-action": "clear-session-icon", "data-session-id": session.id }
+                className: "ws-menu-item",
+                attrs: { "data-action": "open-wiki", "data-repo-id": repo?.id || "", type: "button" }
               },
-              "Clear Icon"
-            )
-          : null,
-        dom(
-          "button",
-          {
-            className: "ws-action-btn primary",
-            attrs: { "data-action": "open-launcher", "data-repo-id": repo?.id || "" }
-          },
-          "+ Session"
-        ),
-        dom("button", { className: "ws-action-btn", attrs: { "data-action": "open-wiki", "data-repo-id": repo?.id || "" } }, "Wiki"),
-        dom(
-          "button",
-          { className: "ws-action-btn", attrs: { "data-action": "open-tokscale", "data-repo-id": repo?.id || "" } },
-          "Tokens"
-        ),
-        dom("button", { className: "ws-action-btn", attrs: { "data-action": "open-lazygit", "data-repo-id": repo?.id || "" } }, "Git"),
-        dom(
-          "button",
-          {
-            className: "ws-action-btn",
-            attrs: {
-              "data-action": "open-settings",
-              "data-settings-tab": "claude",
-              "data-settings-claude-view": "skills"
-            }
-          },
-          "Skills"
-        ),
-        dom(
-          "button",
-          {
-            className: "ws-action-btn",
-            attrs: {
-              "data-action": "open-settings",
-              "data-settings-tab": "claude",
-              "data-settings-claude-view": "plugins"
-            }
-          },
-          "Plugins"
-        ),
-        dom(
-          "button",
-          { className: "ws-action-btn", attrs: { "data-action": "open-settings", "data-settings-tab": "claude" } },
-          "Agent Files"
-        ),
-        dom("button", { className: "ws-action-btn", attrs: { "data-action": "collapse-navbar" } }, "Hide Bar"),
-        renderSessionRestartButtonElement(session, {
-          className: "ws-action-btn",
-          primary: session.runtimeState !== "live"
-        }),
-        dom(
-          "button",
-          { className: "ws-action-btn ws-action-danger", attrs: { "data-action": "close-session", "data-session-id": session.id } },
-          "End"
+              "Wiki"
+            ),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: { "data-action": "open-tokscale", "data-repo-id": repo?.id || "", type: "button" }
+              },
+              "Tokens"
+            ),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: { "data-action": "open-lazygit", "data-repo-id": repo?.id || "", type: "button" }
+              },
+              "Git"
+            ),
+            dom("div", { className: "ws-toolbar-menu-divider" }),
+            dom("div", { className: "ws-toolbar-menu-section-title" }, "Agent"),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: {
+                  "data-action": "open-settings",
+                  "data-settings-tab": "claude",
+                  "data-settings-claude-view": "skills",
+                  type: "button"
+                }
+              },
+              "Skills"
+            ),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: {
+                  "data-action": "open-settings",
+                  "data-settings-tab": "claude",
+                  "data-settings-claude-view": "plugins",
+                  type: "button"
+                }
+              },
+              "Plugins"
+            ),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: {
+                  "data-action": "open-settings",
+                  "data-settings-tab": "claude",
+                  type: "button"
+                }
+              },
+              "Agent Files"
+            ),
+            dom("div", { className: "ws-toolbar-menu-divider" }),
+            dom("div", { className: "ws-toolbar-menu-section-title" }, "Session"),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: {
+                  "data-action": "toggle-session-pin",
+                  "data-session-id": session.id,
+                  type: "button"
+                }
+              },
+              session.isPinned ? "Unpin session" : "Pin session"
+            ),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: {
+                  "data-action": "import-session-icon",
+                  "data-session-id": session.id,
+                  type: "button"
+                }
+              },
+              session.sessionIconUrl ? "Change icon" : "Add icon"
+            ),
+            session.sessionIconUrl
+              ? dom(
+                  "button",
+                  {
+                    className: "ws-menu-item",
+                    attrs: {
+                      "data-action": "clear-session-icon",
+                      "data-session-id": session.id,
+                      type: "button"
+                    }
+                  },
+                  "Clear icon"
+                )
+              : null,
+            dom(
+              "div",
+              { className: "ws-toolbar-menu-row" },
+              dom("span", { className: "ws-toolbar-menu-label" }, "Tag"),
+              renderSessionTagSelectElement(session, "session-tag-select ws-toolbar-menu-select")
+            ),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: { "data-action": "collapse-navbar", type: "button" }
+              },
+              "Hide controls"
+            ),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item ws-menu-item-danger",
+                attrs: {
+                  "data-action": "close-session",
+                  "data-session-id": session.id,
+                  type: "button"
+                }
+              },
+              "End session"
+            ),
+            renderSessionRestartButtonElement(session, {
+              className: "ws-menu-item",
+              primary: session.runtimeState !== "live"
+            })
+          )
         )
       )
     )
@@ -3042,27 +3207,57 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
     dom(
       "div",
       { className: "pane-bar-left" },
-      dom("span", { className: "pane-grip", attrs: { "aria-hidden": "true" } }, "\u2801\u2801\u2801"),
       renderSessionVisualElement(session, "session-visual-pane"),
-      isRenaming
-        ? dom("input", {
-            className: "pane-title-input",
-            value: ui.renamingSessionTitle,
-            attrs: {
-              type: "text",
-              "data-session-rename-input": "true",
-              "data-session-id": session.id,
-              "aria-label": "Rename session"
-            }
-          })
-        : dom("span", { className: "pane-title" }, session.title),
-      session.isPinned
-        ? renderSessionPinIndicatorElement("Pin", "session-pin-indicator-compact")
-        : null,
       dom(
-        "span",
-        { className: `status-badge status-${session.status}` },
-        statusLabel(session.status)
+        "div",
+        { className: "pane-title-stack" },
+        dom(
+          "div",
+          { className: "pane-title-row" },
+          isRenaming
+            ? dom("input", {
+                className: "pane-title-input",
+                value: ui.renamingSessionTitle,
+                attrs: {
+                  type: "text",
+                  "data-session-rename-input": "true",
+                  "data-session-id": session.id,
+                  "aria-label": "Rename session"
+                }
+              })
+            : dom("span", { className: "pane-title", attrs: { title: session.title } }, session.title),
+          dom(
+            "span",
+            { className: classNames("pane-status-chip", `pane-status-${session.status}`) },
+            dom("span", { className: "pane-status-dot", attrs: { "aria-hidden": "true" } }),
+            dom("span", { className: "pane-status-label" }, statusLabel(session.status))
+          )
+        ),
+        session.isPinned || planReview
+          ? dom(
+              "div",
+              { className: "pane-meta-row" },
+              session.isPinned
+                ? renderSessionPinIndicatorElement("Pinned", "session-pin-indicator-compact")
+                : null,
+              planReview
+                ? dom(
+                    "button",
+                    {
+                      className: "pane-plan-pill",
+                      attrs: {
+                        type: "button",
+                        "data-action": "open-plan-review",
+                        "data-session-id": session.id,
+                        "data-no-drag": "true",
+                        title: "Review latest plan"
+                      }
+                    },
+                    "Plan"
+                  )
+                : null
+            )
+          : null
       )
     ),
     dom(
@@ -3076,10 +3271,12 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
               attrs: {
                 "data-action": "expand-navbar",
                 "data-no-drag": "true",
+                type: "button",
                 title: "Show toolbar"
               }
             },
-            "Show Bar"
+            renderSessionChromeIconElement("toolbar"),
+            dom("span", { className: "pane-toolbar-label" }, "Show")
           )
         : null,
       isRenaming
@@ -3091,6 +3288,7 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
                 "data-action": "cancel-session-rename",
                 "data-session-id": session.id,
                 "data-no-drag": "true",
+                type: "button",
                 title: "Cancel rename"
               }
             },
@@ -3099,48 +3297,37 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
         : dom(
             "button",
             {
-              className: "pane-action-btn",
+              className: "pane-action-btn pane-action-btn-icon",
               attrs: {
                 "data-action": "start-session-rename",
                 "data-session-id": session.id,
                 "data-no-drag": "true",
+                "aria-label": "Rename session",
+                type: "button",
                 title: "Rename tab"
               }
             },
-            "Rename"
+            renderSessionChromeIconElement("rename")
           ),
-      planReview
-        ? dom(
-            "button",
-            {
-              className: "pane-action-btn",
-              attrs: {
-                "data-action": "open-plan-review",
-                "data-session-id": session.id,
-                "data-no-drag": "true",
-                title: "Review latest plan"
-              }
-            },
-            "Review Plan"
-          )
-        : null,
       renderSessionRestartButtonElement(session, {
-        className: "pane-action-btn",
+        className: "pane-action-btn pane-action-btn-icon",
         primary: session.runtimeState !== "live",
         noDrag: true
       }),
       dom(
         "button",
         {
-          className: "pane-action-btn pane-hide-btn",
+          className: "pane-action-btn pane-action-btn-icon pane-hide-btn",
           attrs: {
             "data-action": "remove-session-pane",
             "data-session-id": session.id,
             "data-no-drag": "true",
+            "aria-label": "Hide pane",
+            type: "button",
             title: "Hide pane"
           }
         },
-        "\u00D7"
+        renderSessionChromeIconElement("close")
       )
     )
   );
@@ -3295,6 +3482,10 @@ function renderPausedSessionNotice(session) {
     return null;
   }
 
+  if (session.runtimeState === "launching") {
+    return null;
+  }
+
   const body = `This session is paused. Restart it to relaunch ${restartTargetAgentLabel()} in this project.`;
 
   return dom(
@@ -3322,6 +3513,10 @@ function startSessionRename(sessionId) {
 
   ui.renamingSessionId = session.id;
   ui.renamingSessionTitle = session.title || "";
+  if (ui.focusSection !== "main") {
+    ui.focusSection = "main";
+    syncSectionFocusUi({ preserveCurrentFocus: true });
+  }
   updateSessionWorkspaceToolbar();
   updateSessionPane(session);
 }
@@ -3535,7 +3730,13 @@ function renderInboxCard(session) {
 }
 
 function projectSessionStateLabel(session) {
-  return session.runtimeState === "live" ? "Running" : "Idle";
+  if (session.runtimeState === "live") {
+    return "Running";
+  }
+  if (session.runtimeState === "launching") {
+    return "Launching";
+  }
+  return "Idle";
 }
 
 function renderRepoSession(session) {
@@ -3569,21 +3770,17 @@ function renderDialogs() {
 
 function renderQuickSwitcherDialog() {
   const normalized = ui.quickSwitcherQuery.trim().toLowerCase();
-  const sessions = state.sessions
-    .filter((session) => {
-      if (!normalized) {
-        return true;
-      }
-      const repoName = (repoById(session.repoID)?.name || "").toLowerCase();
-      return session.title.toLowerCase().includes(normalized) || repoName.includes(normalized);
-    })
-    .sort(compareSessions);
-  const repos = state.repos.filter((repo) => {
-    if (!normalized) {
-      return true;
-    }
-    return repo.name.toLowerCase().includes(normalized) || repo.path.toLowerCase().includes(normalized);
-  });
+  const sessions = normalized
+    ? sessionIndex.allSorted.filter((session) => {
+        const repoName = (repoById(session.repoID)?.name || "").toLowerCase();
+        return session.title.toLowerCase().includes(normalized) || repoName.includes(normalized);
+      })
+    : sessionIndex.allSorted;
+  const repos = normalized
+    ? sortedRepos().filter((repo) =>
+        repo.name.toLowerCase().includes(normalized) || repo.path.toLowerCase().includes(normalized)
+      )
+    : sortedRepos();
 
   replaceDomChildren(
     quickSwitcherDialog,
@@ -3774,6 +3971,7 @@ function renderCommandPaletteRow(command: { action: string; label: string }) {
 function renderSessionSearchDialog() {
   const repo = repoById(ui.sessionSearchRepoId || "");
   const selectedResult = selectedSessionSearchResult();
+  const renderState = getSessionSearchRenderState(ui.sessionSearchResults);
   const sectionLabel = dom(
     "div",
     { className: "section-label", attrs: { style: "display:flex;align-items:center;justify-content:space-between;" } },
@@ -3822,7 +4020,7 @@ function renderSessionSearchDialog() {
       dom(
         "div",
         { className: "session-search-filter-bar" },
-        ...renderSessionSearchFilterButtons()
+        ...renderSessionSearchFilterButtons(renderState)
       ),
       dom(
         "div",
@@ -3831,7 +4029,7 @@ function renderSessionSearchDialog() {
         dom(
           "div",
           { className: "dialog-list session-search-list" },
-          ...renderSessionSearchBody()
+          ...renderSessionSearchBody(renderState)
         )
       ),
       selectedResult
@@ -3869,33 +4067,75 @@ function renderSessionSearchDialog() {
   );
 }
 
-function getFilteredSessionResults(source: "all" | "claude" | "codex") {
-  const seenHashes = new Set<string>();
+function getSessionSearchRenderState(results: SessionSearchResult[]): SessionSearchRenderState {
+  if (sessionSearchRenderStateCache?.results === results) {
+    return sessionSearchRenderStateCache.state;
+  }
 
-  return ui.sessionSearchResults
-    .map((result, originalIndex) => ({ result, originalIndex }))
-    .filter(({ result }) => source === "all" || result.source === source)
-    .filter(({ result }) => {
-      const normalizedPreview = normalizeJsonlPreview(result.preview);
-      if (!normalizedPreview.trim()) return false;
-
-      const previewHash = normalizedPreview.split("").reduce((acc, char) => {
-        acc = ((acc << 5) - acc) + char.charCodeAt(0);
-        return acc & acc;
-      }, 0).toString();
-
-      return !seenHashes.has(previewHash) && seenHashes.add(previewHash);
-    });
+  const state = buildSessionSearchRenderState(results);
+  sessionSearchRenderStateCache = { results, state };
+  return state;
 }
 
-function renderSessionSearchFilterButtons() {
-  const claudeCount = getFilteredSessionResults("claude").length;
-  const codexCount = getFilteredSessionResults("codex").length;
-  const totalCount = claudeCount + codexCount;
-  const hasResults = totalCount > 0;
+function buildSessionSearchRenderState(results: SessionSearchResult[]): SessionSearchRenderState {
+  const filteredResults: Record<SessionSearchFilter, SessionSearchIndexedResult[]> = {
+    all: [],
+    claude: [],
+    codex: []
+  };
+  const seenHashes: Record<SessionSearchFilter, Set<string>> = {
+    all: new Set<string>(),
+    claude: new Set<string>(),
+    codex: new Set<string>()
+  };
+
+  for (const [originalIndex, result] of results.entries()) {
+    const normalizedPreview = normalizeJsonlPreview(result.preview);
+    if (!normalizedPreview) {
+      continue;
+    }
+
+    const previewHash = hashSessionSearchPreview(normalizedPreview);
+    const indexedResult: SessionSearchIndexedResult = {
+      result,
+      originalIndex,
+      normalizedPreview
+    };
+
+    if (!seenHashes.all.has(previewHash)) {
+      seenHashes.all.add(previewHash);
+      filteredResults.all.push(indexedResult);
+    }
+
+    if (!seenHashes[result.source].has(previewHash)) {
+      seenHashes[result.source].add(previewHash);
+      filteredResults[result.source].push(indexedResult);
+    }
+  }
+
+  return {
+    filteredResults,
+    counts: {
+      all: filteredResults.claude.length + filteredResults.codex.length,
+      claude: filteredResults.claude.length,
+      codex: filteredResults.codex.length
+    }
+  };
+}
+
+function hashSessionSearchPreview(normalizedPreview: string): string {
+  return normalizedPreview.split("").reduce((acc, char) => {
+    acc = ((acc << 5) - acc) + char.charCodeAt(0);
+    return acc & acc;
+  }, 0).toString();
+}
+
+function renderSessionSearchFilterButtons(renderState: SessionSearchRenderState) {
+  const { counts } = renderState;
+  const hasResults = counts.all > 0;
 
   const makeButton = (
-    filter: "all" | "claude" | "codex",
+    filter: SessionSearchFilter,
     label: string,
     count: number
   ) => {
@@ -3922,13 +4162,13 @@ function renderSessionSearchFilterButtons() {
   };
 
   return [
-    makeButton("all", "All", totalCount),
-    makeButton("claude", "Claude", claudeCount),
-    makeButton("codex", "Codex", codexCount),
+    makeButton("all", "All", counts.all),
+    makeButton("claude", "Claude", counts.claude),
+    makeButton("codex", "Codex", counts.codex),
   ];
 }
 
-function renderSessionSearchBody() {
+function renderSessionSearchBody(renderState: SessionSearchRenderState) {
   if (!ui.sessionSearchRepoId) {
     return [emptyStateElement("Open or select a project first.")];
   }
@@ -3956,17 +4196,14 @@ function renderSessionSearchBody() {
     return [emptyStateElement("No matching session content found for this project.")];
   }
 
-  const indexedResults = getFilteredSessionResults(ui.sessionSearchFilter);
+  const indexedResults = renderState.filteredResults[ui.sessionSearchFilter];
 
   if (!indexedResults.length) {
     const label = ui.sessionSearchFilter === "claude" ? "Claude" : "Codex";
     return [emptyStateElement(`No ${label} sessions matched. Try a different filter.`)];
   }
 
-  
-  return indexedResults  
-  .map(({ result, originalIndex: index }) => {
-    const normalizedPreview = normalizeJsonlPreview(result.preview);
+  return indexedResults.map(({ result, originalIndex: index, normalizedPreview }) => {
     const canResume = canResumeSessionSearchResult(result);
     const sourceLabel = result.source === "claude" ? "Claude" : "Codex";
     const shortId = result.sessionId ? result.sessionId.slice(0, 8) : null;
@@ -4432,24 +4669,44 @@ function renderGeneralSettingsPane() {
         <div class="muted">Every new session launches the selected agent. If you choose ${escapeHtml(selectedAgent.label)}, this command is what gets typed into the terminal on session start.</div>
       </section>
 
-      <label>
-        <div class="row-title">Shell Executable</div>
-        <input id="pref-shell-executable" value="${escapeAttribute(state.preferences.shellExecutablePath || "")}" />
-      </label>
-      <div class="muted">Sessions start as login shells in the selected repo so you can enter and exit agents normally.</div>
+      <section class="settings-field-card">
+        <div class="settings-field-copy">
+          <div class="row-title">Shell Executable</div>
+          <div class="muted">Sessions start as login shells in the selected repo so you can enter and exit agents normally.</div>
+        </div>
+        <div class="settings-field-control">
+          <input id="pref-shell-executable" value="${escapeAttribute(state.preferences.shellExecutablePath || "")}" />
+        </div>
+      </section>
 
-      <label class="inline-toggle">
-        <input type="checkbox" id="pref-notifications-enabled" ${state.preferences.notificationsEnabled ? "checked" : ""} />
-        <span>Enable Notifications</span>
-      </label>
-      <label class="inline-toggle">
-        <input type="checkbox" id="pref-native-notifications" ${state.preferences.showNativeNotifications ? "checked" : ""} />
-        <span>Show Native macOS Notifications</span>
-      </label>
-      <label class="inline-toggle">
-        <input type="checkbox" id="pref-in-app-badges" ${state.preferences.showInAppBadges ? "checked" : ""} />
-        <span>Show In-App Badges</span>
-      </label>
+      <section class="settings-group-card settings-toggle-card">
+        <div class="settings-group-header">
+          <div class="settings-field-copy">
+            <div class="row-title">Notifications</div>
+            <div class="muted">Choose which alerts Hydra can surface while sessions run in the background.</div>
+          </div>
+        </div>
+        <div class="settings-group-body settings-group-body-compact">
+          <div class="value-row">
+            <label class="inline-toggle">
+              <input type="checkbox" id="pref-notifications-enabled" ${state.preferences.notificationsEnabled ? "checked" : ""} />
+              <span>Enable Notifications</span>
+            </label>
+          </div>
+          <div class="value-row">
+            <label class="inline-toggle">
+              <input type="checkbox" id="pref-native-notifications" ${state.preferences.showNativeNotifications ? "checked" : ""} />
+              <span>Show Native macOS Notifications</span>
+            </label>
+          </div>
+          <div class="value-row">
+            <label class="inline-toggle">
+              <input type="checkbox" id="pref-in-app-badges" ${state.preferences.showInAppBadges ? "checked" : ""} />
+              <span>Show In-App Badges</span>
+            </label>
+          </div>
+        </div>
+      </section>
 
       <section class="settings-field-card settings-update-card">
         <div class="settings-update-header">
@@ -6166,7 +6423,7 @@ async function handleClick(event) {
       await revealSessionSearchResult(Number(target.dataset.resultIndex));
       break;
     case "session-search-filter":
-      ui.sessionSearchFilter = (target.dataset.filterValue || "all") as "all" | "claude" | "codex";
+      ui.sessionSearchFilter = (target.dataset.filterValue || "all") as SessionSearchFilter;
       ui.sessionSearchSelectedIndex = 0;
       renderSessionSearchDialogKeepFocus();
       break;
@@ -7577,7 +7834,7 @@ async function selectSession(
   }
 
   const nextLayout = addSessionToWorkspaceLayout(
-    syncStoredSessionWorkspaceLayout(),
+    workspaceLayoutIndex.normalized,
     sessionId,
     ui.selection.type === "session" ? ui.selection.id : null
   );
@@ -9582,7 +9839,7 @@ function formatJsonValue(value) {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-function mergeSessionSummary(summary) {
+function mergeSessionSummary(summary: SessionSummary): SessionSummary | null {
   const index = state.sessions.findIndex((session) => session.id === summary.id);
   if (index < 0) {
     return null;
@@ -9592,11 +9849,12 @@ function mergeSessionSummary(summary) {
     ...state.sessions[index],
     ...summary
   };
+  rebuildSessionIndex();
 
   return state.sessions[index];
 }
 
-function appendSessionOutput(sessionId, chunk, summary) {
+function appendSessionOutput(sessionId: string, chunk: string, summary: SessionSummary): SessionSummary | null {
   return mergeSessionSummary(summary);
 }
 
@@ -9616,6 +9874,17 @@ function cloneWorkspaceLayout(layout: WorkspaceLayoutNode | null = null) {
 
 function workspaceLayoutSignature(layout: WorkspaceLayoutNode | null = null) {
   return JSON.stringify(layout || null);
+}
+
+function buildWorkspaceLayoutIndex(layout: WorkspaceLayoutNode | null): WorkspaceLayoutIndex {
+  const normalized = normalizeWorkspaceLayout(layout);
+  const visibleIds = collectWorkspaceSessionIds(normalized);
+  return {
+    normalized,
+    signature: workspaceLayoutSignature(normalized),
+    visibleIds,
+    visibleIdSet: new Set(visibleIds)
+  };
 }
 
 function createWorkspaceLeaf(sessionId: string): WorkspaceLeafNode {
@@ -9764,40 +10033,46 @@ function uniqueWorkspaceSessionIds(sessionIds: string[]) {
 }
 
 function setStoredSessionWorkspaceLayout(layout: WorkspaceLayoutNode | null) {
-  const normalized = normalizeWorkspaceLayout(layout);
-  const nextSignature = workspaceLayoutSignature(normalized);
-  const currentSignature = workspaceLayoutSignature(
-    state.preferences.sessionWorkspaceLayout || null
-  );
+  const nextIndex = buildWorkspaceLayoutIndex(layout);
 
-  if (currentSignature === nextSignature) {
-    return normalized;
+  if (workspaceLayoutIndex.signature === nextIndex.signature) {
+    return workspaceLayoutIndex.normalized;
   }
 
   state.preferences = {
     ...state.preferences,
-    sessionWorkspaceLayout: normalized
+    sessionWorkspaceLayout: nextIndex.normalized
   };
-  void api.updatePreferences({ sessionWorkspaceLayout: normalized });
-  return normalized;
+  workspaceLayoutIndex = nextIndex;
+  void api.updatePreferences({ sessionWorkspaceLayout: nextIndex.normalized });
+  return nextIndex.normalized;
 }
 
 function syncStoredSessionWorkspaceLayout(activeSessionId: string | null = null) {
-  let layout = normalizeWorkspaceLayout(state.preferences.sessionWorkspaceLayout || null);
-
-  if (activeSessionId && sessionById(activeSessionId)) {
-    layout = addSessionToWorkspaceLayout(layout, activeSessionId, activeSessionId);
+  if (!activeSessionId || !sessionById(activeSessionId)) {
+    return setStoredSessionWorkspaceLayout(
+      (state.preferences.sessionWorkspaceLayout as WorkspaceLayoutNode | null) || null
+    );
   }
 
-  return setStoredSessionWorkspaceLayout(layout);
+  if (workspaceLayoutIndex.visibleIdSet.has(activeSessionId)) {
+    return workspaceLayoutIndex.normalized;
+  }
+
+  const nextLayout = addSessionToWorkspaceLayout(
+    workspaceLayoutIndex.normalized,
+    activeSessionId,
+    activeSessionId
+  );
+  return setStoredSessionWorkspaceLayout(nextLayout);
 }
 
 function workspaceVisibleSessionIds() {
-  return collectWorkspaceSessionIds(syncStoredSessionWorkspaceLayout());
+  return workspaceLayoutIndex.visibleIds;
 }
 
 function isSessionVisible(sessionId) {
-  return workspaceVisibleSessionIds().includes(sessionId);
+  return workspaceLayoutIndex.visibleIdSet.has(sessionId);
 }
 
 function workspaceContainsSession(layout: WorkspaceLayoutNode | null, sessionId: string) {
@@ -9876,7 +10151,7 @@ function removeSessionFromWorkspace(
   sessionId: string,
   options: { persistSelection?: boolean } = {}
 ) {
-  const nextLayout = removeSessionFromLayout(syncStoredSessionWorkspaceLayout(), sessionId);
+  const nextLayout = removeSessionFromLayout(workspaceLayoutIndex.normalized, sessionId);
   setStoredSessionWorkspaceLayout(nextLayout);
 
   if (options.persistSelection === false) {
@@ -9981,7 +10256,7 @@ function applySessionWorkspaceDrop(
   targetSessionId: string,
   zone: WorkspaceDropZone
 ) {
-  let layout = syncStoredSessionWorkspaceLayout();
+  let layout = workspaceLayoutIndex.normalized;
   const sourceVisible = workspaceContainsSession(layout, sourceSessionId);
 
   if (zone === "center") {
@@ -10030,7 +10305,7 @@ function canDropSessionAtTarget(
     return false;
   }
 
-  const layout = syncStoredSessionWorkspaceLayout();
+  const layout = workspaceLayoutIndex.normalized;
   const sourceVisible = workspaceContainsSession(layout, sourceSessionId);
   const targetVisible = workspaceContainsSession(layout, targetSessionId);
 
@@ -10120,7 +10395,7 @@ function workspaceDropLabel(
 }
 
 function sessionById(sessionId: string): SessionSummary | null {
-  return state.sessions.find((session) => session.id === sessionId) || null;
+  return sessionIndex.byId.get(sessionId) || null;
 }
 
 function repoById(repoId: string | null | undefined): RepoSnapshot | null {
@@ -10128,7 +10403,7 @@ function repoById(repoId: string | null | undefined): RepoSnapshot | null {
     return null;
   }
 
-  return state.repos.find((repo) => repo.id === repoId) || null;
+  return repoIndex.byId.get(repoId) || null;
 }
 
 function currentRepoId(): string | null {
@@ -10621,7 +10896,8 @@ function syncSectionFocusUi(options: { preserveCurrentFocus?: boolean } = {}) {
     terminalWrap?.classList.toggle("section-focused", active && ui.focusSection === "terminal");
   }
 
-  if (isAnyDialogOpen() || options.preserveCurrentFocus) {
+  // Keep inline session renames stable while live session updates refresh the chrome.
+  if (isAnyDialogOpen() || options.preserveCurrentFocus || ui.renamingSessionId) {
     return;
   }
 
@@ -10670,7 +10946,7 @@ function focusCurrentSectionElement() {
 }
 
 function sortedRepos() {
-  return [...state.repos].sort(compareRepos);
+  return repoIndex.sorted;
 }
 
 function compareRepos(left, right) {
@@ -10891,20 +11167,94 @@ function scrollMainListSelectionIntoView() {
   target?.scrollIntoView({ block: "nearest" });
 }
 
-function sessionsForRepo(repoId) {
-  return [...state.sessions]
-    .filter((session) => session.repoID === repoId)
-    .sort(compareSessions);
+function rebuildRepoIndex(): void {
+  repoIndex = buildRepoIndex(state.repos);
 }
 
-function inboxSessions() {
-  return [...state.sessions]
-    .filter((session) => session.blocker || session.unreadCount > 0)
-    .sort(compareInboxSessions);
+function buildRepoIndex(repos: RepoSnapshot[]): RepoIndex {
+  const byId = new Map<string, RepoSnapshot>();
+
+  for (const repo of repos) {
+    byId.set(repo.id, repo);
+  }
+
+  return {
+    byId,
+    sorted: [...repos].sort(compareRepos)
+  };
 }
 
-function mostRecentlyUpdatedSession() {
-  return [...state.sessions].sort(compareSessionsByUpdatedAt)[0] || null;
+function rebuildSessionIndex(): void {
+  sessionIndex = buildSessionIndex(state.sessions);
+}
+
+function buildSessionIndex(sessions: SessionSummary[]): SessionIndex {
+  const byId = new Map<string, SessionSummary>();
+  const byRepoId = new Map<string, SessionSummary[]>();
+  const repoStatsById = new Map<string, RepoSessionStats>();
+  const allSorted = [...sessions].sort(compareSessions);
+  const inbox: SessionSummary[] = [];
+  let mostRecent: SessionSummary | null = null;
+
+  for (const session of sessions) {
+    byId.set(session.id, session);
+
+    const repoSessions = byRepoId.get(session.repoID);
+    if (repoSessions) {
+      repoSessions.push(session);
+    } else {
+      byRepoId.set(session.repoID, [session]);
+    }
+
+    let stats = repoStatsById.get(session.repoID);
+    if (!stats) {
+      stats = { liveCount: 0, attentionCount: 0 };
+      repoStatsById.set(session.repoID, stats);
+    }
+
+    if (session.runtimeState === "live") {
+      stats.liveCount += 1;
+    }
+
+    if (session.blocker || session.unreadCount > 0) {
+      stats.attentionCount += 1;
+      inbox.push(session);
+    }
+
+    if (!mostRecent || compareSessionsByUpdatedAt(session, mostRecent) < 0) {
+      mostRecent = session;
+    }
+  }
+
+  for (const repoSessions of byRepoId.values()) {
+    repoSessions.sort(compareSessions);
+  }
+  inbox.sort(compareInboxSessions);
+
+  return {
+    byId,
+    byRepoId,
+    repoStatsById,
+    allSorted,
+    inbox,
+    mostRecent
+  };
+}
+
+function repoSessionStats(repoId: string): RepoSessionStats {
+  return sessionIndex.repoStatsById.get(repoId) || EMPTY_REPO_SESSION_STATS;
+}
+
+function sessionsForRepo(repoId: string): SessionSummary[] {
+  return sessionIndex.byRepoId.get(repoId) || EMPTY_SESSION_LIST;
+}
+
+function inboxSessions(): SessionSummary[] {
+  return sessionIndex.inbox;
+}
+
+function mostRecentlyUpdatedSession(): SessionSummary | null {
+  return sessionIndex.mostRecent;
 }
 
 function compareSessionPinning(left, right) {
@@ -11186,6 +11536,82 @@ function renderAcceleratorMarkupElement(accelerator: string) {
   return trustedElement<HTMLElement>(renderAcceleratorMarkup(accelerator));
 }
 
+type SessionChromeIconKind =
+  | "columns"
+  | "stack"
+  | "grid"
+  | "plus"
+  | "more"
+  | "rename"
+  | "close"
+  | "toolbar";
+
+function renderSessionChromeIcon(kind: SessionChromeIconKind): string {
+  switch (kind) {
+    case "columns":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.25" y="3" width="4.75" height="10" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <rect x="9" y="3" width="4.75" height="10" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        </svg>
+      `;
+    case "stack":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.25" y="2.5" width="11.5" height="4.25" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <rect x="2.25" y="9.25" width="11.5" height="4.25" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        </svg>
+      `;
+    case "grid":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.25" y="2.5" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <rect x="9" y="2.5" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <rect x="2.25" y="9.25" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <rect x="9" y="9.25" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        </svg>
+      `;
+    case "plus":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M8 3.25v9.5M3.25 8h9.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+      `;
+    case "rename":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="m11.9 2.75 1.35 1.35a1 1 0 0 1 0 1.41l-6.7 6.7-2.8.56.56-2.8 6.7-6.7a1 1 0 0 1 1.41 0Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+          <path d="M9.95 4.7 11.3 6.05" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+        </svg>
+      `;
+    case "toolbar":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2.5 4.25h11M2.5 8h6.5M2.5 11.75h8.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+        </svg>
+      `;
+    case "close":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M4.25 4.25 11.75 11.75M11.75 4.25 4.25 11.75" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>
+        </svg>
+      `;
+    case "more":
+    default:
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="3.25" cy="8" r="1.1" fill="currentColor"/>
+          <circle cx="8" cy="8" r="1.1" fill="currentColor"/>
+          <circle cx="12.75" cy="8" r="1.1" fill="currentColor"/>
+        </svg>
+      `;
+  }
+}
+
+function renderSessionChromeIconElement(kind: SessionChromeIconKind): SVGElement {
+  return trustedElement<SVGElement>(renderSessionChromeIcon(kind));
+}
+
 function renderUtilityIcon(kind) {
   switch (kind) {
     case "workspace":
@@ -11212,8 +11638,8 @@ function renderUtilityIcon(kind) {
     case "settings":
       return `
         <svg viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/>
-          <path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M17.3 6.7l-1.4 1.4M8.1 15.9l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+          <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37c1 .608 2.296.07 2.572-1.065" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0-6 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       `;
     case "collapse":

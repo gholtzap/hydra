@@ -44,3 +44,10 @@ auth-server/node_modules
 auth-server/.wrangler/
 auth-server/.dev.vars
 auth-server/dist/
+auth-server/.wrangler
+auth-server/dist
+auth-server/node_modules
+auth-server/.dev.vars
+.agents/
+skills-lock.json
+opencode.json

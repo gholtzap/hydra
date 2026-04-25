@@ -2757,22 +2757,22 @@ function updateSessionWorkspaceToolbar() {
       dom(
         "div",
         { className: "ws-toolbar-info" },
-        renderSessionVisualButtonElement(
-          session,
-          "session-visual-toolbar",
-          "import-session-icon",
-          session.sessionIconUrl ? "Replace session icon" : "Upload session icon"
-        ),
-        dom("span", { className: "ws-toolbar-title" }, session.title),
-        session.isPinned
-          ? renderSessionPinIndicatorElement("Pinned", "session-pin-indicator-toolbar")
-          : null,
-        dom("span", { className: "ws-toolbar-sep" }, "/"),
-        dom("span", { className: "ws-toolbar-repo" }, repo?.name || "Unknown"),
+        renderSessionVisualElement(session, "session-visual-toolbar", { includePlaceholder: true }),
         dom(
-          "span",
-          { className: "ws-toolbar-meta" },
-          `${visibleSessionCount} ${pluralize(visibleSessionCount, "pane", "panes")}`
+          "div",
+          { className: "ws-toolbar-copy" },
+          dom("span", { className: "ws-toolbar-title" }, session.title),
+          dom(
+            "div",
+            { className: "ws-toolbar-meta-row" },
+            dom("span", { className: "ws-toolbar-repo" }, repo?.name || "Unknown"),
+            dom("span", { className: "ws-toolbar-sep", attrs: { "aria-hidden": "true" } }, "\u2022"),
+            dom(
+              "span",
+              { className: "ws-toolbar-meta" },
+              `${visibleSessionCount} ${pluralize(visibleSessionCount, "pane", "panes")}`
+            )
+          )
         )
       ),
       dom(
@@ -2783,13 +2783,29 @@ function updateSessionWorkspaceToolbar() {
           { className: "ws-layout-group", attrs: { role: "group", "aria-label": "Layout" } },
           dom(
             "button",
-            { className: "ws-layout-btn", attrs: { "data-action": "workspace-layout-columns", title: "Side by side" } },
-            "Cols"
+            {
+              className: "ws-layout-btn",
+              attrs: {
+                "data-action": "workspace-layout-columns",
+                "aria-label": "Side by side",
+                title: "Side by side",
+                type: "button"
+              }
+            },
+            renderSessionChromeIconElement("columns")
           ),
           dom(
             "button",
-            { className: "ws-layout-btn", attrs: { "data-action": "workspace-layout-stack", title: "Stacked vertically" } },
-            "Stack"
+            {
+              className: "ws-layout-btn",
+              attrs: {
+                "data-action": "workspace-layout-stack",
+                "aria-label": "Stacked vertically",
+                title: "Stacked vertically",
+                type: "button"
+              }
+            },
+            renderSessionChromeIconElement("stack")
           ),
           dom(
             "button",
@@ -2797,85 +2813,178 @@ function updateSessionWorkspaceToolbar() {
               className: "ws-layout-btn",
               attrs: {
                 "data-action": "workspace-layout-grid",
-                title: "2x2 Grid",
+                "aria-label": "Grid",
+                title: "Grid",
+                type: "button",
                 disabled: visibleSessionCount > 1 ? undefined : true
               }
             },
-            "Grid"
+            renderSessionChromeIconElement("grid")
           )
         ),
         dom(
           "button",
           {
-            className: classNames("ws-action-btn", session.isPinned ? "ws-action-btn-active" : undefined),
-            attrs: { "data-action": "toggle-session-pin", "data-session-id": session.id }
+            className: "ws-action-btn ws-action-btn-strong",
+            attrs: {
+              "data-action": "open-launcher",
+              "data-repo-id": repo?.id || "",
+              type: "button"
+            }
           },
-          session.isPinned ? "Unpin" : "Pin"
+          renderSessionChromeIconElement("plus"),
+          dom("span", { className: "ws-action-label" }, "Session")
         ),
-        renderSessionTagSelectElement(session, "session-tag-select-toolbar"),
-        session.sessionIconUrl
-          ? dom(
+        dom(
+          "details",
+          { className: "ws-toolbar-menu" },
+          dom(
+            "summary",
+            {
+              className: "ws-action-btn ws-action-btn-icon ws-toolbar-menu-trigger",
+              attrs: { "aria-label": "Workspace tools", title: "Workspace tools" }
+            },
+            renderSessionChromeIconElement("more")
+          ),
+          dom(
+            "div",
+            { className: "ws-toolbar-menu-popover" },
+            dom("div", { className: "ws-toolbar-menu-section-title" }, "Workspace"),
+            dom(
               "button",
               {
-                className: "ws-action-btn",
-                attrs: { "data-action": "clear-session-icon", "data-session-id": session.id }
+                className: "ws-menu-item",
+                attrs: { "data-action": "open-wiki", "data-repo-id": repo?.id || "", type: "button" }
               },
-              "Clear Icon"
+              "Wiki"
+            ),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: { "data-action": "open-tokscale", "data-repo-id": repo?.id || "", type: "button" }
+              },
+              "Tokens"
+            ),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: { "data-action": "open-lazygit", "data-repo-id": repo?.id || "", type: "button" }
+              },
+              "Git"
+            ),
+            dom("div", { className: "ws-toolbar-menu-divider" }),
+            dom("div", { className: "ws-toolbar-menu-section-title" }, "Agent"),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: {
+                  "data-action": "open-settings",
+                  "data-settings-tab": "claude",
+                  "data-settings-claude-view": "skills",
+                  type: "button"
+                }
+              },
+              "Skills"
+            ),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: {
+                  "data-action": "open-settings",
+                  "data-settings-tab": "claude",
+                  "data-settings-claude-view": "plugins",
+                  type: "button"
+                }
+              },
+              "Plugins"
+            ),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: {
+                  "data-action": "open-settings",
+                  "data-settings-tab": "claude",
+                  type: "button"
+                }
+              },
+              "Agent Files"
+            ),
+            dom("div", { className: "ws-toolbar-menu-divider" }),
+            dom("div", { className: "ws-toolbar-menu-section-title" }, "Session"),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: {
+                  "data-action": "toggle-session-pin",
+                  "data-session-id": session.id,
+                  type: "button"
+                }
+              },
+              session.isPinned ? "Unpin session" : "Pin session"
+            ),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: {
+                  "data-action": "import-session-icon",
+                  "data-session-id": session.id,
+                  type: "button"
+                }
+              },
+              session.sessionIconUrl ? "Change icon" : "Add icon"
+            ),
+            session.sessionIconUrl
+              ? dom(
+                  "button",
+                  {
+                    className: "ws-menu-item",
+                    attrs: {
+                      "data-action": "clear-session-icon",
+                      "data-session-id": session.id,
+                      type: "button"
+                    }
+                  },
+                  "Clear icon"
+                )
+              : null,
+            dom(
+              "div",
+              { className: "ws-toolbar-menu-row" },
+              dom("span", { className: "ws-toolbar-menu-label" }, "Tag"),
+              renderSessionTagSelectElement(session, "session-tag-select ws-toolbar-menu-select")
+            ),
+            renderSessionRestartButtonElement(session, {
+              className: "ws-menu-item",
+              primary: session.runtimeState !== "live"
+            }),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item",
+                attrs: { "data-action": "collapse-navbar", type: "button" }
+              },
+              "Hide controls"
+            ),
+            dom(
+              "button",
+              {
+                className: "ws-menu-item ws-menu-item-danger",
+                attrs: {
+                  "data-action": "close-session",
+                  "data-session-id": session.id,
+                  type: "button"
+                }
+              },
+              "End session"
             )
-          : null,
-        dom(
-          "button",
-          {
-            className: "ws-action-btn primary",
-            attrs: { "data-action": "open-launcher", "data-repo-id": repo?.id || "" }
-          },
-          "+ Session"
-        ),
-        dom("button", { className: "ws-action-btn", attrs: { "data-action": "open-wiki", "data-repo-id": repo?.id || "" } }, "Wiki"),
-        dom(
-          "button",
-          { className: "ws-action-btn", attrs: { "data-action": "open-tokscale", "data-repo-id": repo?.id || "" } },
-          "Tokens"
-        ),
-        dom("button", { className: "ws-action-btn", attrs: { "data-action": "open-lazygit", "data-repo-id": repo?.id || "" } }, "Git"),
-        dom(
-          "button",
-          {
-            className: "ws-action-btn",
-            attrs: {
-              "data-action": "open-settings",
-              "data-settings-tab": "claude",
-              "data-settings-claude-view": "skills"
-            }
-          },
-          "Skills"
-        ),
-        dom(
-          "button",
-          {
-            className: "ws-action-btn",
-            attrs: {
-              "data-action": "open-settings",
-              "data-settings-tab": "claude",
-              "data-settings-claude-view": "plugins"
-            }
-          },
-          "Plugins"
-        ),
-        dom(
-          "button",
-          { className: "ws-action-btn", attrs: { "data-action": "open-settings", "data-settings-tab": "claude" } },
-          "Agent Files"
-        ),
-        dom("button", { className: "ws-action-btn", attrs: { "data-action": "collapse-navbar" } }, "Hide Bar"),
-        renderSessionRestartButtonElement(session, {
-          className: "ws-action-btn",
-          primary: session.runtimeState !== "live"
-        }),
-        dom(
-          "button",
-          { className: "ws-action-btn ws-action-danger", attrs: { "data-action": "close-session", "data-session-id": session.id } },
-          "End"
+          )
         )
       )
     )
@@ -2959,27 +3068,57 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
     dom(
       "div",
       { className: "pane-bar-left" },
-      dom("span", { className: "pane-grip", attrs: { "aria-hidden": "true" } }, "\u2801\u2801\u2801"),
       renderSessionVisualElement(session, "session-visual-pane"),
-      isRenaming
-        ? dom("input", {
-            className: "pane-title-input",
-            value: ui.renamingSessionTitle,
-            attrs: {
-              type: "text",
-              "data-session-rename-input": "true",
-              "data-session-id": session.id,
-              "aria-label": "Rename session"
-            }
-          })
-        : dom("span", { className: "pane-title" }, session.title),
-      session.isPinned
-        ? renderSessionPinIndicatorElement("Pin", "session-pin-indicator-compact")
-        : null,
       dom(
-        "span",
-        { className: `status-badge status-${session.status}` },
-        statusLabel(session.status)
+        "div",
+        { className: "pane-title-stack" },
+        dom(
+          "div",
+          { className: "pane-title-row" },
+          isRenaming
+            ? dom("input", {
+                className: "pane-title-input",
+                value: ui.renamingSessionTitle,
+                attrs: {
+                  type: "text",
+                  "data-session-rename-input": "true",
+                  "data-session-id": session.id,
+                  "aria-label": "Rename session"
+                }
+              })
+            : dom("span", { className: "pane-title", attrs: { title: session.title } }, session.title),
+          dom(
+            "span",
+            { className: classNames("pane-status-chip", `pane-status-${session.status}`) },
+            dom("span", { className: "pane-status-dot", attrs: { "aria-hidden": "true" } }),
+            dom("span", { className: "pane-status-label" }, statusLabel(session.status))
+          )
+        ),
+        session.isPinned || planReview
+          ? dom(
+              "div",
+              { className: "pane-meta-row" },
+              session.isPinned
+                ? renderSessionPinIndicatorElement("Pinned", "session-pin-indicator-compact")
+                : null,
+              planReview
+                ? dom(
+                    "button",
+                    {
+                      className: "pane-plan-pill",
+                      attrs: {
+                        type: "button",
+                        "data-action": "open-plan-review",
+                        "data-session-id": session.id,
+                        "data-no-drag": "true",
+                        title: "Review latest plan"
+                      }
+                    },
+                    "Plan"
+                  )
+                : null
+            )
+          : null
       )
     ),
     dom(
@@ -2993,10 +3132,12 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
               attrs: {
                 "data-action": "expand-navbar",
                 "data-no-drag": "true",
+                type: "button",
                 title: "Show toolbar"
               }
             },
-            "Show Bar"
+            renderSessionChromeIconElement("toolbar"),
+            dom("span", { className: "pane-toolbar-label" }, "Show")
           )
         : null,
       isRenaming
@@ -3008,6 +3149,7 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
                 "data-action": "cancel-session-rename",
                 "data-session-id": session.id,
                 "data-no-drag": "true",
+                type: "button",
                 title: "Cancel rename"
               }
             },
@@ -3016,48 +3158,37 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
         : dom(
             "button",
             {
-              className: "pane-action-btn",
+              className: "pane-action-btn pane-action-btn-icon",
               attrs: {
                 "data-action": "start-session-rename",
                 "data-session-id": session.id,
                 "data-no-drag": "true",
+                "aria-label": "Rename session",
+                type: "button",
                 title: "Rename tab"
               }
             },
-            "Rename"
+            renderSessionChromeIconElement("rename")
           ),
-      planReview
-        ? dom(
-            "button",
-            {
-              className: "pane-action-btn",
-              attrs: {
-                "data-action": "open-plan-review",
-                "data-session-id": session.id,
-                "data-no-drag": "true",
-                title: "Review latest plan"
-              }
-            },
-            "Review Plan"
-          )
-        : null,
       renderSessionRestartButtonElement(session, {
-        className: "pane-action-btn",
+        className: "pane-action-btn pane-action-btn-icon",
         primary: session.runtimeState !== "live",
         noDrag: true
       }),
       dom(
         "button",
         {
-          className: "pane-action-btn pane-hide-btn",
+          className: "pane-action-btn pane-action-btn-icon pane-hide-btn",
           attrs: {
             "data-action": "remove-session-pane",
             "data-session-id": session.id,
             "data-no-drag": "true",
+            "aria-label": "Hide pane",
+            type: "button",
             title: "Hide pane"
           }
         },
-        "\u00D7"
+        renderSessionChromeIconElement("close")
       )
     )
   );
@@ -10988,6 +11119,82 @@ function renderSessionTagSelectElement(session, extraClass = "") {
 
 function renderAcceleratorMarkupElement(accelerator: string) {
   return trustedElement<HTMLElement>(renderAcceleratorMarkup(accelerator));
+}
+
+type SessionChromeIconKind =
+  | "columns"
+  | "stack"
+  | "grid"
+  | "plus"
+  | "more"
+  | "rename"
+  | "close"
+  | "toolbar";
+
+function renderSessionChromeIcon(kind: SessionChromeIconKind): string {
+  switch (kind) {
+    case "columns":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.25" y="3" width="4.75" height="10" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <rect x="9" y="3" width="4.75" height="10" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        </svg>
+      `;
+    case "stack":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.25" y="2.5" width="11.5" height="4.25" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <rect x="2.25" y="9.25" width="11.5" height="4.25" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        </svg>
+      `;
+    case "grid":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.25" y="2.5" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <rect x="9" y="2.5" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <rect x="2.25" y="9.25" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <rect x="9" y="9.25" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        </svg>
+      `;
+    case "plus":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M8 3.25v9.5M3.25 8h9.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+      `;
+    case "rename":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="m11.9 2.75 1.35 1.35a1 1 0 0 1 0 1.41l-6.7 6.7-2.8.56.56-2.8 6.7-6.7a1 1 0 0 1 1.41 0Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+          <path d="M9.95 4.7 11.3 6.05" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+        </svg>
+      `;
+    case "toolbar":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2.5 4.25h11M2.5 8h6.5M2.5 11.75h8.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+        </svg>
+      `;
+    case "close":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M4.25 4.25 11.75 11.75M11.75 4.25 4.25 11.75" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>
+        </svg>
+      `;
+    case "more":
+    default:
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="3.25" cy="8" r="1.1" fill="currentColor"/>
+          <circle cx="8" cy="8" r="1.1" fill="currentColor"/>
+          <circle cx="12.75" cy="8" r="1.1" fill="currentColor"/>
+        </svg>
+      `;
+  }
+}
+
+function renderSessionChromeIconElement(kind: SessionChromeIconKind): SVGElement {
+  return trustedElement<SVGElement>(renderSessionChromeIcon(kind));
 }
 
 function renderUtilityIcon(kind) {

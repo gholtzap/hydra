@@ -599,6 +599,8 @@ class AppController {
   saveTimer: NodeJS.Timeout | null;
   allowQuit: boolean;
   downloadedUpdateVersion: string | null;
+  downloadedUpdatePromptVisible: boolean;
+  downloadedUpdatePromptSuppressedKey: string | null;
   updateInstallWatchdog: NodeJS.Timeout | null;
   updateInstallInProgress: boolean;
   pendingAgentLaunch: Set<string>;
@@ -626,6 +628,8 @@ class AppController {
     this.saveTimer = null;
     this.allowQuit = false;
     this.downloadedUpdateVersion = null;
+    this.downloadedUpdatePromptVisible = false;
+    this.downloadedUpdatePromptSuppressedKey = null;
     this.updateInstallWatchdog = null;
     this.updateInstallInProgress = false;
     this.pendingAgentLaunch = new Set();
@@ -649,15 +653,55 @@ class AppController {
   }
 
   describeDownloadedUpdate(version?: string | null): string {
-    const normalizedVersion = typeof version === "string" ? version.trim() : "";
+    const normalizedVersion = normalizeUpdateVersion(version);
     return normalizedVersion ? `Hydra ${normalizedVersion}` : "the downloaded update";
   }
 
+  downloadedUpdatePromptKey(version?: string | null): string {
+    return normalizeUpdateVersion(version) || "__unknown_downloaded_update__";
+  }
+
   noteDownloadedUpdate(version?: string | null): void {
-    const normalizedVersion = typeof version === "string" ? version.trim() : "";
-    this.downloadedUpdateVersion = normalizedVersion || null;
+    const normalizedVersion = normalizeUpdateVersion(version);
+    if (this.downloadedUpdateVersion !== normalizedVersion) {
+      this.downloadedUpdatePromptSuppressedKey = null;
+    }
+    this.downloadedUpdateVersion = normalizedVersion;
     this.updateInstallInProgress = false;
     this.clearUpdateInstallWatchdog();
+  }
+
+  async promptToInstallDownloadedUpdate(version?: string | null): Promise<void> {
+    const targetVersion = normalizeUpdateVersion(version) || this.downloadedUpdateVersion;
+    const promptKey = this.downloadedUpdatePromptKey(targetVersion);
+    if (
+      this.downloadedUpdatePromptVisible
+      || this.downloadedUpdatePromptSuppressedKey === promptKey
+    ) {
+      return;
+    }
+
+    this.downloadedUpdatePromptVisible = true;
+    const targetUpdate = this.describeDownloadedUpdate(targetVersion);
+
+    try {
+      const { response } = await dialog.showMessageBox({
+        type: "info",
+        title: "Update ready",
+        message: `${targetUpdate} has been downloaded. Restart to install it.`,
+        detail: `Current version: ${app.getVersion()}. Updater log: ${updaterLogFilePath()}`,
+        buttons: ["Restart now", "Later"]
+      });
+      this.downloadedUpdatePromptSuppressedKey = promptKey;
+
+      if (response === 0) {
+        await this.restartToInstallUpdate(targetVersion);
+      }
+    } catch (error: unknown) {
+      logUpdater("error", `failed to show downloaded update dialog: ${formatUpdaterLogMessage(error)}`);
+    } finally {
+      this.downloadedUpdatePromptVisible = false;
+    }
   }
 
   clearUpdateInstallWatchdog(): void {
@@ -3846,18 +3890,7 @@ autoUpdater.on("error", (error: unknown) => {
 
 autoUpdater.on("update-downloaded", (info: { version?: string }) => {
   controller.noteDownloadedUpdate(info.version);
-  const targetUpdate = controller.describeDownloadedUpdate(info.version);
-  dialog.showMessageBox({
-    type: "info",
-    title: "Update ready",
-    message: `${targetUpdate} has been downloaded. Restart to install it.`,
-    detail: `Current version: ${app.getVersion()}. Updater log: ${updaterLogFilePath()}`,
-    buttons: ["Restart now", "Later"]
-  }).then(({ response }) => {
-    if (response === 0) {
-      void controller.restartToInstallUpdate(info.version);
-    }
-  });
+  void controller.promptToInstallDownloadedUpdate(info.version);
 });
 
 app.on("before-quit", (event) => {

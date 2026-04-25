@@ -3016,10 +3016,6 @@ function updateSessionWorkspaceToolbar() {
               dom("span", { className: "ws-toolbar-menu-label" }, "Tag"),
               renderSessionTagSelectElement(session, "session-tag-select ws-toolbar-menu-select")
             ),
-            renderSessionRestartButtonElement(session, {
-              className: "ws-menu-item",
-              primary: session.runtimeState !== "live"
-            }),
             dom(
               "button",
               {
@@ -3039,7 +3035,11 @@ function updateSessionWorkspaceToolbar() {
                 }
               },
               "End session"
-            )
+            ),
+            renderSessionRestartButtonElement(session, {
+              className: "ws-menu-item",
+              primary: session.runtimeState !== "live"
+            })
           )
         )
       )

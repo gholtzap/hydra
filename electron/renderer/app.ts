@@ -343,6 +343,13 @@ type SessionIndex = {
   mostRecent: SessionSummary | null;
 };
 
+type WorkspaceLayoutIndex = {
+  normalized: WorkspaceLayoutNode | null;
+  signature: string;
+  visibleIds: string[];
+  visibleIdSet: Set<string>;
+};
+
 const EMPTY_SESSION_LIST: SessionSummary[] = [];
 const EMPTY_REPO_SESSION_STATS: RepoSessionStats = {
   liveCount: 0,
@@ -351,6 +358,9 @@ const EMPTY_REPO_SESSION_STATS: RepoSessionStats = {
 
 let repoIndex: RepoIndex = buildRepoIndex(state.repos);
 let sessionIndex: SessionIndex = buildSessionIndex(state.sessions);
+let workspaceLayoutIndex: WorkspaceLayoutIndex = buildWorkspaceLayoutIndex(
+  state.preferences.sessionWorkspaceLayout || null
+);
 
 type UiState = {
   selection: RendererSelection;
@@ -4573,24 +4583,44 @@ function renderGeneralSettingsPane() {
         <div class="muted">Every new session launches the selected agent. If you choose ${escapeHtml(selectedAgent.label)}, this command is what gets typed into the terminal on session start.</div>
       </section>
 
-      <label>
-        <div class="row-title">Shell Executable</div>
-        <input id="pref-shell-executable" value="${escapeAttribute(state.preferences.shellExecutablePath || "")}" />
-      </label>
-      <div class="muted">Sessions start as login shells in the selected repo so you can enter and exit agents normally.</div>
+      <section class="settings-field-card">
+        <div class="settings-field-copy">
+          <div class="row-title">Shell Executable</div>
+          <div class="muted">Sessions start as login shells in the selected repo so you can enter and exit agents normally.</div>
+        </div>
+        <div class="settings-field-control">
+          <input id="pref-shell-executable" value="${escapeAttribute(state.preferences.shellExecutablePath || "")}" />
+        </div>
+      </section>
 
-      <label class="inline-toggle">
-        <input type="checkbox" id="pref-notifications-enabled" ${state.preferences.notificationsEnabled ? "checked" : ""} />
-        <span>Enable Notifications</span>
-      </label>
-      <label class="inline-toggle">
-        <input type="checkbox" id="pref-native-notifications" ${state.preferences.showNativeNotifications ? "checked" : ""} />
-        <span>Show Native macOS Notifications</span>
-      </label>
-      <label class="inline-toggle">
-        <input type="checkbox" id="pref-in-app-badges" ${state.preferences.showInAppBadges ? "checked" : ""} />
-        <span>Show In-App Badges</span>
-      </label>
+      <section class="settings-group-card settings-toggle-card">
+        <div class="settings-group-header">
+          <div class="settings-field-copy">
+            <div class="row-title">Notifications</div>
+            <div class="muted">Choose which alerts Hydra can surface while sessions run in the background.</div>
+          </div>
+        </div>
+        <div class="settings-group-body settings-group-body-compact">
+          <div class="value-row">
+            <label class="inline-toggle">
+              <input type="checkbox" id="pref-notifications-enabled" ${state.preferences.notificationsEnabled ? "checked" : ""} />
+              <span>Enable Notifications</span>
+            </label>
+          </div>
+          <div class="value-row">
+            <label class="inline-toggle">
+              <input type="checkbox" id="pref-native-notifications" ${state.preferences.showNativeNotifications ? "checked" : ""} />
+              <span>Show Native macOS Notifications</span>
+            </label>
+          </div>
+          <div class="value-row">
+            <label class="inline-toggle">
+              <input type="checkbox" id="pref-in-app-badges" ${state.preferences.showInAppBadges ? "checked" : ""} />
+              <span>Show In-App Badges</span>
+            </label>
+          </div>
+        </div>
+      </section>
 
       <section class="settings-field-card settings-update-card">
         <div class="settings-update-header">
@@ -7620,7 +7650,7 @@ async function selectSession(
   }
 
   const nextLayout = addSessionToWorkspaceLayout(
-    syncStoredSessionWorkspaceLayout(),
+    workspaceLayoutIndex.normalized,
     sessionId,
     ui.selection.type === "session" ? ui.selection.id : null
   );
@@ -9635,6 +9665,17 @@ function workspaceLayoutSignature(layout: WorkspaceLayoutNode | null = null) {
   return JSON.stringify(layout || null);
 }
 
+function buildWorkspaceLayoutIndex(layout: WorkspaceLayoutNode | null): WorkspaceLayoutIndex {
+  const normalized = normalizeWorkspaceLayout(layout);
+  const visibleIds = collectWorkspaceSessionIds(normalized);
+  return {
+    normalized,
+    signature: workspaceLayoutSignature(normalized),
+    visibleIds,
+    visibleIdSet: new Set(visibleIds)
+  };
+}
+
 function createWorkspaceLeaf(sessionId: string): WorkspaceLeafNode {
   return {
     type: "leaf",
@@ -9781,40 +9822,46 @@ function uniqueWorkspaceSessionIds(sessionIds: string[]) {
 }
 
 function setStoredSessionWorkspaceLayout(layout: WorkspaceLayoutNode | null) {
-  const normalized = normalizeWorkspaceLayout(layout);
-  const nextSignature = workspaceLayoutSignature(normalized);
-  const currentSignature = workspaceLayoutSignature(
-    state.preferences.sessionWorkspaceLayout || null
-  );
+  const nextIndex = buildWorkspaceLayoutIndex(layout);
 
-  if (currentSignature === nextSignature) {
-    return normalized;
+  if (workspaceLayoutIndex.signature === nextIndex.signature) {
+    return workspaceLayoutIndex.normalized;
   }
 
   state.preferences = {
     ...state.preferences,
-    sessionWorkspaceLayout: normalized
+    sessionWorkspaceLayout: nextIndex.normalized
   };
-  void api.updatePreferences({ sessionWorkspaceLayout: normalized });
-  return normalized;
+  workspaceLayoutIndex = nextIndex;
+  void api.updatePreferences({ sessionWorkspaceLayout: nextIndex.normalized });
+  return nextIndex.normalized;
 }
 
 function syncStoredSessionWorkspaceLayout(activeSessionId: string | null = null) {
-  let layout = normalizeWorkspaceLayout(state.preferences.sessionWorkspaceLayout || null);
-
-  if (activeSessionId && sessionById(activeSessionId)) {
-    layout = addSessionToWorkspaceLayout(layout, activeSessionId, activeSessionId);
+  if (!activeSessionId || !sessionById(activeSessionId)) {
+    return setStoredSessionWorkspaceLayout(
+      (state.preferences.sessionWorkspaceLayout as WorkspaceLayoutNode | null) || null
+    );
   }
 
-  return setStoredSessionWorkspaceLayout(layout);
+  if (workspaceLayoutIndex.visibleIdSet.has(activeSessionId)) {
+    return workspaceLayoutIndex.normalized;
+  }
+
+  const nextLayout = addSessionToWorkspaceLayout(
+    workspaceLayoutIndex.normalized,
+    activeSessionId,
+    activeSessionId
+  );
+  return setStoredSessionWorkspaceLayout(nextLayout);
 }
 
 function workspaceVisibleSessionIds() {
-  return collectWorkspaceSessionIds(syncStoredSessionWorkspaceLayout());
+  return workspaceLayoutIndex.visibleIds;
 }
 
 function isSessionVisible(sessionId) {
-  return workspaceVisibleSessionIds().includes(sessionId);
+  return workspaceLayoutIndex.visibleIdSet.has(sessionId);
 }
 
 function workspaceContainsSession(layout: WorkspaceLayoutNode | null, sessionId: string) {
@@ -9893,7 +9940,7 @@ function removeSessionFromWorkspace(
   sessionId: string,
   options: { persistSelection?: boolean } = {}
 ) {
-  const nextLayout = removeSessionFromLayout(syncStoredSessionWorkspaceLayout(), sessionId);
+  const nextLayout = removeSessionFromLayout(workspaceLayoutIndex.normalized, sessionId);
   setStoredSessionWorkspaceLayout(nextLayout);
 
   if (options.persistSelection === false) {
@@ -9998,7 +10045,7 @@ function applySessionWorkspaceDrop(
   targetSessionId: string,
   zone: WorkspaceDropZone
 ) {
-  let layout = syncStoredSessionWorkspaceLayout();
+  let layout = workspaceLayoutIndex.normalized;
   const sourceVisible = workspaceContainsSession(layout, sourceSessionId);
 
   if (zone === "center") {
@@ -10047,7 +10094,7 @@ function canDropSessionAtTarget(
     return false;
   }
 
-  const layout = syncStoredSessionWorkspaceLayout();
+  const layout = workspaceLayoutIndex.normalized;
   const sourceVisible = workspaceContainsSession(layout, sourceSessionId);
   const targetVisible = workspaceContainsSession(layout, targetSessionId);
 

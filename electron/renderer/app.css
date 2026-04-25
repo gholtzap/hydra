@@ -410,7 +410,7 @@ textarea {
   width: var(--sidebar-column-width);
   justify-self: start;
   overflow: visible;
-  padding: 10px 8px;
+  padding: 8px 6px;
   border-right: 1px solid var(--border);
   background: var(--sidebar-surface);
   z-index: 1;
@@ -447,7 +447,7 @@ textarea {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 8px;
+  padding: 6px;
   overflow: hidden;
 }
 
@@ -459,7 +459,7 @@ textarea {
 }
 
 .sidebar-shell-expanded {
-  gap: 12px;
+  gap: 8px;
 }
 
 .sidebar-rail {
@@ -611,10 +611,10 @@ textarea {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px 14px 12px;
+  gap: 10px;
+  padding: 12px 12px 10px;
   border: 1px solid var(--border);
-  border-radius: 22px;
+  border-radius: 18px;
   background: var(--surface-soft);
   min-height: 0;
 }
@@ -1208,10 +1208,10 @@ textarea {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   min-height: 0;
   height: 100%;
-  padding: 4px 2px;
+  padding: 2px;
 }
 
 #detail.section-focused > .detail-panel,
@@ -1226,9 +1226,9 @@ textarea {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
-  padding-bottom: 12px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -1431,7 +1431,7 @@ textarea {
 
 .card-grid {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
 
@@ -1452,13 +1452,13 @@ textarea {
 .session-workspace-detail {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   min-height: 0;
   min-width: 0;
   flex: 1 1 0%;
   overflow: hidden;
-  padding: 12px;
-  border-radius: 24px;
+  padding: 8px;
+  border-radius: 20px;
   background: var(--workspace-backdrop);
 }
 
@@ -1468,10 +1468,10 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
-  padding: 6px;
-  border-radius: 18px;
+  padding: 4px;
+  border-radius: 16px;
   background: var(--workspace-toolbar-surface);
   box-shadow:
     inset 0 0 0 1px var(--workspace-toolbar-border),
@@ -1774,8 +1774,8 @@ textarea {
   min-height: 0;
   min-width: 0;
   display: flex;
-  padding: 4px;
-  border-radius: 22px;
+  padding: 2px;
+  border-radius: 18px;
   background: color-mix(in oklab, var(--workspace-toolbar-surface) 48%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--workspace-separator) 80%, transparent);
   overflow: hidden;
@@ -1909,7 +1909,7 @@ textarea {
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
-  border-radius: 18px;
+  border-radius: 14px;
   border: 0;
   background: color-mix(in oklab, var(--terminal-background) 96%, var(--surface-soft) 4%);
   box-shadow: var(--workspace-pane-shadow);
@@ -2013,7 +2013,7 @@ textarea {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
-  padding: 11px 12px 8px;
+  padding: 10px 10px 7px;
   cursor: grab;
   user-select: none;
 }
@@ -2658,7 +2658,7 @@ textarea {
   justify-content: space-between;
   gap: 8px;
   padding: 7px 10px;
-  margin: 0 12px 10px;
+  margin: 0 10px 8px;
   border-radius: 14px;
   background: color-mix(in oklab, var(--warn-bg) 88%, var(--workspace-toolbar-surface));
   border: 0;
@@ -2681,7 +2681,7 @@ textarea {
   height: 100%;
   min-height: 100px;
   background: var(--terminal-background);
-  padding: 12px 14px;
+  padding: 10px 12px;
 }
 
 .session-terminal {
@@ -2717,8 +2717,8 @@ textarea {
 
 .session-pane-drop-indicator {
   position: absolute;
-  inset: 8px;
-  border-radius: 14px;
+  inset: 6px;
+  border-radius: 12px;
   border: 2px dashed transparent;
   background: transparent;
   display: flex;
@@ -2776,7 +2776,7 @@ textarea {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .status-alert,
@@ -2988,8 +2988,8 @@ textarea {
 .settings-dialog-header-shell {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px 16px 12px;
+  gap: 10px;
+  padding: 14px 14px 10px;
 }
 
 .settings-dialog-body-sticky-header .settings-dialog-header-shell {
@@ -3004,8 +3004,8 @@ textarea {
 .settings-dialog-content {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 12px 14px 14px;
 }
 
 .dialog-header {
@@ -3043,7 +3043,7 @@ textarea {
 .dialog-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
 }
 
@@ -3376,8 +3376,8 @@ textarea {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
+  padding: 9px 10px;
+  border-radius: 10px;
   background: var(--surface-muted);
   border: 1px solid var(--border);
 }
@@ -3400,25 +3400,25 @@ textarea {
 .settings-shell {
   display: grid;
   grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
-  gap: 16px;
+  gap: 12px;
   min-height: 540px;
 }
 
 .settings-sidebar {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
-  padding: 12px;
+  padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: 16px;
   background: color-mix(in oklab, var(--sidebar-surface) 84%, var(--surface-soft));
 }
 
 .settings-sidebar-sections {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   overflow: auto;
   min-height: 0;
   padding-right: 4px;
@@ -3736,7 +3736,7 @@ textarea {
 .settings-surface {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   min-width: 0;
 }
 
@@ -3954,14 +3954,14 @@ textarea {
 .agent-default-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px;
+  gap: 10px;
+  padding: 12px;
 }
 
 .agent-default-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .claude-settings-stack {
@@ -4244,7 +4244,7 @@ textarea {
 .settings-guided-panel {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -4259,30 +4259,30 @@ textarea {
 .settings-group-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .settings-group-body {
-  padding-left: 12px;
+  padding-left: 10px;
   border-left: 1px solid var(--border);
 }
 
 .settings-group-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px;
+  gap: 10px;
+  padding: 12px;
 }
 
 .settings-field-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: 8px;
+  padding: 10px 12px;
 }
 
 .settings-update-card {
-  gap: 12px;
+  gap: 10px;
 }
 
 .settings-update-header {
@@ -4297,10 +4297,35 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 12px;
+  padding: 10px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface-muted);
+}
+
+.settings-toggle-card {
+  gap: 10px;
+  padding-bottom: 0;
+  overflow: hidden;
+}
+
+.settings-group-body-compact {
+  gap: 0;
+  padding-left: 0;
+  margin-inline: -12px;
+  border-left: 0;
+}
+
+.settings-group-body-compact .value-row {
+  padding: 10px 12px;
+}
+
+.settings-group-body-compact .inline-toggle {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .settings-update-status .muted {

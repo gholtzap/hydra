@@ -13,6 +13,7 @@ import type {
   KeybindingMap,
   RepoAppLaunchConfig,
   RepoSnapshot,
+  SessionSearchSource,
   SessionSearchResult as SharedSessionSearchResult,
   SessionSummary,
   SessionTagColor,
@@ -24,6 +25,10 @@ import type {
 
 const api = window.claudeWorkspace;
 let sessionSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let sessionSearchRenderStateCache: {
+  results: SessionSearchResult[];
+  state: SessionSearchRenderState;
+} | null = null;
 const SECTION_ORDER = ["sidebar", "sidebar-drawer", "main", "terminal"] as const;
 type SectionId = (typeof SECTION_ORDER)[number];
 const MAX_VISIBLE_SESSION_PANES = 9;
@@ -240,6 +245,19 @@ type SessionSearchResult = SharedSessionSearchResult & {
   hydraSessionId?: string | null;
 };
 
+type SessionSearchFilter = "all" | SessionSearchSource;
+
+type SessionSearchIndexedResult = {
+  result: SessionSearchResult;
+  originalIndex: number;
+  normalizedPreview: string;
+};
+
+type SessionSearchRenderState = {
+  filteredResults: Record<SessionSearchFilter, SessionSearchIndexedResult[]>;
+  counts: Record<SessionSearchFilter, number>;
+};
+
 function createEphemeralToolOverlayState(): EphemeralToolOverlayState {
   return {
     sessionId: null,
@@ -353,7 +371,7 @@ type UiState = {
   sessionSearchLoading: boolean;
   sessionSearchSelectedIndex: number;
   sessionSearchLoadId: number;
-  sessionSearchFilter: "all" | "claude" | "codex";
+  sessionSearchFilter: SessionSearchFilter;
   commandPaletteQuery: string;
   settingsTab: string;
   settingsClaudeView: ClaudeSettingsView;
@@ -450,7 +468,7 @@ const ui: UiState = {
   sessionSearchLoading: false,
   sessionSearchSelectedIndex: 0,
   sessionSearchLoadId: 0,
-  sessionSearchFilter: "all" as "all" | "claude" | "codex",
+  sessionSearchFilter: "all" as SessionSearchFilter,
   commandPaletteQuery: "",
   settingsTab: "general",
   settingsClaudeView: "files" as ClaudeSettingsView,
@@ -3860,6 +3878,7 @@ function renderCommandPaletteRow(command: { action: string; label: string }) {
 function renderSessionSearchDialog() {
   const repo = repoById(ui.sessionSearchRepoId || "");
   const selectedResult = selectedSessionSearchResult();
+  const renderState = getSessionSearchRenderState(ui.sessionSearchResults);
   const sectionLabel = dom(
     "div",
     { className: "section-label", attrs: { style: "display:flex;align-items:center;justify-content:space-between;" } },
@@ -3908,7 +3927,7 @@ function renderSessionSearchDialog() {
       dom(
         "div",
         { className: "session-search-filter-bar" },
-        ...renderSessionSearchFilterButtons()
+        ...renderSessionSearchFilterButtons(renderState)
       ),
       dom(
         "div",
@@ -3917,7 +3936,7 @@ function renderSessionSearchDialog() {
         dom(
           "div",
           { className: "dialog-list session-search-list" },
-          ...renderSessionSearchBody()
+          ...renderSessionSearchBody(renderState)
         )
       ),
       selectedResult
@@ -3955,33 +3974,75 @@ function renderSessionSearchDialog() {
   );
 }
 
-function getFilteredSessionResults(source: "all" | "claude" | "codex") {
-  const seenHashes = new Set<string>();
+function getSessionSearchRenderState(results: SessionSearchResult[]): SessionSearchRenderState {
+  if (sessionSearchRenderStateCache?.results === results) {
+    return sessionSearchRenderStateCache.state;
+  }
 
-  return ui.sessionSearchResults
-    .map((result, originalIndex) => ({ result, originalIndex }))
-    .filter(({ result }) => source === "all" || result.source === source)
-    .filter(({ result }) => {
-      const normalizedPreview = normalizeJsonlPreview(result.preview);
-      if (!normalizedPreview.trim()) return false;
-
-      const previewHash = normalizedPreview.split("").reduce((acc, char) => {
-        acc = ((acc << 5) - acc) + char.charCodeAt(0);
-        return acc & acc;
-      }, 0).toString();
-
-      return !seenHashes.has(previewHash) && seenHashes.add(previewHash);
-    });
+  const state = buildSessionSearchRenderState(results);
+  sessionSearchRenderStateCache = { results, state };
+  return state;
 }
 
-function renderSessionSearchFilterButtons() {
-  const claudeCount = getFilteredSessionResults("claude").length;
-  const codexCount = getFilteredSessionResults("codex").length;
-  const totalCount = claudeCount + codexCount;
-  const hasResults = totalCount > 0;
+function buildSessionSearchRenderState(results: SessionSearchResult[]): SessionSearchRenderState {
+  const filteredResults: Record<SessionSearchFilter, SessionSearchIndexedResult[]> = {
+    all: [],
+    claude: [],
+    codex: []
+  };
+  const seenHashes: Record<SessionSearchFilter, Set<string>> = {
+    all: new Set<string>(),
+    claude: new Set<string>(),
+    codex: new Set<string>()
+  };
+
+  for (const [originalIndex, result] of results.entries()) {
+    const normalizedPreview = normalizeJsonlPreview(result.preview);
+    if (!normalizedPreview) {
+      continue;
+    }
+
+    const previewHash = hashSessionSearchPreview(normalizedPreview);
+    const indexedResult: SessionSearchIndexedResult = {
+      result,
+      originalIndex,
+      normalizedPreview
+    };
+
+    if (!seenHashes.all.has(previewHash)) {
+      seenHashes.all.add(previewHash);
+      filteredResults.all.push(indexedResult);
+    }
+
+    if (!seenHashes[result.source].has(previewHash)) {
+      seenHashes[result.source].add(previewHash);
+      filteredResults[result.source].push(indexedResult);
+    }
+  }
+
+  return {
+    filteredResults,
+    counts: {
+      all: filteredResults.claude.length + filteredResults.codex.length,
+      claude: filteredResults.claude.length,
+      codex: filteredResults.codex.length
+    }
+  };
+}
+
+function hashSessionSearchPreview(normalizedPreview: string): string {
+  return normalizedPreview.split("").reduce((acc, char) => {
+    acc = ((acc << 5) - acc) + char.charCodeAt(0);
+    return acc & acc;
+  }, 0).toString();
+}
+
+function renderSessionSearchFilterButtons(renderState: SessionSearchRenderState) {
+  const { counts } = renderState;
+  const hasResults = counts.all > 0;
 
   const makeButton = (
-    filter: "all" | "claude" | "codex",
+    filter: SessionSearchFilter,
     label: string,
     count: number
   ) => {
@@ -4008,13 +4069,13 @@ function renderSessionSearchFilterButtons() {
   };
 
   return [
-    makeButton("all", "All", totalCount),
-    makeButton("claude", "Claude", claudeCount),
-    makeButton("codex", "Codex", codexCount),
+    makeButton("all", "All", counts.all),
+    makeButton("claude", "Claude", counts.claude),
+    makeButton("codex", "Codex", counts.codex),
   ];
 }
 
-function renderSessionSearchBody() {
+function renderSessionSearchBody(renderState: SessionSearchRenderState) {
   if (!ui.sessionSearchRepoId) {
     return [emptyStateElement("Open or select a project first.")];
   }
@@ -4042,17 +4103,14 @@ function renderSessionSearchBody() {
     return [emptyStateElement("No matching session content found for this project.")];
   }
 
-  const indexedResults = getFilteredSessionResults(ui.sessionSearchFilter);
+  const indexedResults = renderState.filteredResults[ui.sessionSearchFilter];
 
   if (!indexedResults.length) {
     const label = ui.sessionSearchFilter === "claude" ? "Claude" : "Codex";
     return [emptyStateElement(`No ${label} sessions matched. Try a different filter.`)];
   }
 
-  
-  return indexedResults  
-  .map(({ result, originalIndex: index }) => {
-    const normalizedPreview = normalizeJsonlPreview(result.preview);
+  return indexedResults.map(({ result, originalIndex: index, normalizedPreview }) => {
     const canResume = canResumeSessionSearchResult(result);
     const sourceLabel = result.source === "claude" ? "Claude" : "Codex";
     const shortId = result.sessionId ? result.sessionId.slice(0, 8) : null;
@@ -6170,7 +6228,7 @@ async function handleClick(event) {
       await revealSessionSearchResult(Number(target.dataset.resultIndex));
       break;
     case "session-search-filter":
-      ui.sessionSearchFilter = (target.dataset.filterValue || "all") as "all" | "claude" | "codex";
+      ui.sessionSearchFilter = (target.dataset.filterValue || "all") as SessionSearchFilter;
       ui.sessionSearchSelectedIndex = 0;
       renderSessionSearchDialogKeepFocus();
       break;

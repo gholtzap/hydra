@@ -413,9 +413,8 @@ type UiState = {
   selectedSessionIds: Set<string>;
   voiceCallState: VoiceCallState;
   voiceMuted: boolean;
-  voiceSettingsOpen: boolean;
   voiceTranscript: { role: "user" | "bot" | "system"; text: string; time: string }[];
-  voiceInstallLog: string;
+  voiceInstallLog: string[];
 };
 
 const ui: UiState = {
@@ -518,9 +517,8 @@ const ui: UiState = {
   selectedSessionIds: new Set<string>(),
   voiceCallState: "idle" as VoiceCallState,
   voiceMuted: false,
-  voiceSettingsOpen: true,
   voiceTranscript: [] as { role: "user" | "bot" | "system"; text: string; time: string }[],
-  voiceInstallLog: ""
+  voiceInstallLog: [] as string[]
 };
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
@@ -1235,16 +1233,17 @@ api.onVoiceCallStateChanged((voiceState) => {
 });
 
 api.onVoiceInstallProgress((line) => {
-  if (line) {
-    ui.voiceInstallLog += line + "\n";
-    if (voiceDialog.open) {
-      renderVoiceDialog();
-    }
+  ui.voiceInstallLog.push(line);
+  if (voiceDialog.open) {
+    renderVoiceDialog();
   }
 });
 
 api.onVoiceError((err) => {
-  ui.voiceTranscript.push({ role: "system", text: `Error: ${err.message}`, time: voiceTimeStamp() });
+  ui.voiceCallState = "error";
+  console.warn("[Voice] runtime error:", err.message);
+  appendVoiceTranscript("system", "Voice mode stopped unexpectedly. Check your provider settings and retry.");
+  renderSidebar();
   if (voiceDialog.open) {
     renderVoiceDialog();
   }
@@ -5891,8 +5890,8 @@ async function handleClick(event) {
     case "open-status":
       await selectStatus();
       break;
-    case "toggle-voice":
-      toggleVoiceModal();
+    case "toggle-voice-call":
+      toggleVoiceCall();
       break;
     case "voice-mute-toggle":
       toggleVoiceMute();
@@ -5901,8 +5900,6 @@ async function handleClick(event) {
       closeVoiceModal();
       break;
     case "voice-settings-toggle":
-      ui.voiceSettingsOpen = !ui.voiceSettingsOpen;
-      renderVoiceDialog();
       break;
     case "voice-save-config":
       await saveVoiceConfig();
@@ -8071,10 +8068,73 @@ function handleEphemeralToolOutput(
 // ── Voice modal ─────────────────────────────────────────────────
 
 let pipecatClient: InstanceType<typeof window.PipecatClient> | null = null;
+let voiceSessionRunId = 0;
 
 function voiceTimeStamp() {
   const d = new Date();
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function appendVoiceTranscript(role: "user" | "bot" | "system", text: string) {
+  ui.voiceTranscript.push({ role, text, time: voiceTimeStamp() });
+}
+
+function voiceSessionIsCurrent(runId: number) {
+  return voiceDialog.open && runId === voiceSessionRunId;
+}
+
+function markVoiceError(text: string) {
+  ui.voiceCallState = "error";
+  appendVoiceTranscript("system", text);
+  renderSidebar();
+  renderVoiceDialog();
+}
+
+function voiceRequiredApiKeys(config: VoiceConfig) {
+  const keys = new Set<string>();
+  const add = (key: string | null) => {
+    if (key) keys.add(key);
+  };
+
+  add(config.llmProvider === "openai" ? "OPENAI_API_KEY" : null);
+  add(config.llmProvider === "anthropic" ? "ANTHROPIC_API_KEY" : null);
+  add(config.llmProvider === "google" ? "GOOGLE_API_KEY" : null);
+  add(config.sttProvider === "deepgram" ? "DEEPGRAM_API_KEY" : null);
+  add(config.sttProvider === "google" ? "GOOGLE_API_KEY" : null);
+  add(config.ttsProvider === "cartesia" ? "CARTESIA_API_KEY" : null);
+  add(config.ttsProvider === "elevenlabs" ? "ELEVENLABS_API_KEY" : null);
+  add(config.ttsProvider === "deepgram" ? "DEEPGRAM_API_KEY" : null);
+
+  return [...keys];
+}
+
+function voiceSetupInstructions(config: VoiceConfig) {
+  const requiredKeys = voiceRequiredApiKeys(config);
+  if (!requiredKeys.length) {
+    return "To get started, choose your providers and allow microphone access when prompted.";
+  }
+
+  return `To get started, choose your providers, make sure ${requiredKeys.join(", ")} ${
+    requiredKeys.length === 1 ? "is" : "are"
+  } configured in the right panel or your shell, and allow microphone access when prompted.`;
+}
+
+function voiceTooltip(voiceState: VoiceCallState) {
+  if (voiceState === "listening") return "Voice Active";
+  if (voiceState === "connecting") return "Preparing...";
+  if (voiceState === "error") return "Voice Error";
+  return "Voice Mode";
+}
+
+function voiceStatusLabel(voiceState: VoiceCallState) {
+  if (voiceState === "connecting") return "Preparing";
+  if (voiceState === "listening") return "Listening";
+  if (voiceState === "error") return "Error";
+  return "";
+}
+
+function appendVoiceSetupInstructions(_config: VoiceConfig) {
+  // Setup guidance is shown via the status banner, not transcript entries
 }
 
 function renderVoiceRailButton() {
@@ -8086,11 +8146,11 @@ function renderVoiceRailButton() {
         "sidebar-rail-button",
         "sidebar-voice-button",
         voiceState !== "idle" ? `voice-${voiceState}` : undefined,
-        sidebarNavMatches(sidebarActionNavId("toggle-voice")) ? "keyboard-active" : undefined
+        sidebarNavMatches(sidebarActionNavId("toggle-voice-call")) ? "keyboard-active" : undefined
       ),
       attrs: {
-        "data-action": "toggle-voice",
-        "data-tooltip": voiceState === "idle" ? "Voice Mode" : voiceState === "listening" ? "Voice Active" : voiceState === "connecting" ? "Connecting..." : "Voice Error",
+        "data-action": "toggle-voice-call",
+        "data-tooltip": voiceTooltip(voiceState),
         title: "Voice Mode",
         "aria-label": "Voice Mode"
       }
@@ -8099,11 +8159,15 @@ function renderVoiceRailButton() {
   );
 }
 
-function toggleVoiceModal() {
-  if (voiceDialog.open) {
+function voiceCallIsActive() {
+  return ui.voiceCallState === "connecting" || ui.voiceCallState === "listening";
+}
+
+function toggleVoiceCall() {
+  if (voiceCallIsActive()) {
     closeVoiceModal();
   } else {
-    openVoiceModal();
+    void openVoiceModal();
   }
 }
 
@@ -8111,8 +8175,8 @@ async function openVoiceModal() {
   if (voiceDialog.open) return;
 
   ui.voiceTranscript = [];
-  ui.voiceInstallLog = "";
   ui.voiceMuted = false;
+  ui.voiceInstallLog = [];
 
   renderVoiceDialog();
   voiceDialog.showModal();
@@ -8123,6 +8187,7 @@ async function openVoiceModal() {
 }
 
 function onVoiceDialogClose() {
+  voiceSessionRunId += 1;
   disconnectPipecatClient();
   if (ui.voiceCallState !== "idle") {
     void api.stopVoiceCall();
@@ -8132,6 +8197,7 @@ function onVoiceDialogClose() {
 }
 
 function closeVoiceModal() {
+  voiceSessionRunId += 1;
   disconnectPipecatClient();
   if (ui.voiceCallState !== "idle") {
     void api.stopVoiceCall();
@@ -8144,52 +8210,72 @@ function closeVoiceModal() {
 }
 
 async function startVoiceSession() {
-  ui.voiceTranscript.push({ role: "system", text: "Checking Python...", time: voiceTimeStamp() });
+  const runId = ++voiceSessionRunId;
+  ui.voiceCallState = "connecting";
+  ui.voiceMuted = false;
+  renderSidebar();
   renderVoiceDialog();
 
-  const pyCheck = await api.checkPython();
-  if (!pyCheck.found) {
-    ui.voiceTranscript.push({
-      role: "system",
-      text: "Python 3.10+ is required for voice mode. Install from python.org or run: brew install python3",
-      time: voiceTimeStamp()
-    });
+  try {
+    const config = await api.getVoiceConfig();
+    if (!voiceSessionIsCurrent(runId)) return;
+    state.preferences.voiceConfig = config;
+    appendVoiceSetupInstructions(config);
     renderVoiceDialog();
-    return;
+
+    const pyCheck = await api.checkPython();
+    if (!voiceSessionIsCurrent(runId)) return;
+
+    if (!pyCheck.found) {
+      markVoiceError(
+        "Python 3.10+ is required for voice mode. Install it from python.org or run: brew install python3"
+      );
+      return;
+    }
+
+    const deps = await api.installVoiceDeps();
+    if (!voiceSessionIsCurrent(runId)) return;
+
+    if (!deps.success) {
+      console.warn("[Voice] dependency setup failed:", deps.error || "unknown error");
+      markVoiceError(
+        "Voice mode could not finish setup. Make sure Python 3.10+ can install packages with pip or uv, then retry."
+      );
+      return;
+    }
+
+    const result = await api.startVoiceCall(config);
+    if (!voiceSessionIsCurrent(runId)) {
+      if (result.success) {
+        void api.stopVoiceCall();
+      }
+      return;
+    }
+
+    if (!result.success || !result.port) {
+      console.warn("[Voice] bot start failed:", result.error || "unknown error");
+      markVoiceError(
+        "Voice mode could not start. Check that the selected provider API keys are configured, then retry."
+      );
+      return;
+    }
+
+    await connectPipecatClient(result.port, runId);
+  } catch (err) {
+    if (!voiceSessionIsCurrent(runId)) return;
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[Voice] setup failed:", msg);
+    markVoiceError("Voice mode could not start. Check your provider settings and retry.");
   }
-
-  ui.voiceTranscript.push({ role: "system", text: `Found ${pyCheck.version}. Starting voice bot...`, time: voiceTimeStamp() });
-  renderVoiceDialog();
-
-  const config = await api.getVoiceConfig();
-  const result = await api.startVoiceCall(config);
-
-  if (!result.success || !result.port) {
-    ui.voiceTranscript.push({
-      role: "system",
-      text: result.error || "Failed to start voice bot.",
-      time: voiceTimeStamp()
-    });
-    renderVoiceDialog();
-    return;
-  }
-
-  ui.voiceTranscript.push({ role: "system", text: "Connecting to voice bot...", time: voiceTimeStamp() });
-  renderVoiceDialog();
-
-  await connectPipecatClient(result.port);
 }
 
-async function connectPipecatClient(port: number) {
+async function connectPipecatClient(port: number, runId = voiceSessionRunId) {
   disconnectPipecatClient();
 
   if (typeof window.PipecatClient === "undefined" || typeof window.SmallWebRTCTransport === "undefined") {
-    ui.voiceTranscript.push({
-      role: "system",
-      text: "Pipecat client SDK not loaded. Check that vendor scripts are present.",
-      time: voiceTimeStamp()
-    });
-    renderVoiceDialog();
+    await api.stopVoiceCall();
+    if (!voiceSessionIsCurrent(runId)) return;
+    markVoiceError("Voice mode is missing required app files. Rebuild or reinstall Hydra, then retry.");
     return;
   }
 
@@ -8200,45 +8286,53 @@ async function connectPipecatClient(port: number) {
       enableMic: true,
       callbacks: {
         onConnected: () => {
-          ui.voiceTranscript.push({ role: "system", text: "Connected. Start speaking.", time: voiceTimeStamp() });
+          if (!voiceSessionIsCurrent(runId)) return;
+          appendVoiceTranscript("system", "Connected. Start speaking.");
           renderVoiceDialog();
         },
         onDisconnected: () => {
-          ui.voiceTranscript.push({ role: "system", text: "Disconnected.", time: voiceTimeStamp() });
+          if (!voiceSessionIsCurrent(runId)) return;
+          appendVoiceTranscript("system", "Disconnected.");
           renderVoiceDialog();
         },
         onBotReady: () => {
           // Bot pipeline is ready
         },
         onUserTranscript: (data: { text: string; final: boolean }) => {
+          if (!voiceSessionIsCurrent(runId)) return;
           if (data.final && data.text.trim()) {
-            ui.voiceTranscript.push({ role: "user", text: data.text.trim(), time: voiceTimeStamp() });
+            appendVoiceTranscript("user", data.text.trim());
             renderVoiceDialog();
             scrollVoiceTranscript();
           }
         },
         onBotOutput: (data: { text: string; spoken: boolean }) => {
+          if (!voiceSessionIsCurrent(runId)) return;
           if (data.text.trim()) {
-            ui.voiceTranscript.push({ role: "bot", text: data.text.trim(), time: voiceTimeStamp() });
+            appendVoiceTranscript("bot", data.text.trim());
             renderVoiceDialog();
             scrollVoiceTranscript();
           }
         },
         onLocalAudioLevel: (level: number) => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          const pct = Math.min(100, Math.round(level * 100));
           const bar = document.getElementById("voice-mic-bar");
           if (bar) {
-            bar.style.width = `${Math.min(100, level * 100)}%`;
+            bar.style.width = `${pct}%`;
+          }
+          const pctEl = document.getElementById("voice-mic-pct");
+          if (pctEl) {
+            pctEl.textContent = `${pct}%`;
           }
         },
         onError: (error: { message?: string }) => {
-          ui.voiceTranscript.push({
-            role: "system",
-            text: `Error: ${error.message || "Unknown error"}`,
-            time: voiceTimeStamp()
-          });
-          renderVoiceDialog();
+          if (!voiceSessionIsCurrent(runId)) return;
+          console.warn("[Voice] client error:", error.message || "unknown error");
+          markVoiceError("Voice mode hit a connection problem. Check your provider settings and retry.");
         },
         onTrackStarted: (track: MediaStreamTrack, participant: { local?: boolean } | undefined) => {
+          if (!voiceSessionIsCurrent(runId)) return;
           if (!participant?.local && track.kind === "audio") {
             const audio = document.createElement("audio");
             audio.srcObject = new MediaStream([track]);
@@ -8253,15 +8347,20 @@ async function connectPipecatClient(port: number) {
       }
     });
 
+    if (!voiceSessionIsCurrent(runId)) return;
+
     await pipecatClient.connect({
       webrtcRequestParams: {
         endpoint: `http://localhost:${port}/api/offer`
       }
     });
   } catch (err) {
+    if (!voiceSessionIsCurrent(runId)) return;
     const msg = err instanceof Error ? err.message : String(err);
-    ui.voiceTranscript.push({ role: "system", text: `Connection failed: ${msg}`, time: voiceTimeStamp() });
-    renderVoiceDialog();
+    console.warn("[Voice] connection failed:", msg);
+    await api.stopVoiceCall();
+    if (!voiceSessionIsCurrent(runId)) return;
+    markVoiceError("Voice mode could not connect. Retry voice mode, or restart Hydra if this keeps happening.");
   }
 }
 
@@ -8293,7 +8392,7 @@ async function saveVoiceConfig() {
   if (!form) return;
 
   const data = new FormData(form);
-  const patch: Partial<VoiceConfig> = {
+  const nextConfig: VoiceConfig = {
     llmProvider: (data.get("llmProvider") as string) || "openai",
     sttProvider: (data.get("sttProvider") as string) || "deepgram",
     ttsProvider: (data.get("ttsProvider") as string) || "cartesia",
@@ -8309,9 +8408,10 @@ async function saveVoiceConfig() {
     }
   };
 
-  await api.updateVoiceConfig(patch);
+  await api.updateVoiceConfig(nextConfig);
+  state.preferences.voiceConfig = nextConfig;
 
-  ui.voiceTranscript.push({ role: "system", text: "Settings saved. Reconnecting...", time: voiceTimeStamp() });
+  appendVoiceTranscript("system", "Settings saved. Voice mode will reconnect automatically.");
   renderVoiceDialog();
 
   // Restart the session with new config
@@ -8343,79 +8443,144 @@ function renderVoiceDialog() {
   };
 
   const isActive = voiceState === "listening" || voiceState === "connecting";
+  const canMute = voiceState === "listening" && !!pipecatClient;
+  const hasTranscript = ui.voiceTranscript.length > 0;
+  const isVoiceError = (e: { role: string; text: string }) =>
+    e.role === "system" && (e.text.startsWith("Error:") || e.text.includes("could not") || e.text.includes("stopped unexpectedly") || e.text.includes("missing required"));
+  const lastError = [...ui.voiceTranscript].reverse().find(isVoiceError);
+  const hasInstallLog = ui.voiceInstallLog.length > 0;
+
+  // Determine status banner
+  let statusDot: string | null = null;
+  let statusTitle = "";
+  let statusDetail = "";
+
+  if (voiceState === "connecting") {
+    statusDot = "connecting";
+    statusTitle = "Setting up voice mode\u2026";
+    statusDetail = "Checking Python, installing dependencies, and starting the voice agent.";
+  } else if (voiceState === "error") {
+    statusDot = "error";
+    statusTitle = lastError ? "Setup failed" : "Voice error";
+    statusDetail = "Fix the issue, then retry or change settings.";
+  } else if (voiceState === "listening") {
+    statusDot = "listening";
+    statusTitle = "Listening";
+    statusDetail = "Speak naturally. The voice agent is connected and ready.";
+  }
+
+  // Build the relevant API key fields based on selected providers
+  const keyEntries: { key: string; label: string }[] = [];
+  if (cfg.llmProvider === "openai") keyEntries.push({ key: "OPENAI_API_KEY", label: "OpenAI API key" });
+  if (cfg.llmProvider === "anthropic") keyEntries.push({ key: "ANTHROPIC_API_KEY", label: "Anthropic API key" });
+  if (cfg.llmProvider === "google" || cfg.sttProvider === "google") keyEntries.push({ key: "GOOGLE_API_KEY", label: "Google API key" });
+  if (cfg.sttProvider === "deepgram" || cfg.ttsProvider === "deepgram") keyEntries.push({ key: "DEEPGRAM_API_KEY", label: "Deepgram API key" });
+  if (cfg.ttsProvider === "cartesia") keyEntries.push({ key: "CARTESIA_API_KEY", label: "Cartesia API key" });
+  if (cfg.ttsProvider === "elevenlabs") keyEntries.push({ key: "ELEVENLABS_API_KEY", label: "ElevenLabs API key" });
+  // Deduplicate
+  const seenKeys = new Set<string>();
+  const uniqueKeyEntries = keyEntries.filter((e) => {
+    if (seenKeys.has(e.key)) return false;
+    seenKeys.add(e.key);
+    return true;
+  });
+
+  const sel = (name: string, value: string) => value === (cfg as unknown as Record<string, unknown>)[name] ? "selected" : "";
 
   replaceDomChildren(
     host,
     dom(
       "div",
       { className: "voice-modal" },
-      // Header
+      // ── Left: main panel ──
       dom(
         "div",
-        { className: "voice-modal-header" },
-        dom("h2", {}, "Voice Mode"),
+        { className: "voice-main-panel" },
+        // Header
         dom(
-          "span",
-          {
-            className: classNames(
-              "voice-status",
-              voiceState === "connecting" ? "voice-status-connecting" : undefined,
-              voiceState === "listening" ? "voice-status-listening" : undefined,
-              voiceState === "error" ? "voice-status-error" : undefined
+          "div",
+          { className: "voice-header" },
+          dom(
+            "div",
+            { className: "voice-header-text" },
+            dom("div", { className: "voice-header-label" }, "Voice Mode"),
+            dom("h2", { className: "voice-header-title" }, "Hands-free Hydra control"),
+            dom("div", { className: "voice-header-subtitle" },
+              "Speak naturally. The voice agent can call Hydra MCP tools for sessions, repos, settings, and wiki actions."
             )
-          },
-          voiceState === "idle" ? "" : voiceState === "connecting" ? "Connecting..." : voiceState === "listening" ? "Listening" : "Error"
+          ),
+          dom("button", {
+            className: "voice-close-btn",
+            attrs: { "data-action": "voice-end" }
+          }, "Close")
         ),
+        // Content area (status + transcript + install log)
         dom(
           "div",
-          { className: "voice-modal-header-actions" },
-          dom("button", {
-            className: "voice-btn",
-            attrs: { "data-action": "voice-settings-toggle", title: "Toggle Settings" }
-          }, renderUtilityIconElement("settings")),
-          dom("button", {
-            className: "voice-btn voice-btn-danger",
-            attrs: { "data-action": "voice-end", title: "Close" }
-          }, "\u2715")
-        )
-      ),
-      // Body
-      dom(
-        "div",
-        { className: "voice-modal-body" },
-        // Left: transcript panel
-        dom(
-          "div",
-          { className: "voice-transcript-panel" },
-          // Transcript scroll area
+          { className: "voice-content" },
+          // Status banner
+          statusDot
+            ? dom(
+                "div",
+                { className: "voice-status-banner" },
+                dom("div", { className: classNames("voice-status-dot", statusDot) }),
+                dom(
+                  "div",
+                  { className: "voice-status-info" },
+                  dom("div", { className: "voice-status-title" }, statusTitle),
+                  dom("div", { className: "voice-status-detail" }, statusDetail)
+                )
+              )
+            : null,
+          // Error detail bar
+          voiceState === "error" && lastError
+            ? dom("div", { className: "voice-error-bar" }, lastError.text)
+            : null,
+          // Transcript
           dom(
             "div",
             { className: "voice-transcript-scroll", attrs: { id: "voice-transcript-scroll" } },
-            ...ui.voiceTranscript.map((entry) =>
-              dom(
-                "div",
-                { className: classNames("voice-transcript-entry", entry.role) },
-                dom("div", {}, entry.text),
-                dom("div", { className: "voice-transcript-time" }, entry.time)
+            hasTranscript
+              ? null
+              : dom("div", { className: "voice-transcript-empty" }, "Voice activity and transcripts will appear here."),
+            ...ui.voiceTranscript
+              .filter((e) => !isVoiceError(e))
+              .map((entry) =>
+                dom(
+                  "div",
+                  { className: classNames("voice-transcript-entry", entry.role) },
+                  dom("div", {}, entry.text),
+                  dom("div", { className: "voice-transcript-time" }, entry.time)
+                )
               )
-            ),
-            // Install log
-            ui.voiceInstallLog
-              ? dom("div", { className: "voice-install-log" }, ui.voiceInstallLog)
-              : null
           ),
-          // Controls bar
+          // Install log (collapsible)
+          hasInstallLog
+            ? trustedFragment(`
+                <details class="voice-install-details">
+                  <summary>Dependency install log</summary>
+                  <div class="voice-install-log-content">${ui.voiceInstallLog.map((l) => escapeAttribute(l)).join("\n")}</div>
+                </details>
+              `)
+            : null
+        ),
+        // Controls bar
+        dom(
+          "div",
+          { className: "voice-controls" },
+          dom("span", { className: "voice-mic-label" }, "Mic level"),
           dom(
             "div",
-            { className: "voice-controls" },
-            dom(
-              "div",
-              { className: "voice-mic-level" },
-              dom("div", { className: "voice-mic-level-bar", attrs: { id: "voice-mic-bar" } })
-            ),
-            isActive
+            { className: "voice-mic-track" },
+            dom("div", { className: "voice-mic-track-fill", attrs: { id: "voice-mic-bar" } })
+          ),
+          dom("span", { className: "voice-mic-pct", attrs: { id: "voice-mic-pct" } }, "0%"),
+          dom(
+            "div",
+            { className: "voice-controls-right" },
+            canMute
               ? dom("button", {
-                  className: classNames("voice-btn", ui.voiceMuted ? "voice-btn-primary" : undefined),
+                  className: classNames("voice-btn", ui.voiceMuted ? "voice-btn-muted" : undefined),
                   attrs: { "data-action": "voice-mute-toggle" }
                 }, ui.voiceMuted ? "Unmute" : "Mute")
               : null,
@@ -8427,68 +8592,77 @@ function renderVoiceDialog() {
               : null,
             isActive
               ? dom("button", {
-                  className: "voice-btn voice-btn-danger",
+                  className: "voice-btn voice-btn-end",
                   attrs: { "data-action": "voice-end" }
                 }, "End Call")
               : null
           )
-        ),
-        // Right: settings panel
-        dom(
-          "div",
-          { className: classNames("voice-settings-panel", ui.voiceSettingsOpen ? undefined : "collapsed") },
-          trustedFragment(`
+        )
+      ),
+      // ── Right: settings panel ──
+      dom(
+        "div",
+        { className: "voice-settings-panel" },
+        trustedFragment(`
+          <div class="voice-settings-scroll">
             <form id="voice-settings-form">
-              <div class="voice-settings-group">
-                <label>LLM Provider</label>
+              <div class="voice-settings-label">Settings</div>
+              <div class="voice-settings-heading">Voice stack</div>
+
+              <div class="voice-field">
+                <label class="voice-field-label">LLM</label>
                 <select name="llmProvider">
-                  <option value="openai" ${cfg.llmProvider === "openai" ? "selected" : ""}>OpenAI</option>
-                  <option value="anthropic" ${cfg.llmProvider === "anthropic" ? "selected" : ""}>Anthropic</option>
-                  <option value="google" ${cfg.llmProvider === "google" ? "selected" : ""}>Google</option>
-                  <option value="ollama" ${cfg.llmProvider === "ollama" ? "selected" : ""}>Ollama (local)</option>
+                  <option value="openai" ${sel("llmProvider", "openai")}>OpenAI</option>
+                  <option value="anthropic" ${sel("llmProvider", "anthropic")}>Anthropic</option>
+                  <option value="google" ${sel("llmProvider", "google")}>Google</option>
+                  <option value="ollama" ${sel("llmProvider", "ollama")}>Ollama (local)</option>
                 </select>
               </div>
-              <div class="voice-settings-group">
-                <label>STT Provider</label>
+
+              <div class="voice-field">
+                <label class="voice-field-label">STT</label>
                 <select name="sttProvider">
-                  <option value="deepgram" ${cfg.sttProvider === "deepgram" ? "selected" : ""}>Deepgram</option>
-                  <option value="google" ${cfg.sttProvider === "google" ? "selected" : ""}>Google</option>
-                  <option value="whisper" ${cfg.sttProvider === "whisper" ? "selected" : ""}>Whisper (local)</option>
+                  <option value="deepgram" ${sel("sttProvider", "deepgram")}>Deepgram</option>
+                  <option value="google" ${sel("sttProvider", "google")}>Google</option>
+                  <option value="whisper" ${sel("sttProvider", "whisper")}>Whisper (local)</option>
                 </select>
               </div>
-              <div class="voice-settings-group">
-                <label>TTS Provider</label>
+
+              <div class="voice-field">
+                <label class="voice-field-label">TTS</label>
                 <select name="ttsProvider">
-                  <option value="cartesia" ${cfg.ttsProvider === "cartesia" ? "selected" : ""}>Cartesia</option>
-                  <option value="elevenlabs" ${cfg.ttsProvider === "elevenlabs" ? "selected" : ""}>ElevenLabs</option>
-                  <option value="deepgram" ${cfg.ttsProvider === "deepgram" ? "selected" : ""}>Deepgram</option>
+                  <option value="cartesia" ${sel("ttsProvider", "cartesia")}>Cartesia</option>
+                  <option value="elevenlabs" ${sel("ttsProvider", "elevenlabs")}>ElevenLabs</option>
+                  <option value="deepgram" ${sel("ttsProvider", "deepgram")}>Deepgram</option>
                 </select>
               </div>
-              <div class="voice-settings-group">
-                <label>TTS Voice ID (optional)</label>
-                <input type="text" name="ttsVoice" value="${escapeAttribute(cfg.ttsVoice || "")}" placeholder="Default voice" />
+
+              <div class="voice-field">
+                <label class="voice-field-label">TTS voice</label>
+                <input type="text" name="ttsVoice" value="${escapeAttribute(cfg.ttsVoice || "")}" placeholder="Provider default" />
               </div>
-              <div class="voice-settings-group">
-                <label>API Keys</label>
-                <input type="password" name="OPENAI_API_KEY" value="${escapeAttribute(cfg.apiKeys.OPENAI_API_KEY || "")}" placeholder="OpenAI API Key" style="margin-bottom:6px" />
-                <input type="password" name="ANTHROPIC_API_KEY" value="${escapeAttribute(cfg.apiKeys.ANTHROPIC_API_KEY || "")}" placeholder="Anthropic API Key" style="margin-bottom:6px" />
-                <input type="password" name="GOOGLE_API_KEY" value="${escapeAttribute(cfg.apiKeys.GOOGLE_API_KEY || "")}" placeholder="Google API Key" style="margin-bottom:6px" />
-                <input type="password" name="DEEPGRAM_API_KEY" value="${escapeAttribute(cfg.apiKeys.DEEPGRAM_API_KEY || "")}" placeholder="Deepgram API Key" style="margin-bottom:6px" />
-                <input type="password" name="CARTESIA_API_KEY" value="${escapeAttribute(cfg.apiKeys.CARTESIA_API_KEY || "")}" placeholder="Cartesia API Key" style="margin-bottom:6px" />
-                <input type="password" name="ELEVENLABS_API_KEY" value="${escapeAttribute(cfg.apiKeys.ELEVENLABS_API_KEY || "")}" placeholder="ElevenLabs API Key" />
+
+              <div class="voice-toggle-row">
+                <input type="checkbox" id="voice-subagents-cb" name="enableSubagents" ${cfg.enableSubagents ? "checked" : ""} />
+                <label for="voice-subagents-cb">Enable subagents</label>
               </div>
-              <div class="voice-settings-group">
-                <div class="voice-settings-toggle">
-                  <label style="margin:0;text-transform:none">Enable Subagents</label>
-                  <input type="checkbox" name="enableSubagents" ${cfg.enableSubagents ? "checked" : ""} />
+
+              <div class="voice-settings-divider"></div>
+              <div class="voice-settings-section-title">Provider keys</div>
+
+              ${uniqueKeyEntries.map((entry) => `
+                <div class="voice-key-field">
+                  <label class="voice-key-label">${entry.label}</label>
+                  <input type="password" name="${entry.key}" value="${escapeAttribute((cfg.apiKeys as Record<string, string>)[entry.key] || "")}" />
                 </div>
-              </div>
-              <button type="button" class="voice-btn voice-btn-primary" data-action="voice-save-config" style="width:100%">
+              `).join("")}
+
+              <button type="button" class="voice-save-btn" data-action="voice-save-config">
                 Save &amp; Reconnect
               </button>
             </form>
-          `)
-        )
+          </div>
+        `)
       ),
       // Hidden audio host for bot playback
       dom("div", { attrs: { id: "voice-audio-host" }, className: "hidden" })
@@ -10516,7 +10690,7 @@ function syncSidebarNavItemFromTarget(target) {
     case "open-workspace":
     case "create-project":
     case "open-status":
-    case "toggle-voice":
+    case "toggle-voice-call":
     case "open-settings":
     case "collapse-sidebar":
       ui.sidebarNavItem = sidebarActionNavId(action);
@@ -11653,8 +11827,8 @@ async function activateSidebarNavItem() {
       case "open-settings":
         await openSettings("general");
         break;
-      case "toggle-voice":
-        toggleVoiceModal();
+      case "toggle-voice-call":
+        toggleVoiceCall();
         break;
       case "collapse-sidebar":
         collapseSidebarChrome();

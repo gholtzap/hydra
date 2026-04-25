@@ -3,6 +3,8 @@ import type {
   AppPreferencesPatch,
   AppUpdateCheckResult,
   AppStateSnapshot,
+  AuthResult,
+  AuthSession,
   ClaudeExternalUrlRequest,
   ClaudePathRevealRequest,
   ClaudeRepoFileRequest,
@@ -169,5 +171,22 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     onEphemeralToolExit: (callback: (payload: EphemeralToolExitPayload) => void) =>
       subscribe<EphemeralToolExitPayload>("ephemeralTool:exit", callback),
     onPlanDetected: (callback: (payload: { sessionId: string; markdown: string }) => void) =>
-      subscribe<{ sessionId: string; markdown: string }>("plan:detected", callback)
+      subscribe<{ sessionId: string; markdown: string }>("plan:detected", callback),
+
+    // Auth
+    signInWithEmail: (email: string, password: string) =>
+      invoke<AuthResult>("auth:signIn", { email, password }),
+    signUpWithEmail: (name: string, email: string, password: string) =>
+      invoke<AuthResult>("auth:signUp", { name, email, password }),
+    authStartProvider: (provider: "google" | "discord" | "github") =>
+      invoke<AuthResult>("auth:startProvider", { provider }),
+    authSignOut: () => invoke<void>("auth:signOut"),
+    authGetSession: () => invoke<AuthSession | null>("auth:getSession"),
+    authOpenPage: () => invoke<void>("auth:openPage"),
+    requestPasswordReset: (email: string, redirectUrl: string) =>
+      invoke<AuthResult>("auth:resetPassword", { email, redirectUrl }),
+    verifyTotp: (code: string) =>
+      invoke<AuthResult>("auth:verifyTotp", { code }),
+    onAuthStateChanged: (callback: (session: AuthSession | null) => void) =>
+      subscribe<AuthSession | null>("auth:stateChanged", callback)
   });

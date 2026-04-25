@@ -542,6 +542,30 @@ export type TrackedPortStatus = {
   error?: string;
 };
 
+// ---------------------------------------------------------------------------
+// Auth types
+// ---------------------------------------------------------------------------
+
+export type AuthUser = {
+  id: string;
+  email: string;
+  name: string;
+  image?: string | null;
+  emailVerified: boolean;
+};
+
+export type AuthSession = {
+  user: AuthUser;
+  expiresAt: string;
+};
+
+export type AuthResult = {
+  success: boolean;
+  error?: string;
+  twoFactorRedirect?: boolean;
+  session?: AuthSession;
+};
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = {

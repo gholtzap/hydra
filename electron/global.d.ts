@@ -3,6 +3,8 @@ import type {
   AppPreferencesPatch,
   AppUpdateCheckResult,
   AppStateSnapshot,
+  AuthResult,
+  AuthSession,
   ClaudeExternalUrlRequest,
   ClaudePathRevealRequest,
   ClaudeRepoFileRequest,
@@ -136,6 +138,17 @@ interface ClaudeWorkspaceApi {
   onPlanDetected: (
     callback: (payload: { sessionId: string; markdown: string }) => void
   ) => Unsubscribe;
+
+  // Auth
+  signInWithEmail: (email: string, password: string) => Promise<AuthResult>;
+  signUpWithEmail: (name: string, email: string, password: string) => Promise<AuthResult>;
+  authStartProvider: (provider: "google" | "discord" | "github") => Promise<AuthResult>;
+  authSignOut: () => Promise<void>;
+  authGetSession: () => Promise<AuthSession | null>;
+  authOpenPage: () => Promise<void>;
+  requestPasswordReset: (email: string, redirectUrl: string) => Promise<AuthResult>;
+  verifyTotp: (code: string) => Promise<AuthResult>;
+  onAuthStateChanged: (callback: (session: AuthSession | null) => void) => Unsubscribe;
 }
 
 interface ClaudeTerminalOptions {

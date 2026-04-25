@@ -1,6 +1,10 @@
 appId: com.gmh.hydra
 productName: Hydra
 
+protocols:
+  - name: Hydra Auth
+    schemes:
+      - com.gmh.hydra
 
 directories:
   output: release

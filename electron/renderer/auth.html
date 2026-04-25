@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hydra — Sign In</title>
+    <style>
+      *, *::before, *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      :root {
+        --bg: #0f0f0f;
+        --surface: #181818;
+        --surface-raised: #202020;
+        --border: #2a2a2a;
+        --border-focus: #4a4a4a;
+        --text: #e8e8e8;
+        --text-muted: #888;
+        --text-dim: #555;
+        --accent: #e8e8e8;
+        --accent-fg: #0f0f0f;
+        --danger: #c0392b;
+        --success: #27ae60;
+        --font-mono: "SF Mono", "JetBrains Mono", Menlo, Monaco, monospace;
+        --font-sans: "Avenir Next", "SF Pro Text", "Helvetica Neue", sans-serif;
+        --radius: 6px;
+      }
+
+      html, body {
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-sans);
+        font-size: 13px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        padding: 24px;
+      }
+
+      .card {
+        width: 100%;
+        max-width: 380px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 32px;
+      }
+
+      .logo {
+        font-family: var(--font-mono);
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text);
+        letter-spacing: -0.02em;
+        margin-bottom: 24px;
+        text-align: center;
+      }
+
+      .logo span {
+        color: var(--text-muted);
+        font-weight: 400;
+      }
+
+      /* Tabs */
+      .tabs {
+        display: flex;
+        gap: 2px;
+        background: var(--bg);
+        border-radius: var(--radius);
+        padding: 3px;
+        margin-bottom: 24px;
+      }
+
+      .tab-btn {
+        flex: 1;
+        padding: 6px 12px;
+        background: transparent;
+        border: none;
+        border-radius: 4px;
+        color: var(--text-muted);
+        font-size: 12px;
+        font-family: var(--font-sans);
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+      }
+
+      .tab-btn.active {
+        background: var(--surface-raised);
+        color: var(--text);
+      }
+
+      .tab-btn:hover:not(.active) {
+        color: var(--text);
+      }
+
+      .oauth-card {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 12px;
+        margin-bottom: 18px;
+      }
+
+      .oauth-copy {
+        color: var(--text-muted);
+        font-size: 12px;
+        margin-bottom: 10px;
+      }
+
+      .oauth-grid {
+        display: grid;
+        gap: 8px;
+      }
+
+      .oauth-btn {
+        width: 100%;
+        padding: 8px 12px;
+        background: var(--surface-raised);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: var(--text);
+        font-size: 12px;
+        font-family: var(--font-sans);
+        font-weight: 600;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 10px;
+        cursor: pointer;
+      }
+
+      .oauth-btn:hover:not(:disabled) {
+        border-color: var(--border-focus);
+      }
+
+      .oauth-btn-icon {
+        width: 16px;
+        height: 16px;
+        display: block;
+      }
+
+      .oauth-btn-label {
+        line-height: 1;
+      }
+
+      .oauth-btn[data-provider="google"] .oauth-btn-icon {
+        color: #e8e8e8;
+      }
+
+      .oauth-btn[data-provider="discord"] .oauth-btn-icon {
+        color: #5865f2;
+      }
+
+      .oauth-btn[data-provider="github"] .oauth-btn-icon {
+        color: #e8e8e8;
+      }
+
+      .oauth-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      /* Forms */
+      .tab-panel {
+        display: none;
+      }
+
+      .tab-panel.active {
+        display: block;
+      }
+
+      .form-group {
+        margin-bottom: 12px;
+      }
+
+      label {
+        display: block;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 5px;
+      }
+
+      input[type="email"],
+      input[type="password"],
+      input[type="text"] {
+        width: 100%;
+        padding: 8px 10px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: var(--text);
+        font-size: 13px;
+        font-family: var(--font-mono);
+        outline: none;
+        transition: border-color 0.15s;
+        -webkit-appearance: none;
+      }
+
+      input:focus {
+        border-color: var(--border-focus);
+      }
+
+      input::placeholder {
+        color: var(--text-dim);
+      }
+
+      .password-field {
+        position: relative;
+      }
+
+      .password-field input {
+        padding-right: 64px;
+      }
+
+      .password-toggle {
+        position: absolute;
+        top: 50%;
+        right: 8px;
+        transform: translateY(-50%);
+        padding: 2px 6px;
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        font-size: 11px;
+        font-family: var(--font-sans);
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+
+      .password-toggle:hover,
+      .password-toggle:focus-visible {
+        color: var(--text);
+      }
+
+      /* Buttons */
+      .btn {
+        width: 100%;
+        padding: 8px 14px;
+        background: var(--text);
+        border: none;
+        border-radius: var(--radius);
+        color: var(--accent-fg);
+        font-size: 13px;
+        font-family: var(--font-sans);
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 0.15s;
+        margin-top: 4px;
+      }
+
+      .btn:hover {
+        opacity: 0.88;
+      }
+
+      .btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      /* Status */
+      .status {
+        margin-top: 14px;
+        padding: 8px 10px;
+        border-radius: var(--radius);
+        font-size: 12px;
+        font-family: var(--font-mono);
+        display: none;
+      }
+
+      .status.error {
+        display: block;
+        background: rgba(192, 57, 43, 0.12);
+        border: 1px solid rgba(192, 57, 43, 0.3);
+        color: #e07060;
+      }
+
+      .status.success {
+        display: block;
+        background: rgba(39, 174, 96, 0.1);
+        border: 1px solid rgba(39, 174, 96, 0.25);
+        color: #5cb87a;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="logo">hydra</div>
+
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="signin">Sign In</button>
+        <button class="tab-btn" data-tab="signup">Sign Up</button>
+      </div>
+
+      <div class="oauth-card">
+        <div class="oauth-copy">Continue with a provider in your browser. Hydra will return automatically.</div>
+        <div class="oauth-grid">
+          <button class="oauth-btn" data-provider="google" aria-label="Continue with Google">
+            <svg class="oauth-btn-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="#4285F4"
+                d="M21.35 10.45h-9.18v3.1h5.27c-.24 1.43-1.04 2.64-2.27 3.45v2.87h3.67c2.15-1.98 3.39-4.89 3.39-8.34 0-.75-.07-1.32-.18-1.08Z"
+              />
+              <path fill="#34A853" d="M12.17 22c2.72 0 5-0.9 6.67-2.44l-3.67-2.87c-1 .67-2.28 1.08-3.98 1.08-3.06 0-5.65-2.06-6.58-4.84H0.82v3.01C2.47 19.59 6.89 22 12.17 22Z" />
+              <path fill="#FBBC05" d="M5.59 13.93a7.95 7.95 0 0 1 0-5.06V5.86H0.82a11.97 11.97 0 0 0 0 10.08l4.77-2.01Z" />
+              <path fill="#EA4335" d="M12.17 4.77c1.48 0 2.8.51 3.85 1.5l2.89-2.89C17.16 1.73 14.89.75 12.17.75 6.89.75 2.47 3.16.82 6.86l4.77 3.01c.93-2.78 3.52-5.1 6.58-5.1Z" />
+            </svg>
+            <span class="oauth-btn-label">Continue with Google</span>
+          </button>
+          <button class="oauth-btn" data-provider="discord" aria-label="Continue with Discord">
+            <svg class="oauth-btn-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M19.54 5.62a16.6 16.6 0 0 0-4.14-1.28l-.2.41a15.2 15.2 0 0 1 3.1 1.53 12.5 12.5 0 0 0-9.14 0 15.2 15.2 0 0 1 3.1-1.53l-.2-.41A16.6 16.6 0 0 0 7.92 5.62C5.42 9.16 4.75 12.62 4.95 16.03c1.7 1.27 3.35 2.03 4.98 2.53l.6-1.62a10.3 10.3 0 0 1-1.58-.77l.37-.27c3.03 1.41 6.3 1.41 9.31 0l.37.27c-.5.3-1.03.56-1.58.77l.6 1.62c1.63-.5 3.28-1.26 4.98-2.53.22-3.84-.75-7.26-2.46-10.41ZM9.4 14.07c-.9 0-1.64-.82-1.64-1.83 0-1 .72-1.83 1.64-1.83.94 0 1.66.83 1.64 1.83 0 1-.72 1.83-1.64 1.83Zm5.2 0c-.9 0-1.64-.82-1.64-1.83 0-1 .72-1.83 1.64-1.83.94 0 1.66.83 1.64 1.83 0 1-.72 1.83-1.64 1.83Z"
+              />
+            </svg>
+            <span class="oauth-btn-label">Continue with Discord</span>
+          </button>
+          <button class="oauth-btn" data-provider="github" aria-label="Continue with GitHub">
+            <svg class="oauth-btn-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M12 .75A11.25 11.25 0 0 0 8.45 22.7c.56.1.77-.24.77-.54v-1.9c-3.14.68-3.8-1.34-3.8-1.34-.52-1.34-1.27-1.7-1.27-1.7-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.67 1.25 3.33.96.1-.74.4-1.25.73-1.54-2.5-.29-5.13-1.25-5.13-5.57 0-1.23.44-2.23 1.17-3.02-.12-.29-.51-1.48.11-3.08 0 0 .95-.3 3.11 1.15a10.8 10.8 0 0 1 5.66 0c2.16-1.45 3.11-1.15 3.11-1.15.62 1.6.23 2.79.11 3.08.73.79 1.17 1.79 1.17 3.02 0 4.33-2.63 5.28-5.14 5.57.41.35.79 1.05.79 2.11v3.13c0 .31.21.65.78.54A11.25 11.25 0 0 0 12 .75Z"
+              />
+            </svg>
+            <span class="oauth-btn-label">Continue with GitHub</span>
+          </button>
+        </div>
+        <div class="status" id="oauth-status"></div>
+      </div>
+
+      <!-- Sign In -->
+      <div class="tab-panel active" id="tab-signin">
+        <div class="form-group">
+          <label for="signin-email">Email</label>
+          <input type="email" id="signin-email" placeholder="you@example.com" autocomplete="email" />
+        </div>
+        <div class="form-group">
+          <label for="signin-password">Password</label>
+          <div class="password-field">
+            <input type="password" id="signin-password" placeholder="••••••••" autocomplete="current-password" />
+            <button
+              type="button"
+              class="password-toggle"
+              data-password-toggle="signin-password"
+              aria-label="Show password"
+              aria-pressed="false"
+            >
+              Show
+            </button>
+          </div>
+        </div>
+        <button class="btn" id="signin-btn">Sign In</button>
+        <div class="status" id="signin-status"></div>
+      </div>
+
+      <!-- Sign Up -->
+      <div class="tab-panel" id="tab-signup">
+        <div class="form-group">
+          <label for="signup-name">Name</label>
+          <input type="text" id="signup-name" placeholder="Your name" autocomplete="name" />
+        </div>
+        <div class="form-group">
+          <label for="signup-email">Email</label>
+          <input type="email" id="signup-email" placeholder="you@example.com" autocomplete="email" />
+        </div>
+        <div class="form-group">
+          <label for="signup-password">Password</label>
+          <div class="password-field">
+            <input type="password" id="signup-password" placeholder="••••••••" autocomplete="new-password" />
+            <button
+              type="button"
+              class="password-toggle"
+              data-password-toggle="signup-password"
+              aria-label="Show password"
+              aria-pressed="false"
+            >
+              Show
+            </button>
+          </div>
+        </div>
+        <button class="btn" id="signup-btn">Create Account</button>
+        <div class="status" id="signup-status"></div>
+      </div>
+    </div>
+
+    <script>
+      // --- Helpers ---
+      function showStatus(el, type, msg) {
+        el.className = "status " + type;
+        el.textContent = msg;
+      }
+
+      function clearStatus(el) {
+        el.className = "status";
+        el.textContent = "";
+      }
+
+      function setLoading(btn, loading, label) {
+        btn.disabled = loading;
+        btn.textContent = loading ? "Please wait\u2026" : label;
+      }
+
+      function setButtonsDisabled(buttons, disabled) {
+        buttons.forEach(function (button) {
+          button.disabled = disabled;
+        });
+      }
+
+      function syncPasswordToggle(toggle, input) {
+        const isVisible = input.type === "text";
+        toggle.textContent = isVisible ? "Hide" : "Show";
+        toggle.setAttribute("aria-label", isVisible ? "Hide password" : "Show password");
+        toggle.setAttribute("aria-pressed", String(isVisible));
+      }
+
+      document.querySelectorAll("[data-password-toggle]").forEach(function (toggle) {
+        const input = document.getElementById(toggle.dataset.passwordToggle);
+        if (!input) return;
+
+        syncPasswordToggle(toggle, input);
+        toggle.addEventListener("click", function () {
+          input.type = input.type === "password" ? "text" : "password";
+          syncPasswordToggle(toggle, input);
+          input.focus({ preventScroll: true });
+          input.setSelectionRange(input.value.length, input.value.length);
+        });
+      });
+
+      const oauthButtons = Array.from(document.querySelectorAll("[data-provider]"));
+      const oauthStatus = document.getElementById("oauth-status");
+
+      oauthButtons.forEach(function (button) {
+        button.addEventListener("click", async function () {
+          const provider = button.dataset.provider;
+          if (!provider) return;
+
+          setButtonsDisabled(oauthButtons, true);
+          clearStatus(oauthStatus);
+          try {
+            const result = await window.claudeWorkspace.authStartProvider(provider);
+            if (!result || !result.success) {
+              showStatus(oauthStatus, "error", (result && result.error) || "Unable to start provider sign in.");
+            } else {
+              showStatus(oauthStatus, "success", "Browser opened. Complete sign in there to return to Hydra.");
+            }
+          } catch (err) {
+            showStatus(oauthStatus, "error", (err && err.message) || "Unable to start provider sign in.");
+          } finally {
+            setButtonsDisabled(oauthButtons, false);
+          }
+        });
+      });
+
+      // --- Tab switching ---
+      const tabBtns = document.querySelectorAll(".tab-btn");
+      const tabPanels = document.querySelectorAll(".tab-panel");
+
+      tabBtns.forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          const target = btn.dataset.tab;
+          tabBtns.forEach(function (b) { b.classList.remove("active"); });
+          tabPanels.forEach(function (p) { p.classList.remove("active"); });
+          btn.classList.add("active");
+          document.getElementById("tab-" + target).classList.add("active");
+        });
+      });
+
+      // --- Sign In ---
+      const signinBtn = document.getElementById("signin-btn");
+      const signinStatus = document.getElementById("signin-status");
+
+      signinBtn.addEventListener("click", async function () {
+        const email = document.getElementById("signin-email").value.trim();
+        const password = document.getElementById("signin-password").value;
+        if (!email || !password) {
+          showStatus(signinStatus, "error", "Email and password are required.");
+          return;
+        }
+        setLoading(signinBtn, true, "Sign In");
+        clearStatus(signinStatus);
+        try {
+          const result = await window.claudeWorkspace.signInWithEmail(email, password);
+          if (!result || !result.success) {
+            showStatus(signinStatus, "error", (result && result.error) || "Sign in failed.");
+          }
+          // On success, the main process navigates to index.html automatically
+        } catch (err) {
+          showStatus(signinStatus, "error", (err && err.message) || "An unexpected error occurred.");
+        } finally {
+          setLoading(signinBtn, false, "Sign In");
+        }
+      });
+
+      // Enter key submits sign-in
+      document.getElementById("signin-password").addEventListener("keydown", function (e) {
+        if (e.key === "Enter") signinBtn.click();
+      });
+
+      // --- Sign Up ---
+      const signupBtn = document.getElementById("signup-btn");
+      const signupStatus = document.getElementById("signup-status");
+
+      signupBtn.addEventListener("click", async function () {
+        const name = document.getElementById("signup-name").value.trim();
+        const email = document.getElementById("signup-email").value.trim();
+        const password = document.getElementById("signup-password").value;
+        if (!name || !email || !password) {
+          showStatus(signupStatus, "error", "All fields are required.");
+          return;
+        }
+        setLoading(signupBtn, true, "Create Account");
+        clearStatus(signupStatus);
+        try {
+          const result = await window.claudeWorkspace.signUpWithEmail(name, email, password);
+          if (!result || !result.success) {
+            showStatus(signupStatus, "error", (result && result.error) || "Sign up failed.");
+          } else {
+            showStatus(signupStatus, "success", "Account created! Signing you in\u2026");
+            // Main process navigates to index.html automatically on success
+          }
+        } catch (err) {
+          showStatus(signupStatus, "error", (err && err.message) || "An unexpected error occurred.");
+        } finally {
+          setLoading(signupBtn, false, "Create Account");
+        }
+      });
+
+      // Enter key submits sign-up
+      document.getElementById("signup-password").addEventListener("keydown", function (e) {
+        if (e.key === "Enter") signupBtn.click();
+      });
+    </script>
+  </body>
+</html>

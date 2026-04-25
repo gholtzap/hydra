@@ -49,6 +49,8 @@ import type {
 } from "../shared-types";
 import type { AppControllerHandle } from "./internal-api";
 import type { HydraMcpServer } from "./mcp-server";
+import type { AuthSession } from "./auth-client";
+import { HydraAuthClient } from "./auth-client";
 import {
   extractPreferencesPatch,
   normalizeMarketplaceInstallArgs,
@@ -308,6 +310,7 @@ const FILE_TREE_IGNORED = new Set([
 ]);
 const SESSION_ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
 const TRUSTED_RENDERER_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "renderer", "index.html"));
+const TRUSTED_AUTH_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "renderer", "auth.html"));
 const AGENT_LABELS: Record<AgentId, string> = Object.fromEntries(
   AGENT_DEFINITIONS.map((agent) => [agent.id, agent.label])
 ) as Record<AgentId, string>;
@@ -434,7 +437,8 @@ function normalizeFileUrlPath(input: string): string | null {
 }
 
 function isTrustedRendererUrl(input: string) {
-  return normalizeFileUrlPath(input) === TRUSTED_RENDERER_ENTRY_PATH;
+  const normalized = normalizeFileUrlPath(input);
+  return normalized === TRUSTED_RENDERER_ENTRY_PATH || normalized === TRUSTED_AUTH_ENTRY_PATH;
 }
 
 function assertTrustedGitHubUrl(input: unknown) {
@@ -625,6 +629,8 @@ class AppController {
   knownPlanFiles: Set<string>;
   plansDirWatcher: ReturnType<typeof fs.watch> | null;
   mcpServer: HydraMcpServer | null;
+  authClient: HydraAuthClient | null;
+  authMainSetup: Promise<void>;
 
   constructor() {
     this.state = emptyState();
@@ -653,6 +659,18 @@ class AppController {
     this.knownPlanFiles = new Set();
     this.plansDirWatcher = null;
     this.mcpServer = null;
+    const authServerUrl = this.resolveAuthServerUrl();
+    this.authClient = new HydraAuthClient(authServerUrl, {
+      getWindow: () => this.window,
+      onSessionChanged: (session) => {
+        void this.handleAuthSessionChanged(session);
+      }
+    });
+    this.authMainSetup = this.authClient.setupMain({
+      bridges: false,
+      csp: true,
+      getWindow: () => this.window,
+    });
     this.ptyHost = new PtyHostClient();
     this.ptyHost.onMessage((message) => this.handlePtyMessage(message));
   }
@@ -903,7 +921,8 @@ class AppController {
   }
 
   async initialize(): Promise<void> {
-    const [state, lazygitPath] = await Promise.all([
+    const [, state, lazygitPath] = await Promise.all([
+      this.authMainSetup,
       loadState(),
       resolveCommandPath("lazygit")
     ]);
@@ -914,6 +933,26 @@ class AppController {
     this.normalizeFolderRepos();
     this.repairStoredTranscripts();
     this.watchPlansDir();
+  }
+
+  private resolveAuthServerUrl(): string {
+    // 1. Environment variable (set at build time for production)
+    if (process.env.AUTH_SERVER_URL) {
+      return process.env.AUTH_SERVER_URL;
+    }
+
+    // 2. Read from bundled auth-config.json
+    try {
+      const configPath = path.join(__dirname, "..", "renderer", "auth-config.json");
+      const raw = fs.readFileSync(configPath, "utf-8");
+      const config = JSON.parse(raw);
+      if (config?.authServerUrl) return config.authServerUrl;
+    } catch {
+      // ignore
+    }
+
+    // 3. Default to localhost for development
+    return "http://localhost:8787";
   }
 
   createWindow(): void {
@@ -952,7 +991,37 @@ class AppController {
     window.webContents.on("will-redirect", denyUnexpectedNavigation);
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 
-    window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
+    // Auth gate: check for valid session before loading the main app
+    this.loadAuthenticatedPage(window);
+  }
+
+  private async loadAuthenticatedPage(window: ElectronBrowserWindow): Promise<void> {
+    try {
+      const session = await this.authClient?.initialize();
+      if (window.isDestroyed()) return;
+      if (session) {
+        window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
+      } else {
+        window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+      }
+    } catch {
+      if (window.isDestroyed()) return;
+      // If auth check fails (e.g. server unreachable), show auth page
+      window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+    }
+  }
+
+  private async handleAuthSessionChanged(session: AuthSession | null): Promise<void> {
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
+
+    const currentUrl = this.window.webContents.getURL();
+    if (session && currentUrl.endsWith("/auth.html")) {
+      await this.window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
+    } else if (!session && !currentUrl.endsWith("/auth.html")) {
+      await this.window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+    }
   }
 
   setupIpc(): void {
@@ -1108,6 +1177,76 @@ class AppController {
         payload.rows
       )
     );
+    // ---- Auth IPC handlers ----
+    ipcMain.handle("auth:signIn", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      const result = await this.authClient.signIn(payload.email, payload.password);
+      if (result.success && this.window) {
+        this.window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
+      }
+      return result;
+    });
+    ipcMain.handle("auth:signUp", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      const result = await this.authClient.signUp(payload.name, payload.email, payload.password);
+      if (result.success && this.window) {
+        this.window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
+      }
+      return result;
+    });
+    ipcMain.handle("auth:signOut", async () => {
+      if (!this.authClient) return;
+      try {
+        await this.authClient.signOut();
+      } finally {
+        // Always navigate back to auth page, even if signOut throws
+        if (this.window && !this.window.isDestroyed()) {
+          this.window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+        }
+      }
+    });
+    ipcMain.handle("auth:openPage", async () => {
+      if (this.window) {
+        await this.window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+      }
+    });
+    ipcMain.handle("auth:startProvider", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      try {
+        await this.authClient.requestAuth({ provider: payload?.provider });
+        return { success: true };
+      } catch (error: unknown) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unable to start provider sign in."
+        };
+      }
+    });
+    ipcMain.handle("auth:signInWithProvider", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      try {
+        await this.authClient.requestAuth({ provider: payload?.provider });
+        return { success: true };
+      } catch (error: unknown) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unable to start provider sign in."
+        };
+      }
+    });
+    ipcMain.handle("auth:getSession", async () => {
+      if (!this.authClient) return null;
+      return this.authClient.getSession();
+    });
+    ipcMain.handle("auth:resetPassword", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      return this.authClient.requestPasswordReset(payload.email, payload.redirectUrl);
+    });
+    ipcMain.handle("auth:verifyTotp", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      return this.authClient.verifyTotp(payload.code);
+    });
+
     ipcMain.handle("fs:readFile", async (_event, payload) => {
       try {
         const filePath = this.assertRepoFilePath(payload?.repoId, payload?.filePath);

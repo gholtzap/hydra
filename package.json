@@ -11,7 +11,9 @@
     "build:renderer": "tsc -p tsconfig.renderer.json",
     "build:assets": "node scripts/build-assets.mjs",
     "start": "npm run build && electron .",
-    "dev": "npm run build && electron .",
+    "dev": "node scripts/dev.mjs",
+    "dev:desktop": "npm run build && electron .",
+    "dev:auth": "npm --prefix auth-server run dev:local",
     "pack": "npm run build && npm run build:icon && node scripts/run-electron-builder.mjs --dir",
     "pack:mac": "npm run build && node scripts/run-electron-builder.mjs --dir --mac --publish never",
     "smoke:packaged:mac": "node scripts/smoke-packaged-mac.mjs",
@@ -25,14 +27,18 @@
     "release:dry-run": "node scripts/release.mjs --dry-run"
   },
   "dependencies": {
+    "@better-auth/electron": "^1.6.5",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@opentelemetry/api": "^1.9.1",
+    "better-auth": "^1.6.5",
+    "conf": "^15.1.0",
     "electron-updater": "^6.8.3",
     "node-pty": "^1.0.0",
     "tokscale": "^2.0.19"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",
-    "electron": "^35.0.0",
+    "electron": "^36.9.5",
     "electron-builder": "^26.8.1",
     "typescript": "^6.0.2"
   }

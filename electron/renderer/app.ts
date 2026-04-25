@@ -306,6 +306,27 @@ const state: AppStateSnapshot = {
   tokscaleInstalled: false
 };
 
+type RepoSessionStats = {
+  liveCount: number;
+  attentionCount: number;
+};
+
+type SessionIndex = {
+  byId: Map<string, SessionSummary>;
+  byRepoId: Map<string, SessionSummary[]>;
+  repoStatsById: Map<string, RepoSessionStats>;
+  inbox: SessionSummary[];
+  mostRecent: SessionSummary | null;
+};
+
+const EMPTY_SESSION_LIST: SessionSummary[] = [];
+const EMPTY_REPO_SESSION_STATS: RepoSessionStats = {
+  liveCount: 0,
+  attentionCount: 0
+};
+
+let sessionIndex: SessionIndex = buildSessionIndex(state.sessions);
+
 type UiState = {
   selection: RendererSelection;
   focusSection: SectionId;
@@ -1427,6 +1448,7 @@ function replaceState(nextState) {
   state.workspaces = nextState.workspaces || [];
   state.repos = nextState.repos || [];
   state.sessions = nextState.sessions || [];
+  rebuildSessionIndex();
   state.preferences = nextState.preferences || {};
   state.lazygitInstalled = !!nextState.lazygitInstalled;
   state.tokscaleInstalled = !!nextState.tokscaleInstalled;
@@ -1496,15 +1518,15 @@ function sidebarSignature() {
   const expandedRepo = expandedSidebarRepo();
   const inboxCount = inboxSessions().length;
   const railSig = state.repos.map((repo) => {
-    const sessions = sessionsForRepo(repo.id);
-    return `${repo.id}:${sessions.filter((s) => s.runtimeState === "live").length}:${sessions.filter((s) => s.blocker || s.unreadCount > 0).length}`;
+    const stats = repoSessionStats(repo.id);
+    return `${repo.id}:${stats.liveCount}:${stats.attentionCount}`;
   }).join(",");
   const drawerSig = expandedRepo
     ? sessionsForRepo(expandedRepo.id).map((s) =>
         `${s.id}:${s.title}:${s.status}:${s.unreadCount}:${previewTranscript(s.transcript)}`
       ).join(",")
     : "";
-  const selSig = `${ui.selection.type}:${(ui.selection as any).id ?? ""}`;
+  const selSig = `${ui.selection.type}:${ui.selection.id ?? ""}`;
   const multiSelSig = ui.selectedSessionIds.size ? [...ui.selectedSessionIds].sort().join(",") : "";
   return `${inboxCount}|${railSig}|${drawerSig}|${selSig}|${ui.sidebarNavItem}|${ui.sidebarExpandedRepoId}|${multiSelSig}`;
 }
@@ -1601,7 +1623,7 @@ function renderSidebarUtilityButton(
 }
 
 function renderInboxRailButton() {
-  const count = inboxSessions().length;
+  const count = sessionIndex.inbox.length;
 
   return dom(
     "button",
@@ -1637,9 +1659,7 @@ function renderProjectRailButtons() {
 }
 
 function renderProjectRailButton(repo) {
-  const sessions = sessionsForRepo(repo.id);
-  const liveCount = sessions.filter((session) => session.runtimeState === "live").length;
-  const attentionCount = sessions.filter((session) => session.blocker || session.unreadCount > 0).length;
+  const { liveCount, attentionCount } = repoSessionStats(repo.id);
   const active = currentRepoId() === repo.id;
   const expanded = ui.sidebarExpandedRepoId === repo.id;
   const badgeLabel = attentionCount ? (attentionCount > 9 ? "9+" : String(attentionCount)) : "";
@@ -9516,7 +9536,7 @@ function formatJsonValue(value) {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-function mergeSessionSummary(summary) {
+function mergeSessionSummary(summary: SessionSummary): SessionSummary | null {
   const index = state.sessions.findIndex((session) => session.id === summary.id);
   if (index < 0) {
     return null;
@@ -9526,11 +9546,12 @@ function mergeSessionSummary(summary) {
     ...state.sessions[index],
     ...summary
   };
+  rebuildSessionIndex();
 
   return state.sessions[index];
 }
 
-function appendSessionOutput(sessionId, chunk, summary) {
+function appendSessionOutput(sessionId: string, chunk: string, summary: SessionSummary): SessionSummary | null {
   return mergeSessionSummary(summary);
 }
 
@@ -10054,7 +10075,7 @@ function workspaceDropLabel(
 }
 
 function sessionById(sessionId: string): SessionSummary | null {
-  return state.sessions.find((session) => session.id === sessionId) || null;
+  return sessionIndex.byId.get(sessionId) || null;
 }
 
 function repoById(repoId: string | null | undefined): RepoSnapshot | null {
@@ -10826,20 +10847,75 @@ function scrollMainListSelectionIntoView() {
   target?.scrollIntoView({ block: "nearest" });
 }
 
-function sessionsForRepo(repoId) {
-  return [...state.sessions]
-    .filter((session) => session.repoID === repoId)
-    .sort(compareSessions);
+function rebuildSessionIndex(): void {
+  sessionIndex = buildSessionIndex(state.sessions);
 }
 
-function inboxSessions() {
-  return [...state.sessions]
-    .filter((session) => session.blocker || session.unreadCount > 0)
-    .sort(compareInboxSessions);
+function buildSessionIndex(sessions: SessionSummary[]): SessionIndex {
+  const byId = new Map<string, SessionSummary>();
+  const byRepoId = new Map<string, SessionSummary[]>();
+  const repoStatsById = new Map<string, RepoSessionStats>();
+  const inbox: SessionSummary[] = [];
+  let mostRecent: SessionSummary | null = null;
+
+  for (const session of sessions) {
+    byId.set(session.id, session);
+
+    const repoSessions = byRepoId.get(session.repoID);
+    if (repoSessions) {
+      repoSessions.push(session);
+    } else {
+      byRepoId.set(session.repoID, [session]);
+    }
+
+    let stats = repoStatsById.get(session.repoID);
+    if (!stats) {
+      stats = { liveCount: 0, attentionCount: 0 };
+      repoStatsById.set(session.repoID, stats);
+    }
+
+    if (session.runtimeState === "live") {
+      stats.liveCount += 1;
+    }
+
+    if (session.blocker || session.unreadCount > 0) {
+      stats.attentionCount += 1;
+      inbox.push(session);
+    }
+
+    if (!mostRecent || compareSessionsByUpdatedAt(session, mostRecent) < 0) {
+      mostRecent = session;
+    }
+  }
+
+  for (const repoSessions of byRepoId.values()) {
+    repoSessions.sort(compareSessions);
+  }
+  inbox.sort(compareInboxSessions);
+
+  return {
+    byId,
+    byRepoId,
+    repoStatsById,
+    inbox,
+    mostRecent
+  };
 }
 
-function mostRecentlyUpdatedSession() {
-  return [...state.sessions].sort(compareSessionsByUpdatedAt)[0] || null;
+function repoSessionStats(repoId: string): RepoSessionStats {
+  return sessionIndex.repoStatsById.get(repoId) || EMPTY_REPO_SESSION_STATS;
+}
+
+function sessionsForRepo(repoId: string): SessionSummary[] {
+  return sessionIndex.byRepoId.get(repoId) || EMPTY_SESSION_LIST;
+}
+
+function inboxSessions(): SessionSummary[] {
+  return sessionIndex.inbox;
+}
+
+function mostRecentlyUpdatedSession(): SessionSummary | null {
+  return sessionIndex.mostRecent;
 }
 
 function compareSessionPinning(left, right) {

@@ -5,6 +5,7 @@ import { withCloudflare } from "better-auth-cloudflare";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { drizzle } from "drizzle-orm/d1";
 import * as schema from "./db/schema";
+import { hashPassword, verifyPassword } from "./password";
 import { createEncryptedSecondaryStorage } from "./secondary-storage";
 import {
   ELECTRON_AUTH_ORIGIN,
@@ -106,7 +107,13 @@ function createAuth(
         geolocationTracking: false,
       },
       {
-        emailAndPassword: { enabled: true },
+        emailAndPassword: {
+          enabled: true,
+          password: {
+            hash: hashPassword,
+            verify: verifyPassword,
+          },
+        },
         // The desktop app now uses the native Better Auth Electron client/plugin flow.
         plugins: [electron()],
         session,

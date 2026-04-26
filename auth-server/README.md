@@ -14,6 +14,7 @@ Session handling is intentionally not the default D1-backed Better Auth flow:
 
 - Live sessions are stored in encrypted secondary storage, not the `session` table.
 - A short-lived cookie cache is enabled with JWE and a 5 minute max age.
+- Email/password hashes use the Worker-safe WebCrypto PBKDF2 implementation in [auth-server/src/password.ts](/Users/omavashia/hydra/auth-server/src/password.ts:1), avoiding Better Auth's pure-JS scrypt fallback on Cloudflare Workers.
 - OAuth account tokens are encrypted, and `idToken` values are scrubbed on create/update to avoid the known Better Auth 1.6.5 persistence path.
 
 ## Configuration
@@ -63,6 +64,8 @@ The backing table is created by migration [auth-server/migrations/0002_encrypted
 
 [`auth-server/src/index.ts`](/Users/omavashia/hydra/auth-server/src/index.ts:24) wraps `/api/auth/*` with CORS for the normalized allowed origins, then reconstructs the raw request before delegating to `auth.handler(request)`. The request reconstruction matters because Workers can hand Better Auth a disturbed body stream otherwise.
 
+The Electron OAuth init route (`/api/auth/electron/init-oauth-proxy`) is handled before the Better Auth catch-all and calls `auth.handler()` directly for `/api/auth/sign-in/social`. This avoids the Electron plugin's same-origin HTTP self-fetch, which is brittle in Workers request contexts. Do not monkey-patch `globalThis.fetch` for request logging; Worker isolates can reuse globals across requests.
+
 [`auth-server/src/auth.ts`](/Users/omavashia/hydra/auth-server/src/auth.ts:134) also exports a static `auth` instance for Better Auth CLI schema generation via `npx @better-auth/cli generate`.
 
 ## Electron Integration
@@ -84,4 +87,3 @@ Renderer auth UI lives in [electron/renderer/auth.html](/Users/omavashia/hydra/e
 3. Start everything from the repo root with `npm run dev`. This runs the auth Worker with local D1 migrations and the desktop app together.
 
 If you only want the auth Worker, run `npm run dev:auth`.
-

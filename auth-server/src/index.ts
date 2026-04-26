@@ -56,7 +56,40 @@ app.all("/api/auth/*", async (c) => {
     headers: raw.headers,
     body: hasBody ? await raw.arrayBuffer() : undefined,
   });
-  return auth.handler(request);
+  console.log(`[auth] incoming: ${request.method} ${request.url}`);
+  // Monkey-patch global fetch to log the self-fetch from init-oauth-proxy
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (input: any, init?: any) => {
+    const fetchUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input?.url;
+    console.log(`[auth] sub-fetch: ${init?.method || "GET"} ${fetchUrl}`);
+    try {
+      const r = await origFetch(input, init);
+      console.log(`[auth] sub-fetch result: ${r.status}`);
+      return r;
+    } catch (err: any) {
+      console.error(`[auth] sub-fetch FAILED: ${err?.message}`);
+      throw err;
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  };
+  try {
+    const response = await auth.handler(request);
+    if (response.status >= 400) {
+      const url = new URL(request.url);
+      console.error(`[auth] ${request.method} ${url.pathname} → ${response.status}`);
+      try {
+        const cloned = response.clone();
+        const body = await cloned.text();
+        console.error(`[auth] body: ${body.slice(0, 500)}`);
+      } catch {}
+    }
+    return response;
+  } catch (err: any) {
+    console.error(`[auth] THROWN: ${err?.message || err}`);
+    console.error(`[auth] stack: ${err?.stack?.slice(0, 500) || "none"}`);
+    throw err;
+  }
 });
 
 // Health check

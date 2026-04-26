@@ -4,7 +4,17 @@
  * Each entry maps an action ID to an Electron accelerator string.
  * Users override individual bindings via preferences.keybindings.
  */
-import type { KeybindingAction, KeybindingMap } from "../shared-types";
+import type {
+  AcceleratorDisplayParts,
+  KeybindingEventSnapshot,
+  KeybindingLabels,
+  KeybindingMap
+} from "../shared-types";
+
+function isMacPlatform(platform: string): boolean {
+  const normalized = platform.trim().toLowerCase();
+  return normalized === "darwin" || normalized.includes("mac");
+}
 
 export const DEFAULT_KEYBINDINGS: KeybindingMap = {
   "open-folder": "CmdOrCtrl+O",
@@ -26,7 +36,7 @@ export const DEFAULT_KEYBINDINGS: KeybindingMap = {
   "navigate-section-down": "CmdOrCtrl+ArrowDown"
 };
 
-export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
+export const KEYBINDING_LABELS: KeybindingLabels = {
   "open-folder": "Open Folder",
   "create-folder": "Create Folder",
   "new-session": "New Session",
@@ -53,9 +63,11 @@ export function resolveKeybindings(
   return { ...DEFAULT_KEYBINDINGS, ...(overrides || {}) };
 }
 
-/** Format an accelerator for display (e.g., "CmdOrCtrl+Shift+K" -> "⌘⇧K" on Mac). */
-export function formatAccelerator(accelerator: string, platform: string = process.platform): string {
-  const isMac = platform === "darwin";
+export function acceleratorDisplayParts(
+  accelerator: string,
+  platform: string = process.platform
+): AcceleratorDisplayParts {
+  const isMac = isMacPlatform(platform);
   const parts = accelerator.split("+");
   const display: string[] = [];
 
@@ -94,14 +106,24 @@ export function formatAccelerator(accelerator: string, platform: string = proces
     }
   }
 
-  return isMac ? display.join("") : display.join("+");
+  return { isMac, parts: display };
+}
+
+/** Format an accelerator for display (e.g., "CmdOrCtrl+Shift+K" -> "⌘⇧K" on Mac). */
+export function formatAccelerator(accelerator: string, platform: string = process.platform): string {
+  const display = acceleratorDisplayParts(accelerator, platform);
+  return display.isMac ? display.parts.join("") : display.parts.join("+");
 }
 
 /**
  * Check if a KeyboardEvent matches an accelerator string.
  * Used in the renderer to match user input against configured bindings.
  */
-export function matchesAccelerator(event: KeyboardEvent, accelerator: string): boolean {
+export function matchesAccelerator(
+  event: KeybindingEventSnapshot,
+  accelerator: string,
+  platform: string = process.platform
+): boolean {
   const parts = accelerator.split("+").map((p) => p.toLowerCase());
 
   let needsMeta = false;
@@ -113,7 +135,7 @@ export function matchesAccelerator(event: KeyboardEvent, accelerator: string): b
   for (const part of parts) {
     if (part === "cmdorctrl" || part === "commandorcontrol") {
       // On Mac, CmdOrCtrl maps to Meta; on others, Ctrl
-      if (process.platform === "darwin") {
+      if (isMacPlatform(platform)) {
         needsMeta = true;
       } else {
         needsCtrl = true;
@@ -147,6 +169,8 @@ export function matchesAccelerator(event: KeyboardEvent, accelerator: string): b
   if (targetKey === "backspace" || targetKey === "delete") return eventKey === "backspace";
   if (targetKey === "tab") return eventKey === "tab";
   if (targetKey === "space") return eventKey === " ";
+  if (targetKey === "]") return eventKey === "]";
+  if (targetKey === "[") return eventKey === "[";
 
   return eventKey === targetKey;
 }

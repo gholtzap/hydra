@@ -1,4 +1,5 @@
 import type {
+  AcceleratorDisplayParts,
   AppCommandPayload,
   AppPreferencesPatch,
   AppUpdateCheckResult,
@@ -16,6 +17,9 @@ import type {
   EphemeralToolExitPayload,
   EphemeralToolId,
   EphemeralToolOutputPayload,
+  KeybindingEventSnapshot,
+  KeybindingLabels,
+  KeybindingMap,
   MarketplaceInspectResponse,
   MarketplaceInstallResponse,
   MarketplaceSkillDetails,
@@ -72,6 +76,11 @@ interface ClaudeWorkspaceApi {
   openExternalUrl: (payload: ClaudeExternalUrlRequest) => Promise<void>;
   nextUnreadSession: () => Promise<string | null>;
   updatePreferences: (patch: AppPreferencesPatch) => Promise<void>;
+  getDefaultKeybindings: () => KeybindingMap;
+  getKeybindingLabels: () => KeybindingLabels;
+  getAcceleratorDisplayParts: (accelerator: string) => AcceleratorDisplayParts;
+  formatAccelerator: (accelerator: string) => string;
+  matchesAccelerator: (event: KeybindingEventSnapshot, accelerator: string) => boolean;
   getTrackedPortStatus: () => Promise<TrackedPortStatus>;
   getClaudeSettingsContext: (repoId: string | null) => Promise<ClaudeSettingsContext>;
   loadSettingsFile: (payload: ClaudeSettingsFileRequest) => Promise<string>;

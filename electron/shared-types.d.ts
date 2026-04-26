@@ -58,6 +58,20 @@ export type KeybindingAction =
 
 export type KeybindingMap = Record<KeybindingAction, string>;
 export type KeybindingOverrides = Partial<KeybindingMap>;
+export type KeybindingLabels = Record<KeybindingAction, string>;
+
+export type KeybindingEventSnapshot = {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+};
+
+export type AcceleratorDisplayParts = {
+  isMac: boolean;
+  parts: string[];
+};
 
 export type ThemeAppearance = "system" | "light" | "dark";
 

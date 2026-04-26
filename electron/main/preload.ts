@@ -1,4 +1,5 @@
 import type {
+  AcceleratorDisplayParts,
   AppCommandPayload,
   AppPreferencesPatch,
   AppUpdateCheckResult,
@@ -16,6 +17,9 @@ import type {
   EphemeralToolExitPayload,
   EphemeralToolId,
   EphemeralToolOutputPayload,
+  KeybindingEventSnapshot,
+  KeybindingLabels,
+  KeybindingMap,
   MarketplaceInspectResponse,
   MarketplaceInstallResponse,
   MarketplaceInstallScope,
@@ -35,6 +39,13 @@ import type {
 } from "../shared-types";
 
 const { contextBridge, ipcRenderer } = require("electron");
+const {
+  DEFAULT_KEYBINDINGS,
+  KEYBINDING_LABELS,
+  acceleratorDisplayParts,
+  formatAccelerator,
+  matchesAccelerator
+} = require("./keybindings") as typeof import("./keybindings");
 
 type RepoAppLaunchConfigRequest = {
   repoId: string;
@@ -114,6 +125,13 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     nextUnreadSession: () => invoke<string | null>("session:nextUnread"),
     updatePreferences: (patch: AppPreferencesPatch) =>
       invoke<void>("preferences:update", patch),
+    getDefaultKeybindings: (): KeybindingMap => ({ ...DEFAULT_KEYBINDINGS }),
+    getKeybindingLabels: (): KeybindingLabels => ({ ...KEYBINDING_LABELS }),
+    getAcceleratorDisplayParts: (accelerator: string): AcceleratorDisplayParts =>
+      acceleratorDisplayParts(accelerator),
+    formatAccelerator: (accelerator: string): string => formatAccelerator(accelerator),
+    matchesAccelerator: (event: KeybindingEventSnapshot, accelerator: string): boolean =>
+      matchesAccelerator(event, accelerator),
     getTrackedPortStatus,
     getClaudeSettingsContext: (repoId: string | null) =>
       invoke<ClaudeSettingsContext>("settings:context", repoId),

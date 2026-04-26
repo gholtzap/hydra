@@ -23,6 +23,8 @@ import type {
   Point,
   ReadFileResult,
   RepoAppLaunchConfig,
+  RepoParallelWorktreeSettings,
+  RepoParallelWorktreeSettingsPatch,
   SessionOrganizationPatch,
   SessionOutputPayload,
   SessionRestartRequest,
@@ -30,6 +32,7 @@ import type {
   SessionSummary,
   SessionUpdatedPayload,
   TrackedPortStatus,
+  WorktreeRevealRequest,
   WikiContext,
   WikiFileContents
 } from "../shared-types";
@@ -40,6 +43,8 @@ type RepoAppLaunchConfigRequest = {
   repoId: string;
   config: RepoAppLaunchConfig;
 };
+
+type RepoParallelWorktreeSettingsRequest = RepoParallelWorktreeSettingsPatch;
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args) as Promise<T>;
@@ -104,11 +109,14 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
       invoke<void>("repo:contextMenu", { repoId, position }),
     updateRepoAppLaunchConfig: (payload: RepoAppLaunchConfigRequest) =>
       invoke<RepoAppLaunchConfig | null>("repo:updateAppLaunchConfig", payload),
+    updateRepoParallelWorktreeSettings: (payload: RepoParallelWorktreeSettingsRequest) =>
+      invoke<RepoParallelWorktreeSettings | null>("repo:updateParallelWorktreeSettings", payload),
     buildAndRunApp: (repoId: string) => invoke<string | null>("repo:buildAndRunApp", repoId),
     readClipboardText: () => invoke<string>("clipboard:readText"),
     writeClipboardText: (text: string) => invoke<void>("clipboard:writeText", text),
     checkForUpdates: () => invoke<AppUpdateCheckResult>("app:checkForUpdates"),
     revealPath: (payload: ClaudePathRevealRequest) => invoke<void>("path:reveal", payload),
+    revealWorktree: (payload: WorktreeRevealRequest) => invoke<void>("worktree:reveal", payload),
     openExternalUrl: (payload: ClaudeExternalUrlRequest) =>
       invoke<void>("path:openExternal", payload),
     nextUnreadSession: () => invoke<string | null>("session:nextUnread"),

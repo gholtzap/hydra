@@ -1564,6 +1564,20 @@ textarea {
   font-family: var(--font-mono);
 }
 
+.ws-toolbar-worktree-state,
+.ws-toolbar-worktree-copy {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.ws-toolbar-worktree-state {
+  font-weight: 600;
+}
+
 .ws-toolbar-actions {
   display: flex;
   align-items: center;
@@ -2077,6 +2091,18 @@ textarea {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  flex-wrap: wrap;
+}
+
+.pane-meta-copy {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.pane-title-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -2642,6 +2668,23 @@ textarea {
 
 .status-done,
 .status-idle {
+  background: var(--status-muted-bg);
+  color: var(--status-muted-fg);
+}
+
+.parallel-worktree-badge.parallel-worktree-overlap_warning,
+.parallel-worktree-badge.parallel-worktree-landing_failed {
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
+}
+
+.parallel-worktree-badge.parallel-worktree-shared_checkout,
+.parallel-worktree-badge.parallel-worktree-awaiting_agent,
+.parallel-worktree-badge.parallel-worktree-active,
+.parallel-worktree-badge.parallel-worktree-ready_to_finish,
+.parallel-worktree-badge.parallel-worktree-landing_in_progress,
+.parallel-worktree-badge.parallel-worktree-landed,
+.parallel-worktree-badge.parallel-worktree-cleanup_pending {
   background: var(--status-muted-bg);
   color: var(--status-muted-fg);
 }
@@ -4483,6 +4526,17 @@ textarea {
   max-width: 480px;
 }
 
+.settings-inline-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-inline-field input,
+.settings-inline-field select {
+  max-width: 360px;
+}
+
 .settings-field-remove {
   align-self: flex-start;
 }
@@ -4556,6 +4610,26 @@ textarea {
   align-items: center;
   gap: 10px;
   min-height: 40px;
+}
+
+.settings-worktree-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.settings-worktree-row:first-child {
+  border-top: 0;
+}
+
+.settings-worktree-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
 .inline-toggle input[type="checkbox"],

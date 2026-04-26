@@ -117,6 +117,72 @@ export type SessionOrganizationPatch = {
   repoID?: string;
 };
 
+export type ParallelWorktreeDefaults = {
+  enabled: boolean;
+  baseBranch: string;
+  landingBranch: string;
+};
+
+export type RepoParallelWorktreeSettings = {
+  mode: "global" | "custom";
+  enabled: boolean;
+  baseBranch: string;
+  landingBranch: string;
+};
+
+export type RepoParallelWorktreeSettingsPatch = {
+  repoId: string;
+  mode?: "global" | "custom";
+  enabled?: boolean;
+  baseBranch?: string;
+  landingBranch?: string;
+};
+
+export type ParallelWorktreeSessionMode = "disabled" | "shared" | "isolated";
+
+export type ParallelWorktreeLifecycleState =
+  | "inactive"
+  | "shared_checkout"
+  | "awaiting_agent"
+  | "active"
+  | "ready_to_finish"
+  | "landing_in_progress"
+  | "landing_failed"
+  | "landed";
+
+export type ParallelWorktreeDisplayState =
+  | ParallelWorktreeLifecycleState
+  | "overlap_warning"
+  | "cleanup_pending";
+
+export type SessionParallelWorktreeMetadata = {
+  mode: ParallelWorktreeSessionMode;
+  lifecycleState: ParallelWorktreeLifecycleState;
+  baseBranch: string | null;
+  landingBranch: string | null;
+  worktreePath: string | null;
+  branch: string | null;
+  changedFiles: string[];
+  overlapSessionIds: string[];
+  promptInjectedAt: string | null;
+  lastEventAt: string | null;
+  lastError: string | null;
+};
+
+export type RepoParallelWorktreeLedgerEntry = {
+  id: string;
+  sessionId: string;
+  sessionTitle: string;
+  path: string;
+  branch: string | null;
+  state: ParallelWorktreeDisplayState;
+  baseBranch: string | null;
+  landingBranch: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastError: string | null;
+};
+
 export type WorkspaceRecord = {
   id: string;
   name: string;
@@ -131,6 +197,8 @@ export type RepoRecord = {
   path: string;
   wikiEnabled: boolean;
   appLaunchConfig: RepoAppLaunchConfig | null;
+  parallelWorktreeSettings: RepoParallelWorktreeSettings;
+  parallelWorktreeLedger: RepoParallelWorktreeLedgerEntry[];
   discoveredAt: string;
   updatedAt?: string;
 };
@@ -168,6 +236,7 @@ export type SessionRecord = {
   tagColor: SessionTagColor | null;
   sessionIconPath: string | null;
   sessionIconUpdatedAt: string | null;
+  parallelWorktree: SessionParallelWorktreeMetadata;
   transcript: string;
   rawTranscript: string;
 };
@@ -189,6 +258,7 @@ export type AppPreferences = {
   themeAppearance: ThemeAppearance;
   themeActiveId: string;
   themeCustomThemes: ThemeDefinition[];
+  parallelWorktreeDefaults: ParallelWorktreeDefaults;
 };
 
 export type AppPreferencesPatch = {
@@ -204,6 +274,7 @@ export type AppPreferencesPatch = {
   themeAppearance?: ThemeAppearance;
   themeActiveId?: string;
   themeCustomThemes?: ThemeDefinition[];
+  parallelWorktreeDefaults?: Partial<ParallelWorktreeDefaults>;
 };
 
 export type StoredAppState = {
@@ -278,6 +349,11 @@ export type SessionOutputPayload = {
 
 export type SessionRestartRequest = {
   sessionId: string;
+};
+
+export type WorktreeRevealRequest = {
+  repoId: string;
+  worktreePath: string;
 };
 
 export type AppCommandPayload = {

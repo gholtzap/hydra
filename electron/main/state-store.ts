@@ -2,9 +2,13 @@ import type {
   AgentDefinition,
   AgentId,
   AppPreferences,
+  ParallelWorktreeDefaults,
   RepoAppLaunchConfig,
+  RepoParallelWorktreeLedgerEntry,
+  RepoParallelWorktreeSettings,
   RepoRecord,
   SessionLaunchProfile,
+  SessionParallelWorktreeMetadata,
   SessionRecord,
   SessionTagColor,
   StoredAppState
@@ -61,7 +65,12 @@ const DEFAULT_PREFERENCES: AppPreferences = {
   keybindings: {},
   themeAppearance: "system",
   themeActiveId: "workspace-default",
-  themeCustomThemes: []
+  themeCustomThemes: [],
+  parallelWorktreeDefaults: {
+    enabled: false,
+    baseBranch: "main",
+    landingBranch: "main"
+  }
 };
 async function loadState(): Promise<StoredAppState> {
   const statePath = getStatePath();
@@ -88,7 +97,11 @@ function emptyState(): StoredAppState {
     workspaces: [],
     repos: [],
     sessions: [],
-    preferences: { ...DEFAULT_PREFERENCES }
+    preferences: {
+      ...DEFAULT_PREFERENCES,
+      agentCommandOverrides: { ...DEFAULT_PREFERENCES.agentCommandOverrides },
+      parallelWorktreeDefaults: { ...DEFAULT_PREFERENCES.parallelWorktreeDefaults }
+    }
   };
 }
 
@@ -100,7 +113,7 @@ function migrateSnapshot(snapshot: unknown): StoredAppState {
   });
 
   const sessions = Array.isArray(safeSnapshot.sessions)
-    ? safeSnapshot.sessions.map((session) => ({
+      ? safeSnapshot.sessions.map((session) => ({
         initialPrompt: "",
         launchProfile: "agent",
         launchesClaudeOnStart: true,
@@ -116,6 +129,7 @@ function migrateSnapshot(snapshot: unknown): StoredAppState {
         tagColor: null,
         sessionIconPath: null,
         sessionIconUpdatedAt: null,
+        parallelWorktree: emptySessionParallelWorktree(),
         ...(isPlainObject(session) ? session : {})
       })) as SessionRecord[]
     : [];
@@ -186,6 +200,7 @@ function normalizePreferences(preferences: Record<string, unknown>): AppPreferen
   const themeCustomThemes = Array.isArray(preferences.themeCustomThemes)
     ? preferences.themeCustomThemes as AppPreferences["themeCustomThemes"]
     : DEFAULT_PREFERENCES.themeCustomThemes;
+  const parallelWorktreeDefaults = normalizeParallelWorktreeDefaults(preferences.parallelWorktreeDefaults);
 
   return {
     defaultAgentId: defaultAgentId || DEFAULT_AGENT_ID,
@@ -199,7 +214,8 @@ function normalizePreferences(preferences: Record<string, unknown>): AppPreferen
     keybindings,
     themeAppearance,
     themeActiveId,
-    themeCustomThemes
+    themeCustomThemes,
+    parallelWorktreeDefaults
   };
 }
 
@@ -226,6 +242,7 @@ function normalizeRestoredSessions(sessions: SessionRecord[]): void {
       typeof session.sessionIconUpdatedAt === "string" && session.sessionIconUpdatedAt
         ? session.sessionIconUpdatedAt
         : null;
+    session.parallelWorktree = normalizeSessionParallelWorktreeMetadata(session.parallelWorktree);
 
     if (session.runtimeState === "live") {
       session.runtimeState = "stopped";
@@ -261,10 +278,156 @@ function normalizeRepos(repos: unknown): RepoRecord[] {
     const safeRepo = isPlainObject(repo) ? repo : {};
     return {
       wikiEnabled: false,
+      parallelWorktreeSettings: normalizeRepoParallelWorktreeSettings(safeRepo.parallelWorktreeSettings),
+      parallelWorktreeLedger: normalizeRepoParallelWorktreeLedger(safeRepo.parallelWorktreeLedger),
       ...safeRepo,
       appLaunchConfig: normalizeRepoAppLaunchConfig(safeRepo.appLaunchConfig)
     };
   }) as RepoRecord[];
+}
+
+function emptySessionParallelWorktree(): SessionParallelWorktreeMetadata {
+  return {
+    mode: "disabled",
+    lifecycleState: "inactive",
+    baseBranch: null,
+    landingBranch: null,
+    worktreePath: null,
+    branch: null,
+    changedFiles: [],
+    overlapSessionIds: [],
+    promptInjectedAt: null,
+    lastEventAt: null,
+    lastError: null
+  };
+}
+
+function normalizeSessionParallelWorktreeMetadata(value: unknown): SessionParallelWorktreeMetadata {
+  if (!isPlainObject(value)) {
+    return emptySessionParallelWorktree();
+  }
+
+  const mode =
+    value.mode === "shared" || value.mode === "isolated" || value.mode === "disabled"
+      ? value.mode
+      : "disabled";
+  const lifecycleState =
+    value.lifecycleState === "shared_checkout" ||
+    value.lifecycleState === "awaiting_agent" ||
+    value.lifecycleState === "active" ||
+    value.lifecycleState === "ready_to_finish" ||
+    value.lifecycleState === "landing_in_progress" ||
+    value.lifecycleState === "landing_failed" ||
+    value.lifecycleState === "landed" ||
+    value.lifecycleState === "inactive"
+      ? value.lifecycleState
+      : mode === "shared"
+        ? "shared_checkout"
+        : mode === "isolated"
+          ? "awaiting_agent"
+          : "inactive";
+
+  return {
+    mode,
+    lifecycleState,
+    baseBranch: normalizeBranchName(value.baseBranch),
+    landingBranch: normalizeBranchName(value.landingBranch),
+    worktreePath: typeof value.worktreePath === "string" && value.worktreePath ? value.worktreePath : null,
+    branch: normalizeBranchName(value.branch),
+    changedFiles: normalizeStringList(value.changedFiles),
+    overlapSessionIds: normalizeStringList(value.overlapSessionIds),
+    promptInjectedAt:
+      typeof value.promptInjectedAt === "string" && value.promptInjectedAt ? value.promptInjectedAt : null,
+    lastEventAt: typeof value.lastEventAt === "string" && value.lastEventAt ? value.lastEventAt : null,
+    lastError: typeof value.lastError === "string" && value.lastError ? value.lastError : null
+  };
+}
+
+function normalizeParallelWorktreeDefaults(value: unknown): ParallelWorktreeDefaults {
+  const safeValue = isPlainObject(value) ? value : {};
+  return {
+    enabled: !!safeValue.enabled,
+    baseBranch: normalizeBranchName(safeValue.baseBranch) || DEFAULT_PREFERENCES.parallelWorktreeDefaults.baseBranch,
+    landingBranch:
+      normalizeBranchName(safeValue.landingBranch) || DEFAULT_PREFERENCES.parallelWorktreeDefaults.landingBranch
+  };
+}
+
+function normalizeRepoParallelWorktreeSettings(value: unknown): RepoParallelWorktreeSettings {
+  const safeValue = isPlainObject(value) ? value : {};
+  return {
+    mode: safeValue.mode === "custom" ? "custom" : "global",
+    enabled: typeof safeValue.enabled === "boolean" ? safeValue.enabled : false,
+    baseBranch: normalizeBranchName(safeValue.baseBranch) || DEFAULT_PREFERENCES.parallelWorktreeDefaults.baseBranch,
+    landingBranch:
+      normalizeBranchName(safeValue.landingBranch) || DEFAULT_PREFERENCES.parallelWorktreeDefaults.landingBranch
+  };
+}
+
+function normalizeRepoParallelWorktreeLedger(value: unknown): RepoParallelWorktreeLedgerEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => {
+      const safeEntry = isPlainObject(entry) ? entry : {};
+      const pathValue = typeof safeEntry.path === "string" ? safeEntry.path.trim() : "";
+      if (!pathValue) {
+        return null;
+      }
+
+      const state =
+        safeEntry.state === "cleanup_pending" ||
+        safeEntry.state === "overlap_warning" ||
+        safeEntry.state === "shared_checkout" ||
+        safeEntry.state === "awaiting_agent" ||
+        safeEntry.state === "active" ||
+        safeEntry.state === "ready_to_finish" ||
+        safeEntry.state === "landing_in_progress" ||
+        safeEntry.state === "landing_failed" ||
+        safeEntry.state === "landed" ||
+        safeEntry.state === "inactive"
+          ? safeEntry.state
+          : "cleanup_pending";
+
+      return {
+        id:
+          typeof safeEntry.id === "string" && safeEntry.id
+            ? safeEntry.id
+            : `${typeof safeEntry.sessionId === "string" ? safeEntry.sessionId : "unknown"}:${pathValue}`,
+        sessionId: typeof safeEntry.sessionId === "string" ? safeEntry.sessionId : "",
+        sessionTitle: typeof safeEntry.sessionTitle === "string" ? safeEntry.sessionTitle : "Unknown Session",
+        path: pathValue,
+        branch: normalizeBranchName(safeEntry.branch),
+        state,
+        baseBranch: normalizeBranchName(safeEntry.baseBranch),
+        landingBranch: normalizeBranchName(safeEntry.landingBranch),
+        createdAt: typeof safeEntry.createdAt === "string" && safeEntry.createdAt ? safeEntry.createdAt : new Date().toISOString(),
+        updatedAt: typeof safeEntry.updatedAt === "string" && safeEntry.updatedAt ? safeEntry.updatedAt : new Date().toISOString(),
+        lastError: typeof safeEntry.lastError === "string" && safeEntry.lastError ? safeEntry.lastError : null
+      } satisfies RepoParallelWorktreeLedgerEntry;
+    })
+    .filter((entry): entry is RepoParallelWorktreeLedgerEntry => !!entry);
+}
+
+function normalizeBranchName(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => !!entry);
 }
 
 function normalizeRepoAppLaunchConfig(value: unknown): RepoAppLaunchConfig | null {
@@ -323,7 +486,10 @@ module.exports = {
   emptyState,
   loadState,
   normalizeAgentId,
+  normalizeParallelWorktreeDefaults,
   normalizeRepoAppLaunchConfig,
+  normalizeRepoParallelWorktreeSettings,
+  normalizeSessionParallelWorktreeMetadata,
   normalizePreferences,
   saveState
 };

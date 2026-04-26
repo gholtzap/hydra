@@ -1328,6 +1328,11 @@ api.onCommand(async ({ command, sessionId, repoId }) => {
     case "open-tokscale":
       await openTokscaleOverlay(repoId || currentRepoId());
       break;
+    case "end-session":
+      if (ui.selection.type === "session" && ui.selection.id) {
+        await closeSessionById(ui.selection.id);
+      }
+      break;
     case "build-and-run-app":
       await runConfiguredApp(repoId || currentRepoId());
       break;

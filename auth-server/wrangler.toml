@@ -12,3 +12,17 @@ database_name = "hydra-auth"
 database_id = "e1b0dcac-dfb1-4121-a95a-319131039f54"
 migrations_dir = "migrations"
 
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1

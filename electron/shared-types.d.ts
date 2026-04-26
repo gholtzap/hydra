@@ -54,7 +54,8 @@ export type KeybindingAction =
   | "navigate-section-left"
   | "navigate-section-right"
   | "navigate-section-up"
-  | "navigate-section-down";
+  | "navigate-section-down"
+  | "end-session";
 
 export type KeybindingMap = Record<KeybindingAction, string>;
 export type KeybindingOverrides = Partial<KeybindingMap>;

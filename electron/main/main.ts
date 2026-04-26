@@ -255,6 +255,7 @@ const {
   disableWiki,
   enableWiki,
   getWikiContext,
+  invalidateWikiExistsSyncCache,
   readWikiFile,
   wikiDirectoryPath,
   wikiExists,
@@ -263,6 +264,7 @@ const {
   disableWiki: (rootPath: string) => Promise<unknown>;
   enableWiki: (rootPath: string) => Promise<unknown>;
   getWikiContext: (rootPath: string, enabled: boolean) => Promise<WikiContext>;
+  invalidateWikiExistsSyncCache: (rootPath?: string) => void;
   readWikiFile: (rootPath: string, relativePath: string) => Promise<WikiFileContents>;
   wikiDirectoryPath: (rootPath: string) => string;
   wikiExists: (rootPath: string) => Promise<boolean>;
@@ -3079,6 +3081,7 @@ class AppController {
       await disableWiki(repo.path);
     }
 
+    invalidateWikiExistsSyncCache(repo.path);
     repo.wikiEnabled = enabled;
     repo.updatedAt = now();
     this.scheduleSave();

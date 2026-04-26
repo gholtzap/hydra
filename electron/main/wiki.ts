@@ -9,6 +9,16 @@ const WIKI_STAGING_DIRECTORY = "staging";
 const WIKI_INSTRUCTION_BLOCK_START = "<!-- claude-workspace:wiki:start -->";
 const WIKI_INSTRUCTION_BLOCK_END = "<!-- claude-workspace:wiki:end -->";
 const PROJECT_INSTRUCTION_FILE_LAYOUTS = ["AGENTS.md", "CLAUDE.md"];
+const WIKI_EXISTS_SYNC_CACHE_TTL_MS = 5_000;
+const WIKI_EXISTS_SYNC_CACHE_MAX_ENTRIES = 256;
+
+type WikiExistsSyncCacheEntry = {
+  exists: boolean;
+  expiresAt: number;
+  lastAccessedAt: number;
+};
+
+const wikiExistsSyncCache = new Map<string, WikiExistsSyncCacheEntry>();
 
 function wikiDirectoryPath(rootPath: string): string {
   return path.join(rootPath, WIKI_DIRECTORY_NAME);
@@ -23,11 +33,72 @@ async function wikiExists(rootPath: string): Promise<boolean> {
 }
 
 function wikiExistsSync(rootPath: string): boolean {
-  try {
-    return fs.statSync(wikiDirectoryPath(rootPath)).isDirectory();
-  } catch {
-    return false;
+  const normalizedRootPath = path.resolve(rootPath);
+  const currentTime = Date.now();
+  pruneWikiExistsSyncCache(currentTime);
+
+  const cachedEntry = wikiExistsSyncCache.get(normalizedRootPath);
+  if (cachedEntry && cachedEntry.expiresAt > currentTime) {
+    cachedEntry.lastAccessedAt = currentTime;
+    return cachedEntry.exists;
   }
+
+  wikiExistsSyncCache.delete(normalizedRootPath);
+
+  try {
+    return setCachedWikiExistsSyncResult(
+      normalizedRootPath,
+      fs.statSync(wikiDirectoryPath(normalizedRootPath)).isDirectory(),
+      currentTime
+    );
+  } catch {
+    return setCachedWikiExistsSyncResult(normalizedRootPath, false, currentTime);
+  }
+}
+
+function setCachedWikiExistsSyncResult(rootPath: string, exists: boolean, currentTime = Date.now()): boolean {
+  wikiExistsSyncCache.set(rootPath, {
+    exists,
+    expiresAt: currentTime + WIKI_EXISTS_SYNC_CACHE_TTL_MS,
+    lastAccessedAt: currentTime
+  });
+  pruneWikiExistsSyncCache(currentTime);
+  return exists;
+}
+
+function pruneWikiExistsSyncCache(currentTime = Date.now()): void {
+  for (const [rootPath, entry] of wikiExistsSyncCache.entries()) {
+    if (entry.expiresAt <= currentTime) {
+      wikiExistsSyncCache.delete(rootPath);
+    }
+  }
+
+  while (wikiExistsSyncCache.size > WIKI_EXISTS_SYNC_CACHE_MAX_ENTRIES) {
+    let oldestRootPath = "";
+    let oldestAccessedAt = Number.POSITIVE_INFINITY;
+
+    for (const [rootPath, entry] of wikiExistsSyncCache.entries()) {
+      if (entry.lastAccessedAt < oldestAccessedAt) {
+        oldestRootPath = rootPath;
+        oldestAccessedAt = entry.lastAccessedAt;
+      }
+    }
+
+    if (!oldestRootPath) {
+      break;
+    }
+
+    wikiExistsSyncCache.delete(oldestRootPath);
+  }
+}
+
+function invalidateWikiExistsSyncCache(rootPath?: string): void {
+  if (typeof rootPath === "string" && rootPath.trim()) {
+    wikiExistsSyncCache.delete(path.resolve(rootPath));
+    return;
+  }
+
+  wikiExistsSyncCache.clear();
 }
 
 async function detectWikiEnabled(rootPath: string): Promise<boolean> {
@@ -282,5 +353,6 @@ module.exports = {
   readWikiFile,
   wikiDirectoryPath,
   wikiExists,
+  invalidateWikiExistsSyncCache,
   wikiExistsSync
 };

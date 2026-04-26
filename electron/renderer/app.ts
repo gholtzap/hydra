@@ -9787,22 +9787,175 @@ function formatJsonValue(value) {
 }
 
 function mergeSessionSummary(summary: SessionSummary): SessionSummary | null {
-  const index = state.sessions.findIndex((session) => session.id === summary.id);
-  if (index < 0) {
+  const existingSession = sessionById(summary.id);
+  if (!existingSession) {
     return null;
   }
 
-  state.sessions[index] = {
-    ...state.sessions[index],
-    ...summary
-  };
-  rebuildSessionIndex();
+  const previousSession: SessionSummary = { ...existingSession };
+  Object.assign(existingSession, summary);
+  updateIndexedSession(previousSession, existingSession);
 
-  return state.sessions[index];
+  return existingSession;
 }
 
 function appendSessionOutput(sessionId: string, chunk: string, summary: SessionSummary): SessionSummary | null {
   return mergeSessionSummary(summary);
+}
+
+function updateIndexedSession(previousSession: SessionSummary, nextSession: SessionSummary): void {
+  sessionIndex.byId.set(nextSession.id, nextSession);
+  repositionSessionInList(sessionIndex.allSorted, nextSession, compareSessions);
+  updateRepoSessionBuckets(previousSession, nextSession);
+  updateInboxSessions(nextSession);
+  updateRepoSessionStats(previousSession, nextSession);
+  updateMostRecentSession(previousSession, nextSession);
+}
+
+function repositionSessionInList(
+  list: SessionSummary[],
+  session: SessionSummary,
+  compare: (left: SessionSummary, right: SessionSummary) => number
+): void {
+  removeSessionFromList(list, session.id);
+  insertSessionIntoList(list, session, compare);
+}
+
+function removeSessionFromList(list: SessionSummary[], sessionId: string): boolean {
+  const index = list.findIndex((session) => session.id === sessionId);
+  if (index < 0) {
+    return false;
+  }
+
+  list.splice(index, 1);
+  return true;
+}
+
+function insertSessionIntoList(
+  list: SessionSummary[],
+  session: SessionSummary,
+  compare: (left: SessionSummary, right: SessionSummary) => number
+): void {
+  let index = 0;
+  while (index < list.length && compare(list[index], session) <= 0) {
+    index += 1;
+  }
+  list.splice(index, 0, session);
+}
+
+function updateRepoSessionBuckets(previousSession: SessionSummary, nextSession: SessionSummary): void {
+  if (previousSession.repoID === nextSession.repoID) {
+    const repoSessions = sessionIndex.byRepoId.get(nextSession.repoID);
+    if (repoSessions) {
+      repositionSessionInList(repoSessions, nextSession, compareSessions);
+    } else {
+      sessionIndex.byRepoId.set(nextSession.repoID, [nextSession]);
+    }
+    return;
+  }
+
+  const previousRepoSessions = sessionIndex.byRepoId.get(previousSession.repoID);
+  if (previousRepoSessions) {
+    removeSessionFromList(previousRepoSessions, nextSession.id);
+    if (!previousRepoSessions.length) {
+      sessionIndex.byRepoId.delete(previousSession.repoID);
+    }
+  }
+
+  const nextRepoSessions = sessionIndex.byRepoId.get(nextSession.repoID);
+  if (nextRepoSessions) {
+    insertSessionIntoList(nextRepoSessions, nextSession, compareSessions);
+    return;
+  }
+
+  sessionIndex.byRepoId.set(nextSession.repoID, [nextSession]);
+}
+
+function updateInboxSessions(session: SessionSummary): void {
+  removeSessionFromList(sessionIndex.inbox, session.id);
+  if (sessionNeedsInbox(session)) {
+    insertSessionIntoList(sessionIndex.inbox, session, compareInboxSessions);
+  }
+}
+
+function updateRepoSessionStats(previousSession: SessionSummary, nextSession: SessionSummary): void {
+  const previousLiveCount = sessionIsLive(previousSession) ? 1 : 0;
+  const nextLiveCount = sessionIsLive(nextSession) ? 1 : 0;
+  const previousAttentionCount = sessionNeedsInbox(previousSession) ? 1 : 0;
+  const nextAttentionCount = sessionNeedsInbox(nextSession) ? 1 : 0;
+
+  if (previousSession.repoID === nextSession.repoID) {
+    adjustRepoSessionStats(
+      nextSession.repoID,
+      nextLiveCount - previousLiveCount,
+      nextAttentionCount - previousAttentionCount
+    );
+    return;
+  }
+
+  adjustRepoSessionStats(previousSession.repoID, -previousLiveCount, -previousAttentionCount);
+  adjustRepoSessionStats(nextSession.repoID, nextLiveCount, nextAttentionCount);
+}
+
+function adjustRepoSessionStats(repoId: string, liveDelta: number, attentionDelta: number): void {
+  const currentStats = sessionIndex.repoStatsById.get(repoId);
+  const liveCount = Math.max((currentStats?.liveCount || 0) + liveDelta, 0);
+  const attentionCount = Math.max((currentStats?.attentionCount || 0) + attentionDelta, 0);
+
+  if (!liveCount && !attentionCount) {
+    sessionIndex.repoStatsById.delete(repoId);
+    return;
+  }
+
+  if (currentStats) {
+    currentStats.liveCount = liveCount;
+    currentStats.attentionCount = attentionCount;
+    return;
+  }
+
+  sessionIndex.repoStatsById.set(repoId, { liveCount, attentionCount });
+}
+
+function sessionIsLive(session: SessionSummary): boolean {
+  return session.runtimeState === "live";
+}
+
+function sessionNeedsInbox(session: SessionSummary): boolean {
+  return !!session.blocker || session.unreadCount > 0;
+}
+
+function updateMostRecentSession(previousSession: SessionSummary, nextSession: SessionSummary): void {
+  const currentMostRecent = sessionIndex.mostRecent;
+  if (!currentMostRecent) {
+    sessionIndex.mostRecent = nextSession;
+    return;
+  }
+
+  if (currentMostRecent.id === previousSession.id) {
+    if (compareSessionsByUpdatedAt(nextSession, previousSession) <= 0) {
+      sessionIndex.mostRecent = nextSession;
+      return;
+    }
+
+    recomputeMostRecentSession();
+    return;
+  }
+
+  if (compareSessionsByUpdatedAt(nextSession, currentMostRecent) < 0) {
+    sessionIndex.mostRecent = nextSession;
+  }
+}
+
+function recomputeMostRecentSession(): void {
+  let mostRecent: SessionSummary | null = null;
+
+  for (const session of state.sessions) {
+    if (!mostRecent || compareSessionsByUpdatedAt(session, mostRecent) < 0) {
+      mostRecent = session;
+    }
+  }
+
+  sessionIndex.mostRecent = mostRecent;
 }
 
 function renderSessionDragAttributes(sessionId, source = "list") {

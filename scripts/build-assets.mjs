@@ -40,7 +40,7 @@ try {
   cp("electron/renderer/vendor/xterm.js", "dist-electron/renderer/vendor/xterm.js");
   cp("electron/renderer/vendor/addon-fit.js", "dist-electron/renderer/vendor/addon-fit.js");
 
-  // Optional local auth server override used by packaged/dev builds.
+  // Optional auth server override used by packaged/dev builds.
   if (existsSync(join(root, "electron/renderer/auth-config.json"))) {
     cp("electron/renderer/auth-config.json", "dist-electron/renderer/auth-config.json");
   }

@@ -311,6 +311,7 @@ const FILE_TREE_IGNORED = new Set([
   ".parcel-cache", "target", ".gradle", ".idea", ".vscode"
 ]);
 const SESSION_ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
+const DEFAULT_AUTH_SERVER_URL = "https://hydra-auth.omavashia1233.workers.dev";
 const TRUSTED_RENDERER_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "renderer", "index.html"));
 const TRUSTED_AUTH_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "renderer", "auth.html"));
 const AGENT_LABELS: Record<AgentId, string> = Object.fromEntries(
@@ -939,22 +940,33 @@ class AppController {
 
   private resolveAuthServerUrl(): string {
     // 1. Environment variable (set at build time for production)
-    if (process.env.AUTH_SERVER_URL) {
-      return process.env.AUTH_SERVER_URL;
+    const envUrl = process.env.AUTH_SERVER_URL?.trim();
+    if (envUrl) {
+      console.log(`[auth] using AUTH_SERVER_URL: ${envUrl}`);
+      return envUrl;
     }
 
     // 2. Read from bundled auth-config.json
+    const configPath = path.join(__dirname, "..", "renderer", "auth-config.json");
     try {
-      const configPath = path.join(__dirname, "..", "renderer", "auth-config.json");
       const raw = fs.readFileSync(configPath, "utf-8");
       const config = JSON.parse(raw);
-      if (config?.authServerUrl) return config.authServerUrl;
-    } catch {
-      // ignore
+      const configUrl = typeof config?.authServerUrl === "string" ? config.authServerUrl.trim() : "";
+      if (configUrl) {
+        console.log(`[auth] using auth-config.json: ${configUrl}`);
+        return configUrl;
+      }
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        // Missing config is fine; fall through to the remote default.
+      } else {
+        console.warn(`[auth] unable to read ${configPath}:`, error);
+      }
     }
 
-    // 3. Default to localhost for development
-    return "http://localhost:8787";
+    // 3. Default to the deployed auth Worker. Local dev opts into localhost via scripts/dev.mjs.
+    console.log(`[auth] using default auth server: ${DEFAULT_AUTH_SERVER_URL}`);
+    return DEFAULT_AUTH_SERVER_URL;
   }
 
   createWindow(): void {

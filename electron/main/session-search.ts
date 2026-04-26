@@ -27,6 +27,12 @@ type SearchToolPaths = {
   missingTools: string[];
 };
 
+type RipgrepMatchLine = {
+  filePath: string;
+  lineNumber: number;
+  lineText: string;
+};
+
 type SessionSearchFileRecord = Omit<SessionSearchResult, "lineNumber" | "preview">;
 type SessionSearchFileCacheEntry = {
   cachedAt: number;
@@ -35,6 +41,8 @@ type SessionSearchFileCacheEntry = {
 };
 
 const sessionSearchFileCache = new Map<string, SessionSearchFileCacheEntry>();
+const CODEX_SESSION_META_PREFIX =
+  /^\{"timestamp":"([^"]+)","type":"session_meta","payload":\{"id":"([^"]+)","timestamp":"[^"]+","cwd":/;
 
 async function searchProjectSessions(repoPath: string): Promise<SessionSearchResponse> {
   const trimmedRepoPath = typeof repoPath === "string" ? repoPath.trim() : "";
@@ -279,40 +287,58 @@ async function collectCodexFiles(
   }
 
   const codexRoot = path.join(os.homedir(), ".codex", "sessions");
-  const discoveredPaths = await runListCommand(
+  const metadataPrefixLines = await runListCommand(
     rgPath,
-    ["-l", "--glob", "*.jsonl", "--fixed-strings", `"cwd":"${repoPath}"`, codexRoot]
-  );
-  const records = await Promise.all(
-    discoveredPaths.map((filePath) => buildCodexFileRecord(filePath, repoPath))
+    [
+      "--color=never",
+      "--with-filename",
+      "--line-number",
+      "--max-count",
+      "1",
+      "--only-matching",
+      "--glob",
+      "*.jsonl",
+      codexSessionMetadataPrefixPattern(repoPath),
+      codexRoot
+    ]
   );
 
-  return records.filter((record): record is SessionSearchFileRecord => !!record);
+  return metadataPrefixLines
+    .map((line) => buildCodexFileRecord(line))
+    .filter((record): record is SessionSearchFileRecord => !!record);
 }
 
-async function buildCodexFileRecord(
-  filePath: string,
-  repoPath: string
-): Promise<SessionSearchFileRecord | null> {
-  const snippet = await readCodexMetadataSnippet(filePath);
-  if (!snippet) {
+function codexSessionMetadataPrefixPattern(repoPath: string): string {
+  const serializedRepoPath = JSON.stringify(repoPath);
+  const escapedRepoPath = escapeRipgrepPattern(serializedRepoPath);
+  return `\\{"timestamp":"[^"]+","type":"session_meta","payload":\\{"id":"[^"]+","timestamp":"[^"]+","cwd":${escapedRepoPath}`;
+}
+
+function escapeRipgrepPattern(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+function buildCodexFileRecord(line: string): SessionSearchFileRecord | null {
+  const matchLine = parseRipgrepMatchLine(line);
+  if (!matchLine) {
     return null;
   }
 
-  const cwdMatch = snippet.match(/"cwd":"([^"]+)"/);
-  if (!cwdMatch || path.resolve(cwdMatch[1]) !== path.resolve(repoPath)) {
+  const metadataMatch = matchLine.lineText.match(CODEX_SESSION_META_PREFIX);
+  if (!metadataMatch) {
     return null;
   }
 
-  const sessionIdMatch = snippet.match(/"id":"([^"]+)"/);
-  const timestampMatch = snippet.match(/"timestamp":"([^"]+)"/);
-  const displayStamp = timestampMatch ? timestampMatch[1].slice(0, 16).replace("T", " ") : "";
+  const [, timestamp, sessionId] = metadataMatch;
+  const displayStamp = timestamp ? timestamp.slice(0, 16).replace("T", " ") : "";
 
   return {
     source: "codex",
-    filePath,
-    sessionId: sessionIdMatch ? sessionIdMatch[1] : null,
-    title: displayStamp ? `Codex ${displayStamp}` : `Codex ${path.basename(filePath, ".jsonl")}`
+    filePath: matchLine.filePath,
+    sessionId: sessionId || null,
+    title: displayStamp
+      ? `Codex ${displayStamp}`
+      : `Codex ${path.basename(matchLine.filePath, ".jsonl")}`
   };
 }
 
@@ -349,7 +375,27 @@ function parseRgLine(
   line: string,
   fileByPath: Map<string, SessionSearchFileRecord>
 ): SessionSearchResult | null {
-  const firstColon = line.indexOf(":");
+  const matchLine = parseRipgrepMatchLine(line);
+  if (!matchLine) {
+    return null;
+  }
+
+  const file = fileByPath.get(matchLine.filePath);
+
+  if (!file) {
+    return null;
+  }
+
+  return {
+    ...file,
+    lineNumber: matchLine.lineNumber,
+    preview: matchLine.lineText
+  };
+}
+
+function parseRipgrepMatchLine(line: string): RipgrepMatchLine | null {
+  const lineStart = line.length >= 3 && /^[A-Za-z]:[\\/]/.test(line) ? 2 : 0;
+  const firstColon = line.indexOf(":", lineStart);
   if (firstColon === -1) {
     return null;
   }
@@ -360,18 +406,15 @@ function parseRgLine(
   }
 
   const filePath = line.slice(0, firstColon);
-  const lineText = line.slice(secondColon + 1).trim();
   const lineNumber = Number(line.slice(firstColon + 1, secondColon));
-  const file = fileByPath.get(filePath);
-
-  if (!file || !Number.isFinite(lineNumber)) {
+  if (!filePath || !Number.isFinite(lineNumber)) {
     return null;
   }
 
   return {
-    ...file,
+    filePath,
     lineNumber,
-    preview: lineText
+    lineText: line.slice(secondColon + 1).trim()
   };
 }
 

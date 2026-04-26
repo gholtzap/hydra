@@ -4,9 +4,9 @@
     "module": "Node16",
     "moduleResolution": "Node16",
     "lib": ["ES2022", "DOM"],
-    "rootDir": "electron/main",
-    "outDir": "dist-electron/main",
+    "rootDir": "electron",
+    "outDir": "dist-electron",
     "types": ["node"]
   },
-  "include": ["electron/main/**/*.ts"]
+  "include": ["electron/main/**/*.ts", "electron/keybindings-shared.ts"]
 }

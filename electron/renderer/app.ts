@@ -1,5 +1,4 @@
 import type {
-  AcceleratorDisplayParts,
   AgentId,
   AppPreferences,
   AppUpdateCheckResult,
@@ -12,8 +11,6 @@ import type {
   JsonObject,
   JsonValue,
   KeybindingAction,
-  KeybindingEventSnapshot,
-  KeybindingLabels,
   KeybindingMap,
   RepoAppLaunchConfig,
   RepoSnapshot,
@@ -26,6 +23,13 @@ import type {
   WikiTreeNode as SharedWikiTreeNode,
   WorkspaceRecord
 } from "../shared-types";
+import {
+  acceleratorDisplayParts,
+  DEFAULT_KEYBINDINGS,
+  formatAccelerator,
+  KEYBINDING_LABELS,
+  matchesAccelerator as matchesKeybindingAccelerator
+} from "../keybindings-shared.js";
 
 const api = window.claudeWorkspace;
 let sessionSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -41,35 +45,14 @@ const MAX_VISIBLE_SESSION_PANES = 9;
 // Keybinding configuration
 // ---------------------------------------------------------------------------
 
-const DEFAULT_KEYBINDINGS: KeybindingMap = api.getDefaultKeybindings();
-const KEYBINDING_LABELS: KeybindingLabels = api.getKeybindingLabels();
-
 const ALL_KEYBINDING_ACTIONS: KeybindingAction[] = Object.keys(DEFAULT_KEYBINDINGS) as KeybindingAction[];
 
 function getKeybindings(): KeybindingMap {
   return { ...DEFAULT_KEYBINDINGS, ...(state.preferences.keybindings || {}) };
 }
 
-function toKeybindingEventSnapshot(event: KeyboardEvent): KeybindingEventSnapshot {
-  return {
-    key: event.key,
-    metaKey: event.metaKey,
-    ctrlKey: event.ctrlKey,
-    shiftKey: event.shiftKey,
-    altKey: event.altKey
-  };
-}
-
 function matchesAccelerator(event: KeyboardEvent, accelerator: string): boolean {
-  return api.matchesAccelerator(toKeybindingEventSnapshot(event), accelerator);
-}
-
-function acceleratorDisplayParts(accelerator: string): AcceleratorDisplayParts {
-  return api.getAcceleratorDisplayParts(accelerator);
-}
-
-function formatAccelerator(accelerator: string): string {
-  return api.formatAccelerator(accelerator);
+  return matchesKeybindingAccelerator(event, accelerator);
 }
 
 function renderAcceleratorMarkup(accelerator: string): string {

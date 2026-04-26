@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-build:
+    name: Desktop Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Build desktop app
+        run: npm run build
+
+  auth-server-typecheck:
+    name: Auth Server Typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: auth-server
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: auth-server/package-lock.json
+
+      - name: Install auth server dependencies
+        run: npm ci
+
+      - name: Typecheck auth server
+        run: npm exec -- tsc -p tsconfig.json --noEmit

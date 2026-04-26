@@ -26,6 +26,8 @@ import type {
   Point,
   ReadFileResult,
   RepoAppLaunchConfig,
+  RepoParallelWorktreeSettings,
+  RepoParallelWorktreeSettingsPatch,
   SessionOrganizationPatch,
   SessionOutputPayload,
   SessionRestartRequest,
@@ -35,6 +37,7 @@ import type {
   TrackedPortStatus,
   VoiceCallState,
   VoiceConfig,
+  WorktreeRevealRequest,
   WikiContext,
   WikiFileContents
 } from "./shared-types";
@@ -70,11 +73,15 @@ interface ClaudeWorkspaceApi {
     repoId: string;
     config: RepoAppLaunchConfig;
   }) => Promise<RepoAppLaunchConfig | null>;
+  updateRepoParallelWorktreeSettings: (
+    payload: RepoParallelWorktreeSettingsPatch
+  ) => Promise<RepoParallelWorktreeSettings | null>;
   buildAndRunApp: (repoId: string) => Promise<string | null>;
   readClipboardText: () => Promise<string>;
   writeClipboardText: (text: string) => Promise<void>;
   checkForUpdates: () => Promise<AppUpdateCheckResult>;
   revealPath: (payload: ClaudePathRevealRequest) => Promise<void>;
+  revealWorktree: (payload: WorktreeRevealRequest) => Promise<void>;
   openExternalUrl: (payload: ClaudeExternalUrlRequest) => Promise<void>;
   nextUnreadSession: () => Promise<string | null>;
   updatePreferences: (patch: AppPreferencesPatch) => Promise<void>;

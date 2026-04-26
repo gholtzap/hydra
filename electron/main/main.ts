@@ -1759,19 +1759,18 @@ class AppController {
     });
   }
 
-  sendSessionOutput(sessionId: string, data: string): void {
-    const session = this.sessionById(sessionId);
-    if (this.window && !this.window.isDestroyed() && session) {
+  sendSessionOutput(session: SessionRecord, data: string): void {
+    if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send("session:output", {
-        sessionId,
+        sessionId: session.id,
         data,
         session: summarizeSession(session)
       });
     }
     // Notify MCP subscribers about session output
     if (this.mcpServer) {
-      this.mcpServer.notifyResourceChanged(`hydra://sessions/${sessionId}`);
-      this.mcpServer.notifyResourceChanged(`hydra://sessions/${sessionId}/transcript`);
+      this.mcpServer.notifyResourceChanged(`hydra://sessions/${session.id}`);
+      this.mcpServer.notifyResourceChanged(`hydra://sessions/${session.id}/transcript`);
     }
   }
 
@@ -2730,7 +2729,7 @@ class AppController {
     }
 
     this.scheduleSave();
-    this.sendSessionOutput(sessionId, rawChunk);
+    this.sendSessionOutput(session, rawChunk);
   }
 
   handleHostExit(sessionId: string, exitCode: number): void {
@@ -2815,7 +2814,7 @@ class AppController {
       this.terminalBuffer(session.id, session.transcript).consume(banner)
     );
 
-    this.sendSessionOutput(session.id, banner);
+    this.sendSessionOutput(session, banner);
 
     this.ptyHost.createSession({
       sessionId: session.id,

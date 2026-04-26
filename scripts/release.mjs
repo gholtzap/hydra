@@ -139,6 +139,10 @@ function worktreeEntries() {
     }));
 }
 
+function formatWorktreeEntries(entries) {
+  return entries.map((entry) => `- ${entry.raw}`).join("\n");
+}
+
 function isRecoverablePreparedReleaseState(entries) {
   if (!entries.length) {
     return false;
@@ -211,12 +215,18 @@ function main() {
     console.log(`Will bump package version: ${shouldBumpPackageVersion ? "yes" : "no"}`);
     console.log(`Prepared release state: ${preparedReleaseState ? "yes" : "no"}`);
     console.log(`Worktree clean: ${worktreeClean ? "yes" : "no"}`);
+    if (!worktreeClean) {
+      console.log("Worktree changes:");
+      console.log(formatWorktreeEntries(entries));
+    }
     console.log(`Will push branch/tag: ${options.noPush ? "no" : "yes"}`);
     return;
   }
 
   if (!worktreeClean && !preparedReleaseState) {
-    throw new Error("Worktree is not clean. Commit or stash changes before running the release script.");
+    throw new Error(
+      `Worktree is not clean. Commit or stash changes before running the release script.\n${formatWorktreeEntries(entries)}`
+    );
   }
 
   if (shouldBumpPackageVersion) {

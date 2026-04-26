@@ -5,7 +5,6 @@
 /.xterm-tools
 /node_modules
 /electron/.tmp
-/electron/renderer/auth-config.json
 /dist-electron
 /release
 /build/icon.iconset/

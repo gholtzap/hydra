@@ -6171,12 +6171,24 @@ async function handleClick(event) {
     return;
   }
 
+  // Close toolbar menu on any outside click
+  const openMenu = document.querySelector(".ws-toolbar-menu[open]") as HTMLDetailsElement | null;
+  if (openMenu && !openMenu.contains(event.target as Node)) {
+    openMenu.open = false;
+  }
+
   const target = event.target.closest("[data-action]");
   if (!target) {
     return;
   }
 
   event.preventDefault();
+
+  // Close the toolbar menu if the action originated from inside it
+  const toolbarMenu = target.closest(".ws-toolbar-menu") as HTMLDetailsElement | null;
+  if (toolbarMenu?.open) {
+    toolbarMenu.open = false;
+  }
 
   const { action } = target.dataset;
 

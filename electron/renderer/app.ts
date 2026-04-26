@@ -7759,10 +7759,6 @@ async function selectSession(
     return;
   }
 
-  if (nextFocusSection) {
-    ui.focusSection = nextFocusSection;
-  }
-
   const nextLayout = addSessionToWorkspaceLayout(
     workspaceLayoutIndex.normalized,
     sessionId,
@@ -7770,25 +7766,21 @@ async function selectSession(
   );
   setStoredSessionWorkspaceLayout(nextLayout);
 
-  ui.selection = { type: "session", id: sessionId };
-  if (ui.sidebarExpandedRepoId) {
-    ui.sidebarExpandedRepoId = session.repoID || ui.sidebarExpandedRepoId;
+  if (!applyVisibleSessionSelection(sessionId, nextFocusSection)) {
+    return;
   }
-  ui.sidebarNavItem = session.repoID || ui.sidebarNavItem;
-  ui.mainListSessionId = sessionId;
-  normalizeFocusSection();
   await api.setFocusedSession(sessionId);
   renderSidebar();
   renderDetail();
 }
 
-async function activateVisibleSession(
+function applyVisibleSessionSelection(
   sessionId,
   nextFocusSection: SectionId | null = null
 ) {
   const session = sessionById(sessionId);
   if (!session) {
-    return;
+    return false;
   }
 
   if (nextFocusSection) {
@@ -7802,6 +7794,16 @@ async function activateVisibleSession(
   ui.sidebarNavItem = session.repoID || ui.sidebarNavItem;
   ui.mainListSessionId = sessionId;
   normalizeFocusSection();
+  return true;
+}
+
+async function activateVisibleSession(
+  sessionId,
+  nextFocusSection: SectionId | null = null
+) {
+  if (!applyVisibleSessionSelection(sessionId, nextFocusSection)) {
+    return;
+  }
   await api.setFocusedSession(sessionId);
   renderSidebar();
   updateSessionWorkspaceToolbar();
@@ -7810,20 +7812,32 @@ async function activateVisibleSession(
 }
 
 async function hideSessionPane(sessionId) {
-  removeSessionFromWorkspace(sessionId, { persistSelection: false });
-
   if (ui.selection.type === "session" && ui.selection.id === sessionId) {
-    const nextVisibleSessionId = workspaceVisibleSessionIds()[0] || null;
-    if (nextVisibleSessionId) {
-      await activateVisibleSession(nextVisibleSessionId, "main");
+    const nextVisibleSessionId = nextVisibleSessionIdAfterRemoving(sessionId);
+    // Move selection first so ensureValidSelection cannot auto-restore the
+    // hidden session if a state refresh lands before the layout write settles.
+    if (nextVisibleSessionId && applyVisibleSessionSelection(nextVisibleSessionId, "main")) {
+      removeSessionFromWorkspace(sessionId, { persistSelection: false });
+      await api.setFocusedSession(nextVisibleSessionId);
+      renderSidebar();
       renderDetail();
       return;
     }
 
-    await selectInbox();
+    ui.focusSection = "main";
+    ui.selection = { type: "inbox", id: null };
+    ui.sidebarExpandedRepoId = null;
+    ui.sidebarNavItem = "inbox";
+    syncMainListSelection();
+    normalizeFocusSection();
+    removeSessionFromWorkspace(sessionId, { persistSelection: false });
+    await api.setFocusedSession(null);
+    renderSidebar();
+    renderDetail();
     return;
   }
 
+  removeSessionFromWorkspace(sessionId, { persistSelection: false });
   renderDetail();
 }
 

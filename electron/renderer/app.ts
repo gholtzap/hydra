@@ -1178,6 +1178,7 @@ api.onStateChanged((nextState) => {
   syncViewedSessionReadState();
   renderSidebar();
   renderDetail();
+  syncMountedSessionTerminalLiveStates();
   renderDialogs();
 });
 
@@ -3585,6 +3586,15 @@ function syncSessionTerminalLiveState(session) {
   }
 
   mount.terminal.options.disableStdin = session.runtimeState !== "live";
+}
+
+function syncMountedSessionTerminalLiveStates() {
+  for (const sessionId of ui.terminalMounts.keys()) {
+    const session = sessionById(sessionId);
+    if (session) {
+      syncSessionTerminalLiveState(session);
+    }
+  }
 }
 
 function destroyTerminal() {

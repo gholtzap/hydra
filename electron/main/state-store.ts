@@ -227,7 +227,7 @@ function normalizeRestoredSessions(sessions: SessionRecord[]): void {
         ? session.sessionIconUpdatedAt
         : null;
 
-    if (session.runtimeState === "live") {
+    if (session.runtimeState === "live" || session.runtimeState === "launching") {
       session.runtimeState = "stopped";
       session.stoppedAt = now;
       if (session.status === "running") {

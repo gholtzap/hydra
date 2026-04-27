@@ -61,6 +61,7 @@ import {
   type McpActionName,
   type McpActionResult
 } from "./mcp-contracts";
+import { Agent } from "node:http";
 
 const fs = require("node:fs");
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
@@ -1409,6 +1410,14 @@ class AppController {
             type: "separator"
           },
           {
+            label: "End Session",
+            accelerator: kb["end-session"],
+            click: () => this.sendCommand("end-session")
+          },
+          {
+            type: "separator"
+          },
+          {
             label: "Build and Run App",
             accelerator: kb["build-and-run-app"],
             click: () => this.sendCommand("build-and-run-app")
@@ -2001,7 +2010,7 @@ class AppController {
     };
 
     this.state.sessions.unshift(session);
-    const launchMsg = "Launching opencode...\n";
+    const launchMsg = `Launching ${session.startupAgentId}...\n`;
     this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(launchMsg));
     session.transcript = launchMsg;
     this.broadcastState();

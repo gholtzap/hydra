@@ -108,6 +108,10 @@ const DEFAULT_AUTH_BASE_PATH = "/api/auth";
 const DEFAULT_ELECTRON_PROTOCOL = process.env.AUTH_ELECTRON_PROTOCOL?.trim() || "com.gmh.hydra";
 const SESSION_RESTORE_RETRY_DELAYS_MS = [150, 400, 900];
 const LOCAL_AUTH_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const AUTH_STORAGE_PREFIX = "hydra-auth";
+const AUTH_COOKIE_STORAGE_KEY = `${AUTH_STORAGE_PREFIX}.cookie`;
+const AUTH_LOCAL_CACHE_STORAGE_KEY = `${AUTH_STORAGE_PREFIX}.local_cache`;
+const AUTH_STARTUP_SESSION_HINT_KEY = `${AUTH_STORAGE_PREFIX}.startup_has_session`;
 
 type ConfInstance = {
   get: (key: string, defaultValue?: unknown) => unknown;
@@ -120,14 +124,20 @@ type ConfConstructor = new (options: {
   projectVersion: string;
 }) => ConfInstance;
 
+type PersistentStorage = {
+  getItem: (name: string) => unknown | null;
+  hasItem: (name: string) => boolean;
+  setItem: (name: string, value: unknown) => void;
+};
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function createPersistentStorage(Conf: ConfConstructor) {
+function createPersistentStorage(Conf: ConfConstructor): PersistentStorage {
   let config: ConfInstance | null = null;
 
-  const getConfig = () => {
+  const getConfig = (): ConfInstance => {
     if (!config) {
       config = new Conf({
         cwd: app.getPath("userData"),
@@ -141,6 +151,9 @@ function createPersistentStorage(Conf: ConfConstructor) {
   return {
     getItem(name: string): unknown | null {
       return getConfig().get(name, null);
+    },
+    hasItem(name: string): boolean {
+      return getConfig().get(name) !== undefined;
     },
     setItem(name: string, value: unknown): void {
       getConfig().set(name, value);
@@ -162,6 +175,8 @@ export class HydraAuthClient {
   private nativeOAuthReady = false;
   private nativeOAuthSetupAttempted = false;
   private nativeOAuthSetupError: string | null = null;
+  private persistentStoragePromise: Promise<PersistentStorage> | null = null;
+  private persistentStorageWriteChain: Promise<void> = Promise.resolve();
   private unsubscribeSession: (() => void) | null = null;
 
   constructor(authServerUrl: string, options: HydraAuthClientOptions = {}) {
@@ -202,8 +217,15 @@ export class HydraAuthClient {
     this.nativeOAuthSetupAttempted = true;
   }
 
-  /** Restore any existing Better Auth session on startup. */
+  /**
+   * Restore any existing Better Auth session on startup.
+   * Skip the secure-storage probe until we know a prior signed-in session exists.
+   */
   async initialize(): Promise<AuthSession | null> {
+    if (!(await this.shouldRestoreSessionOnStartup())) {
+      return null;
+    }
+
     for (let attempt = 0; attempt <= SESSION_RESTORE_RETRY_DELAYS_MS.length; attempt += 1) {
       const result = await this.loadSessionState();
       if (result.status !== "error") {
@@ -526,10 +548,55 @@ export class HydraAuthClient {
     const changed = !this.sessionsEqual(this.cachedSession, session);
     this.cachedSession = session;
 
+    if (changed) {
+      this.persistStartupSessionHint(session !== null);
+    }
+
     if (options.broadcast && changed) {
       this.onSessionChanged?.(session);
       this.broadcastAuthState(session);
     }
+  }
+
+  private async shouldRestoreSessionOnStartup(): Promise<boolean> {
+    try {
+      const storage = await this.getPersistentStorage();
+      const storedHint = storage.getItem(AUTH_STARTUP_SESSION_HINT_KEY);
+      if (typeof storedHint === "boolean") {
+        return storedHint;
+      }
+
+      return (
+        storage.hasItem(AUTH_COOKIE_STORAGE_KEY) ||
+        storage.hasItem(AUTH_LOCAL_CACHE_STORAGE_KEY)
+      );
+    } catch {
+      return true;
+    }
+  }
+
+  private persistStartupSessionHint(hasSession: boolean): void {
+    this.persistentStorageWriteChain = this.persistentStorageWriteChain
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          const storage = await this.getPersistentStorage();
+          storage.setItem(AUTH_STARTUP_SESSION_HINT_KEY, hasSession);
+        } catch {}
+      });
+  }
+
+  private async getPersistentStorage(): Promise<PersistentStorage> {
+    if (!this.persistentStoragePromise) {
+      this.persistentStoragePromise = import("conf")
+        .then(({ default: Conf }) => createPersistentStorage(Conf as unknown as ConfConstructor))
+        .catch((error: unknown) => {
+          this.persistentStoragePromise = null;
+          throw error;
+        });
+    }
+
+    return this.persistentStoragePromise;
   }
 
   private async ensureClient(): Promise<BetterAuthMainClient> {
@@ -541,10 +608,10 @@ export class HydraAuthClient {
   }
 
   private async createClient(): Promise<BetterAuthMainClient> {
-    const [{ createAuthClient }, { electronClient }, { default: Conf }] = await Promise.all([
+    const [{ createAuthClient }, { electronClient }, storage] = await Promise.all([
       import("better-auth/client"),
       import("@better-auth/electron/client"),
-      import("conf"),
+      this.getPersistentStorage(),
     ]);
 
     const client = createAuthClient({
@@ -555,8 +622,8 @@ export class HydraAuthClient {
           channelPrefix: "hydra-auth-native",
           protocol: DEFAULT_ELECTRON_PROTOCOL,
           signInURL: new URL("/sign-in", `${this.authBaseURL}/`).toString(),
-          storage: createPersistentStorage(Conf as unknown as ConfConstructor),
-          storagePrefix: "hydra-auth",
+          storage,
+          storagePrefix: AUTH_STORAGE_PREFIX,
         }),
       ],
       sessionOptions: {

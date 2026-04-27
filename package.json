@@ -24,6 +24,10 @@
     "release:patch": "node scripts/release.mjs patch",
     "release:minor": "node scripts/release.mjs minor",
     "release:major": "node scripts/release.mjs major",
+    "release:prepare": "node scripts/release.mjs --prepare",
+    "release:prepare:patch": "node scripts/release.mjs patch --prepare",
+    "release:prepare:minor": "node scripts/release.mjs minor --prepare",
+    "release:prepare:major": "node scripts/release.mjs major --prepare",
     "release:dry-run": "node scripts/release.mjs --dry-run"
   },
   "dependencies": {

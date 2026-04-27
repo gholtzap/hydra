@@ -6,6 +6,7 @@ import path from "node:path";
 
 const VALID_BUMPS = new Set(["patch", "minor", "major"]);
 const VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+const MAIN_BRANCH = "main";
 
 function run(command, args, options = {}) {
   const { capture = true } = options;
@@ -30,7 +31,8 @@ function parseArgs(argv) {
   const options = {
     bump: "patch",
     dryRun: false,
-    noPush: false
+    noPush: false,
+    prepare: false
   };
 
   for (const arg of argv) {
@@ -42,13 +44,17 @@ function parseArgs(argv) {
       options.noPush = true;
       continue;
     }
+    if (arg === "--prepare") {
+      options.prepare = true;
+      continue;
+    }
     if (VALID_BUMPS.has(arg) || VERSION_PATTERN.test(arg)) {
       options.bump = arg;
       continue;
     }
 
     throw new Error(
-      `Unsupported argument: ${arg}\nUsage: npm run release -- [patch|minor|major|x.y.z] [--dry-run] [--no-push]`
+      `Unsupported argument: ${arg}\nUsage: npm run release -- [patch|minor|major|x.y.z] [--dry-run] [--no-push] [--prepare]`
     );
   }
 
@@ -118,6 +124,10 @@ function currentBranch() {
   return branchName;
 }
 
+function isMainBranch(branchName) {
+  return branchName === MAIN_BRANCH;
+}
+
 function isWorktreeClean() {
   const status = run("git", ["status", "--short"]);
   return !status;
@@ -185,6 +195,14 @@ function resolveTargetVersion(packageVersion, latestTagVersion, requestedBump) {
   return incrementVersion(maxVersion(packageVersion, latestTagVersion || packageVersion), requestedBump);
 }
 
+function publishCommandFor(options, targetVersion) {
+  if (VALID_BUMPS.has(options.bump)) {
+    return `npm run release:${options.bump}`;
+  }
+
+  return `npm run release -- ${targetVersion.raw}`;
+}
+
 function main() {
   const options = parseArgs(process.argv.slice(2));
   const pkg = readPackageJson();
@@ -202,12 +220,15 @@ function main() {
     compareVersions(packageVersion, latestTagVersion) > 0 &&
     isRecoverablePreparedReleaseState(entries);
   const shouldCommitPreparedVersion = preparedReleaseState;
+  const requiresReleaseCommit = shouldBumpPackageVersion || shouldCommitPreparedVersion;
+  const publishCommand = publishCommandFor(options, targetVersion);
 
   if (tagExists(targetTag)) {
     throw new Error(`Tag ${targetTag} already exists.`);
   }
 
   if (options.dryRun) {
+    console.log(`Mode: ${options.prepare ? "prepare" : "publish"}`);
     console.log(`Branch: ${branchName}`);
     console.log(`Package version: ${packageVersion.raw}`);
     console.log(`Latest tag: ${latestTag || "(none)"}`);
@@ -219,13 +240,47 @@ function main() {
       console.log("Worktree changes:");
       console.log(formatWorktreeEntries(entries));
     }
-    console.log(`Will push branch/tag: ${options.noPush ? "no" : "yes"}`);
+    console.log(`Will push branch: ${options.noPush ? "no" : "yes"}`);
+    console.log(`Will create tag: ${options.prepare ? "no" : "yes"}`);
     return;
   }
 
   if (!worktreeClean && !preparedReleaseState) {
     throw new Error(
       `Worktree is not clean. Commit or stash changes before running the release script.\n${formatWorktreeEntries(entries)}`
+    );
+  }
+
+  if (options.prepare && isMainBranch(branchName)) {
+    throw new Error(
+      `Release preparation must run on a branch, not ${MAIN_BRANCH}.\n` +
+        `Create a short-lived branch from ${MAIN_BRANCH}, run ${publishCommand} -- --prepare there, ` +
+        `open a pull request, merge it, then rerun ${publishCommand} from an up-to-date ${MAIN_BRANCH} to publish ${targetTag}.`
+    );
+  }
+
+  if (options.prepare && !requiresReleaseCommit) {
+    throw new Error(
+      `Nothing to prepare for ${targetTag}. package.json is already aligned with the release tag.\n` +
+        `Switch to an up-to-date ${MAIN_BRANCH} checkout and run ${publishCommand} to publish the tag.`
+    );
+  }
+
+  if (!options.prepare && !isMainBranch(branchName)) {
+    throw new Error(
+      `Release publishing must run from ${MAIN_BRANCH}. You are on ${branchName}.\n` +
+        `Use ${publishCommand} -- --prepare on this branch, merge the release pull request, ` +
+        `then rerun ${publishCommand} from an up-to-date ${MAIN_BRANCH}.`
+    );
+  }
+
+  if (!options.prepare && requiresReleaseCommit) {
+    throw new Error(
+      `Protected ${MAIN_BRANCH} requires a release pull request before publishing ${targetTag}.\n` +
+        `1. Create a short-lived branch from ${MAIN_BRANCH}.\n` +
+        `2. Run ${publishCommand} -- --prepare on that branch.\n` +
+        `3. Open and merge the release pull request.\n` +
+        `4. Sync local ${MAIN_BRANCH} and rerun ${publishCommand} to push tag ${targetTag}.`
     );
   }
 
@@ -236,6 +291,16 @@ function main() {
   } else if (shouldCommitPreparedVersion) {
     run("git", ["add", "package.json", "package-lock.json"], { capture: false });
     run("git", ["commit", "-m", `Release ${targetTag}`], { capture: false });
+  }
+
+  if (options.prepare) {
+    if (!options.noPush) {
+      run("git", ["push", "origin", branchName], { capture: false });
+    }
+
+    console.log(`Prepared ${targetTag} on ${branchName}`);
+    console.log(`Open a pull request into ${MAIN_BRANCH}, merge it, sync local ${MAIN_BRANCH}, then run ${publishCommand}.`);
+    return;
   }
 
   if (!options.noPush) {

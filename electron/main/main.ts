@@ -1,4 +1,4 @@
-mport type {
+import type {
   BrowserWindow as ElectronBrowserWindow,
   Event as ElectronEvent
 } from "electron";

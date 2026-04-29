@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // Cross-platform replacement for the shell-based build:assets script.
-import { cpSync, mkdirSync, chmodSync, rmSync } from "node:fs";
-import { cpSync, mkdirSync, chmodSync, existsSync } from "node:fs";
+import { cpSync, mkdirSync, chmodSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { platform } from "node:process";

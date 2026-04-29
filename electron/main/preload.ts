@@ -371,10 +371,10 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     onVoiceInstallProgress: (callback: (line: string) => void) =>
       subscribe<string>("voice:installProgress", callback),
     onVoiceError: (callback: (error: { code: string; message: string }) => void) =>
-      subscribe<{ code: string; message: string }>("voice:error", callback)
+      subscribe<{ code: string; message: string }>("voice:error", callback),
 
     // Auth
-    signInWithEmail: (email: string, password: string) =>
+    signInWithEmail: (email: string, password: string) => 
       invoke<AuthResult>("auth:signIn", { email, password }),
     signUpWithEmail: (name: string, email: string, password: string) =>
       invoke<AuthResult>("auth:signUp", { name, email, password }),

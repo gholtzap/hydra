@@ -164,6 +164,17 @@ interface ClaudeWorkspaceApi {
   onVoiceCallStateChanged: (callback: (state: VoiceCallState) => void) => Unsubscribe;
   onVoiceInstallProgress: (callback: (line: string) => void) => Unsubscribe;
   onVoiceError: (callback: (error: { code: string; message: string }) => void) => Unsubscribe;
+
+  // Auth
+  signInWithEmail: (email: string, password: string) => Promise<AuthResult>;
+  signUpWithEmail: (name: string, email: string, password: string) => Promise<AuthResult>;
+  authStartProvider: (provider: "google" | "discord" | "github") => Promise<AuthResult>;
+  authSignOut: () => Promise<void>;
+  authGetSession: () => Promise<AuthSession | null>;
+  authOpenPage: () => Promise<void>;
+  requestPasswordReset: (email: string, redirectUrl: string) => Promise<AuthResult>;
+  verifyTotp: (code: string) => Promise<AuthResult>;
+  onAuthStateChanged: (callback: (session: AuthSession | null) => void) => Unsubscribe;
 }
 
 interface PipecatClientLike {
@@ -178,17 +189,6 @@ interface PipecatClientOptionsLike {
   enableMic?: boolean;
   enableCam?: boolean;
   callbacks?: Record<string, (...args: any[]) => void>;
-
-  // Auth
-  signInWithEmail: (email: string, password: string) => Promise<AuthResult>;
-  signUpWithEmail: (name: string, email: string, password: string) => Promise<AuthResult>;
-  authStartProvider: (provider: "google" | "discord" | "github") => Promise<AuthResult>;
-  authSignOut: () => Promise<void>;
-  authGetSession: () => Promise<AuthSession | null>;
-  authOpenPage: () => Promise<void>;
-  requestPasswordReset: (email: string, redirectUrl: string) => Promise<AuthResult>;
-  verifyTotp: (code: string) => Promise<AuthResult>;
-  onAuthStateChanged: (callback: (session: AuthSession | null) => void) => Unsubscribe;
 }
 
 interface ClaudeTerminalOptions {

@@ -54,10 +54,25 @@ export type KeybindingAction =
   | "navigate-section-left"
   | "navigate-section-right"
   | "navigate-section-up"
-  | "navigate-section-down";
+  | "navigate-section-down"
+  | "end-session";
 
 export type KeybindingMap = Record<KeybindingAction, string>;
 export type KeybindingOverrides = Partial<KeybindingMap>;
+export type KeybindingLabels = Record<KeybindingAction, string>;
+
+export type KeybindingEventSnapshot = {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+};
+
+export type AcceleratorDisplayParts = {
+  isMac: boolean;
+  parts: string[];
+};
 
 export type ThemeAppearance = "system" | "light" | "dark";
 
@@ -553,6 +568,30 @@ export type TrackedPortStatus = {
   ports: PortStatusItem[];
   activePorts: PortStatusItem[];
   error?: string;
+};
+
+// ---------------------------------------------------------------------------
+// Auth types
+// ---------------------------------------------------------------------------
+
+export type AuthUser = {
+  id: string;
+  email: string;
+  name: string;
+  image?: string | null;
+  emailVerified: boolean;
+};
+
+export type AuthSession = {
+  user: AuthUser;
+  expiresAt: string;
+};
+
+export type AuthResult = {
+  success: boolean;
+  error?: string;
+  twoFactorRedirect?: boolean;
+  session?: AuthSession;
 };
 
 export type JsonPrimitive = string | number | boolean | null;

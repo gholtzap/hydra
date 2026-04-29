@@ -20,13 +20,20 @@ TIOCSCTTY = getattr(termios, "TIOCSCTTY", 0x20007461 if sys.platform == "darwin"
 selector = selectors.DefaultSelector()
 selector.register(sys.stdin, selectors.EVENT_READ, "stdin")
 sessions = {}
+sessions_lock = threading.Lock()
+# Session IDs are reused when an agent falls back to a shell. Versions keep
+# stale wait/read events from touching the replacement PTY.
+session_versions = {}
+next_session_version = 0
+send_lock = threading.Lock()
 pending = ""
 stdin_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
 
 def send(payload):
-    sys.stdout.write(json.dumps(payload) + "\n")
-    sys.stdout.flush()
+    with send_lock:
+        sys.stdout.write(json.dumps(payload) + "\n")
+        sys.stdout.flush()
 
 
 def set_window_size(fd, cols, rows):
@@ -121,13 +128,26 @@ def create_session(message):
 
     os.close(slave_fd)
 
-    sessions[session_id] = {
+    session = {
         "proc": proc,
         "master_fd": master_fd,
-        "decoder": codecs.getincrementaldecoder("utf-8")(errors="replace")
+        "decoder": codecs.getincrementaldecoder("utf-8")(errors="replace"),
+        "version": None
     }
 
-    selector.register(master_fd, selectors.EVENT_READ, ("session", session_id))
+    global next_session_version
+    with sessions_lock:
+        old_session = sessions.get(session_id)
+        if old_session:
+            close_session_resources(old_session)
+
+        next_session_version += 1
+        version = next_session_version
+        session["version"] = version
+        session_versions[session_id] = version
+        sessions[session_id] = session
+        selector.register(master_fd, selectors.EVENT_READ, ("session", session_id, version))
+
     send({
         "type": "created",
         "sessionId": session_id
@@ -135,39 +155,58 @@ def create_session(message):
 
     def wait_for_exit():
         exit_code = proc.wait()
-        cleanup_session(session_id, send_exit=False)
-        send({
-            "type": "exit",
-            "sessionId": session_id,
-            "exitCode": exit_code,
-            "signal": None
-        })
+        cleanup_session(session_id, send_exit=False, expected_version=version)
+        with sessions_lock:
+            is_current_version = session_versions.get(session_id) == version
+        if is_current_version:
+            send({
+                "type": "exit",
+                "sessionId": session_id,
+                "exitCode": exit_code,
+                "signal": None
+            })
 
     threading.Thread(target=wait_for_exit, daemon=True).start()
 
 
+def current_session(session_id, expected_version=None):
+    with sessions_lock:
+        session = sessions.get(session_id)
+        if not session:
+            return None
+        if expected_version is not None and session.get("version") != expected_version:
+            return None
+        return session
+
+
 def handle_input(message):
-    session = sessions.get(message["sessionId"])
+    session = current_session(message["sessionId"])
     if not session:
         return
 
     data = (message.get("data") or "").encode("utf-8", errors="replace")
     if data:
-        os.write(session["master_fd"], data)
+        try:
+            os.write(session["master_fd"], data)
+        except OSError:
+            pass
 
 
 def handle_resize(message):
-    session = sessions.get(message["sessionId"])
+    session = current_session(message["sessionId"])
     if not session:
         return
 
     cols = int(message.get("cols") or 1)
     rows = int(message.get("rows") or 1)
-    set_window_size(session["master_fd"], cols, rows)
+    try:
+        set_window_size(session["master_fd"], cols, rows)
+    except OSError:
+        pass
 
 
 def kill_session(session_id):
-    session = sessions.get(session_id)
+    session = current_session(session_id)
     if not session:
         return
 
@@ -177,14 +216,10 @@ def kill_session(session_id):
     except ProcessLookupError:
         pass
 
-    cleanup_session(session_id, send_exit=False)
+    cleanup_session(session_id, send_exit=False, expected_version=session["version"])
 
 
-def cleanup_session(session_id, send_exit):
-    session = sessions.pop(session_id, None)
-    if not session:
-        return
-
+def close_session_resources(session):
     master_fd = session["master_fd"]
     try:
         selector.unregister(master_fd)
@@ -196,6 +231,18 @@ def cleanup_session(session_id, send_exit):
     except OSError:
         pass
 
+
+def cleanup_session(session_id, send_exit, expected_version=None):
+    with sessions_lock:
+        session = sessions.get(session_id)
+        if not session:
+            return False
+        if expected_version is not None and session.get("version") != expected_version:
+            return False
+
+        sessions.pop(session_id, None)
+        close_session_resources(session)
+
     if send_exit:
         send({
             "type": "exit",
@@ -203,6 +250,7 @@ def cleanup_session(session_id, send_exit):
             "exitCode": session["proc"].poll() or 0,
             "signal": None
         })
+    return True
 
 
 def handle_message(line):
@@ -250,8 +298,8 @@ def read_stdin():
             handle_message(line)
 
 
-def read_session(session_id):
-    session = sessions.get(session_id)
+def read_session(session_id, expected_version):
+    session = current_session(session_id, expected_version)
     if not session:
         return
 
@@ -278,7 +326,10 @@ def read_session(session_id):
 
 
 def shutdown():
-    for session_id in list(sessions.keys()):
+    with sessions_lock:
+        session_ids = list(sessions.keys())
+
+    for session_id in session_ids:
         kill_session(session_id)
     raise SystemExit(0)
 
@@ -293,9 +344,9 @@ def main():
                 read_stdin()
                 continue
 
-            kind, session_id = key.data
+            kind, session_id, version = key.data
             if kind == "session":
-                read_session(session_id)
+                read_session(session_id, version)
 
 
 if __name__ == "__main__":

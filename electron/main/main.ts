@@ -1,4 +1,4 @@
-import type {
+mport type {
   BrowserWindow as ElectronBrowserWindow,
   Event as ElectronEvent
 } from "electron";
@@ -50,6 +50,8 @@ import type {
 import type { AppControllerHandle } from "./internal-api";
 import type { HydraMcpServer } from "./mcp-server";
 import type { VoiceManager } from "./voice-manager";
+import type { AuthSession } from "./auth-client";
+import { HydraAuthClient } from "./auth-client";
 import {
   extractPreferencesPatch,
   normalizeMarketplaceInstallArgs,
@@ -60,6 +62,7 @@ import {
   type McpActionName,
   type McpActionResult
 } from "./mcp-contracts";
+import { Agent } from "node:http";
 
 const fs = require("node:fs");
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
@@ -204,7 +207,12 @@ const {
   isPathWithinRoot: (filePath: string, rootPath: string) => boolean;
   normalizeSessionTagColor: (value: unknown) => SessionTagColor | null;
 };
-const { isSessionSearchResultPathForRepo, queryProjectSessions } = require("./session-search") as {
+const {
+  invalidateSessionSearchCache,
+  isSessionSearchResultPathForRepo,
+  queryProjectSessions
+} = require("./session-search") as {
+  invalidateSessionSearchCache: (repoPath?: string | null) => void;
   isSessionSearchResultPathForRepo: (filePath: string, repoPath: string) => Promise<boolean>;
   queryProjectSessions: (repoPath: string, query: string) => Promise<SessionSearchResponse>;
 };
@@ -249,6 +257,7 @@ const {
   disableWiki,
   enableWiki,
   getWikiContext,
+  invalidateWikiExistsSyncCache,
   readWikiFile,
   wikiDirectoryPath,
   wikiExists,
@@ -257,6 +266,7 @@ const {
   disableWiki: (rootPath: string) => Promise<unknown>;
   enableWiki: (rootPath: string) => Promise<unknown>;
   getWikiContext: (rootPath: string, enabled: boolean) => Promise<WikiContext>;
+  invalidateWikiExistsSyncCache: (rootPath?: string) => void;
   readWikiFile: (rootPath: string, relativePath: string) => Promise<WikiFileContents>;
   wikiDirectoryPath: (rootPath: string) => string;
   wikiExists: (rootPath: string) => Promise<boolean>;
@@ -310,7 +320,9 @@ const FILE_TREE_IGNORED = new Set([
   ".parcel-cache", "target", ".gradle", ".idea", ".vscode"
 ]);
 const SESSION_ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
+const DEFAULT_AUTH_SERVER_URL = "https://hydra-auth.omavashia1233.workers.dev";
 const TRUSTED_RENDERER_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "renderer", "index.html"));
+const TRUSTED_AUTH_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "renderer", "auth.html"));
 const AGENT_LABELS: Record<AgentId, string> = Object.fromEntries(
   AGENT_DEFINITIONS.map((agent) => [agent.id, agent.label])
 ) as Record<AgentId, string>;
@@ -437,7 +449,8 @@ function normalizeFileUrlPath(input: string): string | null {
 }
 
 function isTrustedRendererUrl(input: string) {
-  return normalizeFileUrlPath(input) === TRUSTED_RENDERER_ENTRY_PATH;
+  const normalized = normalizeFileUrlPath(input);
+  return normalized === TRUSTED_RENDERER_ENTRY_PATH || normalized === TRUSTED_AUTH_ENTRY_PATH;
 }
 
 function assertTrustedGitHubUrl(input: unknown) {
@@ -610,6 +623,8 @@ class AppController {
   saveTimer: NodeJS.Timeout | null;
   allowQuit: boolean;
   downloadedUpdateVersion: string | null;
+  downloadedUpdatePromptVisible: boolean;
+  downloadedUpdatePromptSuppressedKey: string | null;
   updateInstallWatchdog: NodeJS.Timeout | null;
   updateInstallInProgress: boolean;
   pendingAgentLaunch: Set<string>;
@@ -630,6 +645,8 @@ class AppController {
   plansDirWatcher: ReturnType<typeof fs.watch> | null;
   mcpServer: HydraMcpServer | null;
   voiceManager: VoiceManager | null;
+  authClient: HydraAuthClient | null;
+  authMainSetup: Promise<void>;
 
   constructor() {
     this.state = emptyState();
@@ -638,6 +655,8 @@ class AppController {
     this.saveTimer = null;
     this.allowQuit = false;
     this.downloadedUpdateVersion = null;
+    this.downloadedUpdatePromptVisible = false;
+    this.downloadedUpdatePromptSuppressedKey = null;
     this.updateInstallWatchdog = null;
     this.updateInstallInProgress = false;
     this.pendingAgentLaunch = new Set();
@@ -657,20 +676,72 @@ class AppController {
     this.plansDirWatcher = null;
     this.mcpServer = null;
     this.voiceManager = null;
+    const authServerUrl = this.resolveAuthServerUrl();
+    this.authClient = new HydraAuthClient(authServerUrl, {
+      getWindow: () => this.window,
+      onSessionChanged: (session) => {
+        void this.handleAuthSessionChanged(session);
+      }
+    });
+    this.authMainSetup = this.authClient.setupMain({
+      bridges: false,
+      csp: true,
+      getWindow: () => this.window,
+    });
     this.ptyHost = new PtyHostClient();
     this.ptyHost.onMessage((message) => this.handlePtyMessage(message));
   }
 
   describeDownloadedUpdate(version?: string | null): string {
-    const normalizedVersion = typeof version === "string" ? version.trim() : "";
+    const normalizedVersion = normalizeUpdateVersion(version);
     return normalizedVersion ? `Hydra ${normalizedVersion}` : "the downloaded update";
   }
 
+  downloadedUpdatePromptKey(version?: string | null): string {
+    return normalizeUpdateVersion(version) || "__unknown_downloaded_update__";
+  }
+
   noteDownloadedUpdate(version?: string | null): void {
-    const normalizedVersion = typeof version === "string" ? version.trim() : "";
-    this.downloadedUpdateVersion = normalizedVersion || null;
+    const normalizedVersion = normalizeUpdateVersion(version);
+    if (this.downloadedUpdateVersion !== normalizedVersion) {
+      this.downloadedUpdatePromptSuppressedKey = null;
+    }
+    this.downloadedUpdateVersion = normalizedVersion;
     this.updateInstallInProgress = false;
     this.clearUpdateInstallWatchdog();
+  }
+
+  async promptToInstallDownloadedUpdate(version?: string | null): Promise<void> {
+    const targetVersion = normalizeUpdateVersion(version) || this.downloadedUpdateVersion;
+    const promptKey = this.downloadedUpdatePromptKey(targetVersion);
+    if (
+      this.downloadedUpdatePromptVisible
+      || this.downloadedUpdatePromptSuppressedKey === promptKey
+    ) {
+      return;
+    }
+
+    this.downloadedUpdatePromptVisible = true;
+    const targetUpdate = this.describeDownloadedUpdate(targetVersion);
+
+    try {
+      const { response } = await dialog.showMessageBox({
+        type: "info",
+        title: "Update ready",
+        message: `${targetUpdate} has been downloaded. Restart to install it.`,
+        detail: `Current version: ${app.getVersion()}. Updater log: ${updaterLogFilePath()}`,
+        buttons: ["Restart now", "Later"]
+      });
+      this.downloadedUpdatePromptSuppressedKey = promptKey;
+
+      if (response === 0) {
+        await this.restartToInstallUpdate(targetVersion);
+      }
+    } catch (error: unknown) {
+      logUpdater("error", `failed to show downloaded update dialog: ${formatUpdaterLogMessage(error)}`);
+    } finally {
+      this.downloadedUpdatePromptVisible = false;
+    }
   }
 
   clearUpdateInstallWatchdog(): void {
@@ -867,7 +938,8 @@ class AppController {
   }
 
   async initialize(): Promise<void> {
-    const [state, lazygitPath] = await Promise.all([
+    const [, state, lazygitPath] = await Promise.all([
+      this.authMainSetup,
       loadState(),
       resolveCommandPath("lazygit")
     ]);
@@ -878,6 +950,37 @@ class AppController {
     this.normalizeFolderRepos();
     this.repairStoredTranscripts();
     this.watchPlansDir();
+  }
+
+  private resolveAuthServerUrl(): string {
+    // 1. Environment variable (set at build time for production)
+    const envUrl = process.env.AUTH_SERVER_URL?.trim();
+    if (envUrl) {
+      console.log(`[auth] using AUTH_SERVER_URL: ${envUrl}`);
+      return envUrl;
+    }
+
+    // 2. Read from bundled auth-config.json
+    const configPath = path.join(__dirname, "..", "renderer", "auth-config.json");
+    try {
+      const raw = fs.readFileSync(configPath, "utf-8");
+      const config = JSON.parse(raw);
+      const configUrl = typeof config?.authServerUrl === "string" ? config.authServerUrl.trim() : "";
+      if (configUrl) {
+        console.log(`[auth] using auth-config.json: ${configUrl}`);
+        return configUrl;
+      }
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        // Missing config is fine; fall through to the remote default.
+      } else {
+        console.warn(`[auth] unable to read ${configPath}:`, error);
+      }
+    }
+
+    // 3. Default to the deployed auth Worker. Local dev opts into localhost via scripts/dev.mjs.
+    console.log(`[auth] using default auth server: ${DEFAULT_AUTH_SERVER_URL}`);
+    return DEFAULT_AUTH_SERVER_URL;
   }
 
   createWindow(): void {
@@ -926,6 +1029,37 @@ class AppController {
       () => this.state.preferences as unknown as Record<string, unknown>,
       (patch) => this.updatePreferences(patch)
     );
+    // Auth gate: check for valid session before loading the main app
+    this.loadAuthenticatedPage(window);
+  }
+
+  private async loadAuthenticatedPage(window: ElectronBrowserWindow): Promise<void> {
+    try {
+      const session = await this.authClient?.initialize();
+      if (window.isDestroyed()) return;
+      if (session) {
+        window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
+      } else {
+        window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+      }
+    } catch {
+      if (window.isDestroyed()) return;
+      // If auth check fails (e.g. server unreachable), show auth page
+      window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+    }
+  }
+
+  private async handleAuthSessionChanged(session: AuthSession | null): Promise<void> {
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
+
+    const currentUrl = this.window.webContents.getURL();
+    if (session && currentUrl.endsWith("/auth.html")) {
+      await this.window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
+    } else if (!session && !currentUrl.endsWith("/auth.html")) {
+      await this.window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+    }
   }
 
   setupIpc(): void {
@@ -1081,6 +1215,76 @@ class AppController {
         payload.rows
       )
     );
+    // ---- Auth IPC handlers ----
+    ipcMain.handle("auth:signIn", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      const result = await this.authClient.signIn(payload.email, payload.password);
+      if (result.success && this.window) {
+        this.window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
+      }
+      return result;
+    });
+    ipcMain.handle("auth:signUp", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      const result = await this.authClient.signUp(payload.name, payload.email, payload.password);
+      if (result.success && this.window) {
+        this.window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
+      }
+      return result;
+    });
+    ipcMain.handle("auth:signOut", async () => {
+      if (!this.authClient) return;
+      try {
+        await this.authClient.signOut();
+      } finally {
+        // Always navigate back to auth page, even if signOut throws
+        if (this.window && !this.window.isDestroyed()) {
+          this.window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+        }
+      }
+    });
+    ipcMain.handle("auth:openPage", async () => {
+      if (this.window) {
+        await this.window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+      }
+    });
+    ipcMain.handle("auth:startProvider", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      try {
+        await this.authClient.requestAuth({ provider: payload?.provider });
+        return { success: true };
+      } catch (error: unknown) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unable to start provider sign in."
+        };
+      }
+    });
+    ipcMain.handle("auth:signInWithProvider", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      try {
+        await this.authClient.requestAuth({ provider: payload?.provider });
+        return { success: true };
+      } catch (error: unknown) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unable to start provider sign in."
+        };
+      }
+    });
+    ipcMain.handle("auth:getSession", async () => {
+      if (!this.authClient) return null;
+      return this.authClient.getSession();
+    });
+    ipcMain.handle("auth:resetPassword", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      return this.authClient.requestPasswordReset(payload.email, payload.redirectUrl);
+    });
+    ipcMain.handle("auth:verifyTotp", async (_event, payload) => {
+      if (!this.authClient) return { success: false, error: "Auth not initialized." };
+      return this.authClient.verifyTotp(payload.code);
+    });
+
     ipcMain.handle("fs:readFile", async (_event, payload) => {
       try {
         const filePath = this.assertRepoFilePath(payload?.repoId, payload?.filePath);
@@ -1224,6 +1428,14 @@ class AppController {
             label: "New Session (Cmd+N)",
             accelerator: kb["new-session-alt"],
             click: () => this.sendCommand("new-session")
+          },
+          {
+            type: "separator"
+          },
+          {
+            label: "End Session",
+            accelerator: kb["end-session"],
+            click: () => this.sendCommand("end-session")
           },
           {
             type: "separator"
@@ -1579,19 +1791,18 @@ class AppController {
     });
   }
 
-  sendSessionOutput(sessionId: string, data: string): void {
-    const session = this.sessionById(sessionId);
-    if (this.window && !this.window.isDestroyed() && session) {
+  sendSessionOutput(session: SessionRecord, data: string): void {
+    if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send("session:output", {
-        sessionId,
+        sessionId: session.id,
         data,
         session: summarizeSession(session)
       });
     }
     // Notify MCP subscribers about session output
     if (this.mcpServer) {
-      this.mcpServer.notifyResourceChanged(`hydra://sessions/${sessionId}`);
-      this.mcpServer.notifyResourceChanged(`hydra://sessions/${sessionId}/transcript`);
+      this.mcpServer.notifyResourceChanged(`hydra://sessions/${session.id}`);
+      this.mcpServer.notifyResourceChanged(`hydra://sessions/${session.id}/transcript`);
     }
   }
 
@@ -1794,47 +2005,51 @@ class AppController {
       launchesClaudeOnStart !== false
         ? normalizeAgentId(this.state.preferences.defaultAgentId)
         : null;
-const session: SessionRecord = {
-    id: sessionId,
-    repoID: repoId,
-    title: repo.name,
-    launchProfile: "agent",
-    initialPrompt: "",
-    launchesClaudeOnStart: !!startupAgentId,
-    startupAgentId,
-    claudeSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
-    agentSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
-    status: "running",
-    runtimeState: "launching",
-    blocker: null,
-    unreadCount: 0,
-    createdAt: now(),
-    updatedAt: now(),
-    lastActivityAt: null,
-    stoppedAt: null,
-    launchCount: 1,
-    isPinned: false,
-    tagColor: null,
-    sessionIconPath: null,
-    sessionIconUpdatedAt: null,
-    transcript: "",
-    rawTranscript: ""
-  };
+    const session: SessionRecord = {
+      id: sessionId,
+      repoID: repoId,
+      title: repo.name,
+      launchProfile: "agent",
+      initialPrompt: "",
+      launchesClaudeOnStart: !!startupAgentId,
+      startupAgentId,
+      claudeSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
+      agentSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
+      status: "running",
+      runtimeState: "launching",
+      blocker: null,
+      unreadCount: 0,
+      createdAt: now(),
+      updatedAt: now(),
+      lastActivityAt: null,
+      stoppedAt: null,
+      launchCount: 1,
+      isPinned: false,
+      tagColor: null,
+      sessionIconPath: null,
+      sessionIconUpdatedAt: null,
+      transcript: "",
+      rawTranscript: ""
+    };
 
-  this.state.sessions.unshift(session);
-  const launchMsg = "Launching opencode...\n";
-  this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(launchMsg));
-  session.transcript = launchMsg;
-  this.broadcastState();
-
-  setImmediate(() => {
-    this.launchRuntime(session, repo);
-    session.runtimeState = "live";
-    this.scheduleSave();
+    this.state.sessions.unshift(session);
+    const launchMsg = `Launching ${session.startupAgentId}...\n`;
+    this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(launchMsg));
+    session.transcript = launchMsg;
     this.broadcastState();
-  });
 
-  return session.id;
+    if (startupAgentId) {
+      invalidateSessionSearchCache(repo.path);
+    }
+
+    setImmediate(() => {
+      this.launchRuntime(session, repo);
+      session.runtimeState = "live";
+      this.scheduleSave();
+      this.broadcastState();
+    });
+
+    return session.id;
   }
 
   renameSession(sessionId: string, title: string): boolean {
@@ -2546,7 +2761,7 @@ const session: SessionRecord = {
     }
 
     this.scheduleSave();
-    this.sendSessionOutput(sessionId, rawChunk);
+    this.sendSessionOutput(session, rawChunk);
   }
 
   handleHostExit(sessionId: string, exitCode: number): void {
@@ -2631,7 +2846,7 @@ const session: SessionRecord = {
       this.terminalBuffer(session.id, session.transcript).consume(banner)
     );
 
-    this.sendSessionOutput(session.id, banner);
+    this.sendSessionOutput(session, banner);
 
     this.ptyHost.createSession({
       sessionId: session.id,
@@ -2671,6 +2886,8 @@ const session: SessionRecord = {
     session.stoppedAt = null;
     session.launchCount = 1;
     session.updatedAt = now();
+
+    invalidateSessionSearchCache(repo.path);
     session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${bannerChunk}`);
     session.transcript = trimTranscript(this.terminalBuffer(session.id, session.transcript).consume(bannerChunk));
     this.resetSignalTracking(session.id);
@@ -2907,6 +3124,7 @@ const session: SessionRecord = {
       await disableWiki(repo.path);
     }
 
+    invalidateWikiExistsSyncCache(repo.path);
     repo.wikiEnabled = enabled;
     repo.updatedAt = now();
     this.scheduleSave();
@@ -3873,18 +4091,7 @@ autoUpdater.on("error", (error: unknown) => {
 
 autoUpdater.on("update-downloaded", (info: { version?: string }) => {
   controller.noteDownloadedUpdate(info.version);
-  const targetUpdate = controller.describeDownloadedUpdate(info.version);
-  dialog.showMessageBox({
-    type: "info",
-    title: "Update ready",
-    message: `${targetUpdate} has been downloaded. Restart to install it.`,
-    detail: `Current version: ${app.getVersion()}. Updater log: ${updaterLogFilePath()}`,
-    buttons: ["Restart now", "Later"]
-  }).then(({ response }) => {
-    if (response === 0) {
-      void controller.restartToInstallUpdate(info.version);
-    }
-  });
+  void controller.promptToInstallDownloadedUpdate(info.version);
 });
 
 app.on("before-quit", (event) => {

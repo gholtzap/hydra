@@ -1,8 +1,11 @@
 import type {
+  AcceleratorDisplayParts,
   AppCommandPayload,
   AppPreferencesPatch,
   AppUpdateCheckResult,
   AppStateSnapshot,
+  AuthResult,
+  AuthSession,
   ClaudeExternalUrlRequest,
   ClaudePathRevealRequest,
   ClaudeRepoFileRequest,
@@ -14,6 +17,9 @@ import type {
   EphemeralToolExitPayload,
   EphemeralToolId,
   EphemeralToolOutputPayload,
+  KeybindingEventSnapshot,
+  KeybindingLabels,
+  KeybindingMap,
   MarketplaceInspectResponse,
   MarketplaceInstallResponse,
   MarketplaceSkillDetails,
@@ -72,6 +78,11 @@ interface ClaudeWorkspaceApi {
   openExternalUrl: (payload: ClaudeExternalUrlRequest) => Promise<void>;
   nextUnreadSession: () => Promise<string | null>;
   updatePreferences: (patch: AppPreferencesPatch) => Promise<void>;
+  getDefaultKeybindings: () => KeybindingMap;
+  getKeybindingLabels: () => KeybindingLabels;
+  getAcceleratorDisplayParts: (accelerator: string) => AcceleratorDisplayParts;
+  formatAccelerator: (accelerator: string) => string;
+  matchesAccelerator: (event: KeybindingEventSnapshot, accelerator: string) => boolean;
   getTrackedPortStatus: () => Promise<TrackedPortStatus>;
   getClaudeSettingsContext: (repoId: string | null) => Promise<ClaudeSettingsContext>;
   loadSettingsFile: (payload: ClaudeSettingsFileRequest) => Promise<string>;
@@ -167,6 +178,17 @@ interface PipecatClientOptionsLike {
   enableMic?: boolean;
   enableCam?: boolean;
   callbacks?: Record<string, (...args: any[]) => void>;
+
+  // Auth
+  signInWithEmail: (email: string, password: string) => Promise<AuthResult>;
+  signUpWithEmail: (name: string, email: string, password: string) => Promise<AuthResult>;
+  authStartProvider: (provider: "google" | "discord" | "github") => Promise<AuthResult>;
+  authSignOut: () => Promise<void>;
+  authGetSession: () => Promise<AuthSession | null>;
+  authOpenPage: () => Promise<void>;
+  requestPasswordReset: (email: string, redirectUrl: string) => Promise<AuthResult>;
+  verifyTotp: (code: string) => Promise<AuthResult>;
+  onAuthStateChanged: (callback: (session: AuthSession | null) => void) => Unsubscribe;
 }
 
 interface ClaudeTerminalOptions {

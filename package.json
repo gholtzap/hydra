@@ -1,6 +1,6 @@
 {
   "name": "hydra",
-  "version": "0.2.10",
+  "version": "0.3.5",
   "private": true,
   "description": "Hydra desktop shell built with Electron",
   "main": "dist-electron/main/main.js",
@@ -12,7 +12,9 @@
     "build:vendor:pipecat": "node scripts/build-pipecat-vendor.mjs",
     "build:assets": "node scripts/build-assets.mjs",
     "start": "npm run build && electron .",
-    "dev": "npm run build && electron .",
+    "dev": "node scripts/dev.mjs",
+    "dev:desktop": "npm run build && electron .",
+    "dev:auth": "npm --prefix auth-server run dev:local",
     "pack": "npm run build && npm run build:icon && node scripts/run-electron-builder.mjs --dir",
     "pack:mac": "npm run build && node scripts/run-electron-builder.mjs --dir --mac --publish never",
     "smoke:packaged:mac": "node scripts/smoke-packaged-mac.mjs",
@@ -23,10 +25,18 @@
     "release:patch": "node scripts/release.mjs patch",
     "release:minor": "node scripts/release.mjs minor",
     "release:major": "node scripts/release.mjs major",
+    "release:prepare": "node scripts/release.mjs --prepare",
+    "release:prepare:patch": "node scripts/release.mjs patch --prepare",
+    "release:prepare:minor": "node scripts/release.mjs minor --prepare",
+    "release:prepare:major": "node scripts/release.mjs major --prepare",
     "release:dry-run": "node scripts/release.mjs --dry-run"
   },
   "dependencies": {
+    "@better-auth/electron": "^1.6.5",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@opentelemetry/api": "^1.9.1",
+    "better-auth": "^1.6.5",
+    "conf": "^15.1.0",
     "electron-updater": "^6.8.3",
     "node-pty": "^1.0.0",
     "tokscale": "^2.0.19"
@@ -35,7 +45,7 @@
     "@pipecat-ai/client-js": "^1.7.0",
     "@pipecat-ai/small-webrtc-transport": "^1.10.0",
     "@types/node": "^25.5.2",
-    "electron": "^35.0.0",
+    "electron": "^36.9.5",
     "electron-builder": "^26.8.1",
     "esbuild": "^0.28.0",
     "typescript": "^6.0.2"

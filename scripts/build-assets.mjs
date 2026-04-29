@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Cross-platform replacement for the shell-based build:assets script.
 import { cpSync, mkdirSync, chmodSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { platform } from "node:process";
@@ -36,12 +37,18 @@ try {
 
   // Renderer static assets
   cp("electron/renderer/index.html", "dist-electron/renderer/index.html");
+  cp("electron/renderer/auth.html", "dist-electron/renderer/auth.html");
   cp("electron/renderer/app.css", "dist-electron/renderer/app.css");
   cp("electron/renderer/vendor/xterm.css", "dist-electron/renderer/vendor/xterm.css");
   cp("electron/renderer/vendor/xterm.js", "dist-electron/renderer/vendor/xterm.js");
   cp("electron/renderer/vendor/addon-fit.js", "dist-electron/renderer/vendor/addon-fit.js");
   cp("electron/renderer/vendor/pipecat-client.js", "dist-electron/renderer/vendor/pipecat-client.js");
   cp("electron/renderer/vendor/pipecat-webrtc.js", "dist-electron/renderer/vendor/pipecat-webrtc.js");
+
+  // Optional auth server override used by packaged/dev builds.
+  if (existsSync(join(root, "electron/renderer/auth-config.json"))) {
+    cp("electron/renderer/auth-config.json", "dist-electron/renderer/auth-config.json");
+  }
 } catch (err) {
   process.stderr.write(`build-assets error: ${err.message}\n`);
   process.exit(1);

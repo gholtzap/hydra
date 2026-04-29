@@ -1,0 +1,4 @@
+paths-ignore:
+  - electron/renderer/vendor/**
+  - dist-electron/**
+  - release/**

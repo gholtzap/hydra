@@ -2,7 +2,7 @@
 
 [WIP] Agent orchestrator 
 
-Run multiple Claudes
+Run multiple Agents
 
 ![hydrademo016](https://github.com/user-attachments/assets/8c3f982c-c54c-4daa-a01f-070acb4d3bba)
 

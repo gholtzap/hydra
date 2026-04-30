@@ -194,7 +194,7 @@ export class VoiceManager {
       try {
         await this.execCommand("uv", ["--version"]);
         installCmd = "uv";
-        installArgs = ["pip", "install", "-r", requirementsPath];
+        installArgs = ["pip", "install", "--python", python.path!, "-r", requirementsPath];
         this.emitInstallProgress("Using uv for voice dependencies...");
       } catch {
         this.emitInstallProgress("Using pip for voice dependencies...");

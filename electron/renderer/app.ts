@@ -368,6 +368,8 @@ type UiState = {
   voiceMuted: boolean;
   voiceTranscript: { role: "user" | "bot" | "system"; text: string; time: string }[];
   voiceInstallLog: string[];
+  voiceLiveUserText: string;
+  voiceLiveBotText: string;
 };
 
 const ui: UiState = {
@@ -475,7 +477,9 @@ const ui: UiState = {
   voiceCallState: "idle" as VoiceCallState,
   voiceMuted: false,
   voiceTranscript: [] as { role: "user" | "bot" | "system"; text: string; time: string }[],
-  voiceInstallLog: [] as string[]
+  voiceInstallLog: [] as string[],
+  voiceLiveUserText: "",
+  voiceLiveBotText: ""
 };
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
@@ -8609,6 +8613,9 @@ function onVoiceDialogClose() {
     void api.stopVoiceCall();
     ui.voiceCallState = "idle";
   }
+  ui.voiceLiveUserText = "";
+  ui.voiceLiveBotText = "";
+  renderVoiceLiveCaption();
   renderSidebar();
 }
 
@@ -8619,6 +8626,9 @@ function closeVoiceModal() {
     void api.stopVoiceCall();
     ui.voiceCallState = "idle";
   }
+  ui.voiceLiveUserText = "";
+  ui.voiceLiveBotText = "";
+  renderVoiceLiveCaption();
   if (voiceDialog.open) {
     voiceDialog.close();
   }
@@ -8714,13 +8724,39 @@ async function connectPipecatClient(port: number, runId = voiceSessionRunId) {
         onBotReady: () => {
           // Bot pipeline is ready
         },
+        onUserStartedSpeaking: () => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          ui.voiceLiveUserText = "";
+          renderVoiceLiveCaption();
+        },
+        onUserStoppedSpeaking: () => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          ui.voiceLiveUserText = "";
+          renderVoiceLiveCaption();
+        },
         onUserTranscript: (data: { text: string; final: boolean }) => {
           if (!voiceSessionIsCurrent(runId)) return;
-          if (data.final && data.text.trim()) {
-            appendVoiceTranscript("user", data.text.trim());
-            renderVoiceDialog();
-            scrollVoiceTranscript();
+          if (data.final) {
+            if (data.text.trim()) {
+              appendVoiceTranscript("user", data.text.trim());
+              renderVoiceDialog();
+              scrollVoiceTranscript();
+            }
+            ui.voiceLiveUserText = "";
+          } else {
+            ui.voiceLiveUserText = data.text || "";
           }
+          renderVoiceLiveCaption();
+        },
+        onBotStartedSpeaking: () => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          ui.voiceLiveBotText = "";
+          renderVoiceLiveCaption();
+        },
+        onBotStoppedSpeaking: () => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          ui.voiceLiveBotText = "";
+          renderVoiceLiveCaption();
         },
         onBotOutput: (data: { text: string; spoken: boolean }) => {
           if (!voiceSessionIsCurrent(runId)) return;
@@ -8728,6 +8764,8 @@ async function connectPipecatClient(port: number, runId = voiceSessionRunId) {
             appendVoiceTranscript("bot", data.text.trim());
             renderVoiceDialog();
             scrollVoiceTranscript();
+            ui.voiceLiveBotText = data.text.trim();
+            renderVoiceLiveCaption();
           }
         },
         onLocalAudioLevel: (level: number) => {
@@ -8836,6 +8874,53 @@ async function saveVoiceConfig() {
     await api.stopVoiceCall();
   }
   await startVoiceSession();
+}
+
+function renderVoiceLiveCaption() {
+  const el = document.getElementById("voice-live-caption");
+  if (!el) return;
+
+  const isListening = ui.voiceCallState === "listening";
+  const userText = ui.voiceLiveUserText.trim();
+  const botText = ui.voiceLiveBotText.trim();
+  const hasContent = isListening && (userText || botText);
+
+  if (!hasContent) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+
+  el.hidden = false;
+  el.innerHTML = "";
+
+  if (userText) {
+    const userLine = document.createElement("div");
+    userLine.className = "voice-live-line voice-live-user";
+    const label = document.createElement("span");
+    label.className = "voice-live-label";
+    label.textContent = "You";
+    const text = document.createElement("span");
+    text.className = "voice-live-text";
+    text.textContent = userText;
+    userLine.appendChild(label);
+    userLine.appendChild(text);
+    el.appendChild(userLine);
+  }
+
+  if (botText) {
+    const botLine = document.createElement("div");
+    botLine.className = "voice-live-line voice-live-bot";
+    const label = document.createElement("span");
+    label.className = "voice-live-label";
+    label.textContent = "Bot";
+    const text = document.createElement("span");
+    text.className = "voice-live-text";
+    text.textContent = botText;
+    botLine.appendChild(label);
+    botLine.appendChild(text);
+    el.appendChild(botLine);
+  }
 }
 
 function scrollVoiceTranscript() {

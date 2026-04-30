@@ -42,17 +42,21 @@ export class VoiceManager {
   private internalState: VoiceManagerInternalState = "idle";
   private pythonInfo: PythonInfo | null = null;
   private config: VoiceConfig = { ...DEFAULT_CONFIG };
+  private mcpAuthToken: string | null = null;
+  private ensureMcpServer: (() => Promise<string | null>) | null = null;
   private getPreferences: (() => Record<string, unknown>) | null = null;
   private updatePreferences: ((patch: Record<string, unknown>) => void) | null = null;
 
   init(
     mainWindow: BrowserWindow,
     getPreferences: () => Record<string, unknown>,
-    updatePreferences: (patch: Record<string, unknown>) => void
+    updatePreferences: (patch: Record<string, unknown>) => void,
+    ensureMcpServer?: () => Promise<string | null>
   ): void {
     this.mainWindow = mainWindow;
     this.getPreferences = getPreferences;
     this.updatePreferences = updatePreferences;
+    this.ensureMcpServer = ensureMcpServer ?? null;
 
     const prefs = getPreferences();
     if (prefs.voiceConfig && typeof prefs.voiceConfig === "object") {
@@ -67,6 +71,17 @@ export class VoiceManager {
     ipcMain.handle("voice:checkPython", async () => this.checkPython());
     ipcMain.handle("voice:installDeps", async () => this.installDeps());
     ipcMain.handle("voice:getBotPort", () => this.botPort);
+    ipcMain.handle("voice:clientLog", (_event, message: string) => this.logClientMessage(message));
+    ipcMain.handle("voice:webrtcOffer", (_event, endpoint: string, payload: unknown) =>
+      this.requestBotJson("POST", endpoint, payload)
+    );
+    ipcMain.handle("voice:webrtcIce", (_event, endpoint: string, payload: unknown) =>
+      this.requestBotJson("PATCH", endpoint, payload)
+    );
+  }
+
+  setMcpAuthToken(token: string): void {
+    this.mcpAuthToken = token;
   }
 
   async dispose(): Promise<void> {
@@ -79,7 +94,10 @@ export class VoiceManager {
       "voice:updateConfig",
       "voice:checkPython",
       "voice:installDeps",
-      "voice:getBotPort"
+      "voice:getBotPort",
+      "voice:clientLog",
+      "voice:webrtcOffer",
+      "voice:webrtcIce"
     ]) {
       ipcMain.removeHandler(channel);
     }
@@ -112,6 +130,16 @@ export class VoiceManager {
         this.internalState = "error";
         this.setState("error");
         return { success: false, error: deps.error || "Voice dependency installation failed." };
+      }
+
+      // Ensure MCP server is running for voice tool access
+      if (this.ensureMcpServer && !this.mcpAuthToken) {
+        try {
+          const token = await this.ensureMcpServer();
+          if (token) this.mcpAuthToken = token;
+        } catch (err) {
+          console.warn("[VoiceManager] Could not start MCP server for voice:", err);
+        }
       }
 
       const port = await this.findFreePort();
@@ -231,12 +259,15 @@ export class VoiceManager {
     const args = [
       botScript,
       "--port", String(port),
-      "--host", "localhost",
-      "--mcp-url", "http://127.0.0.1:4141/mcp",
+      "--host", "127.0.0.1",
       "--llm-provider", this.config.llmProvider,
       "--stt-provider", this.config.sttProvider,
       "--tts-provider", this.config.ttsProvider
     ];
+
+    if (this.mcpAuthToken) {
+      args.push("--mcp-url", "http://127.0.0.1:4141/mcp");
+    }
 
     if (this.config.ttsVoice) args.push("--tts-voice", this.config.ttsVoice);
     if (this.config.enableSubagents) args.push("--enable-subagents");
@@ -244,6 +275,10 @@ export class VoiceManager {
     const env = { ...process.env } as Record<string, string>;
     for (const [key, value] of Object.entries(this.config.apiKeys)) {
       if (value) env[this.apiKeyEnvName(key)] = value;
+    }
+
+    if (this.mcpAuthToken) {
+      env["HYDRA_MCP_AUTH_TOKEN"] = this.mcpAuthToken;
     }
 
     this.botProcess = spawn(python.path, args, {
@@ -291,7 +326,7 @@ export class VoiceManager {
 
   private healthCheck(port: number): Promise<boolean> {
     return new Promise((resolve) => {
-      const req = http.get(`http://localhost:${port}/health`, (res) => {
+      const req = http.get(`http://127.0.0.1:${port}/health`, (res) => {
         resolve(res.statusCode === 200);
         res.resume();
       });
@@ -366,6 +401,71 @@ export class VoiceManager {
     if (line) this.emit("voice:installProgress", line);
   }
 
+  private logClientMessage(message: string): void {
+    const text = typeof message === "string" ? message.trim() : String(message || "");
+    if (text) console.log("[VoiceClient]", text.slice(0, 1000));
+  }
+
+  private requestBotJson(method: "POST" | "PATCH", endpoint: string, payload: unknown): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      let url: URL;
+      try {
+        url = new URL(endpoint);
+      } catch {
+        reject(new Error(`Invalid voice bot endpoint: ${endpoint}`));
+        return;
+      }
+
+      if (url.protocol !== "http:" || !["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname)) {
+        reject(new Error(`Refusing voice bot request to untrusted endpoint: ${endpoint}`));
+        return;
+      }
+
+      const hostname = url.hostname === "localhost" ? "127.0.0.1" : url.hostname;
+      const body = JSON.stringify(payload ?? {});
+      const req = http.request(
+        {
+          method,
+          hostname,
+          port: url.port,
+          path: `${url.pathname}${url.search}`,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(body)
+          },
+          timeout: 10000
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk: Buffer) => chunks.push(chunk));
+          res.on("end", () => {
+            const text = Buffer.concat(chunks).toString("utf8");
+            if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+              reject(new Error(`Voice bot ${method} ${url.pathname} failed with HTTP ${res.statusCode}: ${text}`));
+              return;
+            }
+
+            if (!text) {
+              resolve({});
+              return;
+            }
+
+            try {
+              resolve(JSON.parse(text));
+            } catch (error) {
+              reject(error);
+            }
+          });
+        }
+      );
+
+      req.on("error", reject);
+      req.on("timeout", () => req.destroy(new Error(`Voice bot ${method} ${url.pathname} timed out`)));
+      req.write(body);
+      req.end();
+    });
+  }
+
   private voiceDir(): string {
     const devPath = path.join(__dirname, "..", "..", "voice");
     return fs.existsSync(devPath) ? devPath : path.join(__dirname, "voice");
@@ -398,7 +498,7 @@ export class VoiceManager {
   private isPortAvailable(port: number): Promise<boolean> {
     return new Promise((resolve) => {
       const server = net.createServer();
-      server.listen(port, "localhost", () => server.close(() => resolve(true)));
+      server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
       server.on("error", () => resolve(false));
     });
   }
@@ -423,9 +523,10 @@ export class VoiceManager {
 export function createVoiceManager(
   mainWindow: BrowserWindow,
   getPreferences: () => Record<string, unknown>,
-  updatePreferences: (patch: Record<string, unknown>) => void
+  updatePreferences: (patch: Record<string, unknown>) => void,
+  ensureMcpServer?: () => Promise<string | null>
 ): VoiceManager {
   const manager = new VoiceManager();
-  manager.init(mainWindow, getPreferences, updatePreferences);
+  manager.init(mainWindow, getPreferences, updatePreferences, ensureMcpServer);
   return manager;
 }

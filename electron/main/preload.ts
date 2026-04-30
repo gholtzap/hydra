@@ -366,6 +366,11 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     checkPython: () => invoke<{ found: boolean; path?: string; version?: string }>("voice:checkPython"),
     installVoiceDeps: () => invoke<{ success: boolean; error?: string }>("voice:installDeps"),
     getVoiceBotPort: () => invoke<number | null>("voice:getBotPort"),
+    logVoiceClient: (message: string) => invoke<void>("voice:clientLog", message),
+    postVoiceWebRTCOffer: (endpoint: string, payload: unknown) =>
+      invoke<unknown>("voice:webrtcOffer", endpoint, payload),
+    patchVoiceWebRTCIce: (endpoint: string, payload: unknown) =>
+      invoke<unknown>("voice:webrtcIce", endpoint, payload),
     onVoiceCallStateChanged: (callback: (state: VoiceCallState) => void) =>
       subscribe<VoiceCallState>("voice:stateChanged", callback),
     onVoiceInstallProgress: (callback: (line: string) => void) =>

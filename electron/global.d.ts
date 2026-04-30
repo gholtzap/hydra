@@ -161,6 +161,9 @@ interface ClaudeWorkspaceApi {
   checkPython: () => Promise<{ found: boolean; path?: string; version?: string }>;
   installVoiceDeps: () => Promise<{ success: boolean; error?: string }>;
   getVoiceBotPort: () => Promise<number | null>;
+  logVoiceClient: (message: string) => Promise<void>;
+  postVoiceWebRTCOffer: (endpoint: string, payload: unknown) => Promise<unknown>;
+  patchVoiceWebRTCIce: (endpoint: string, payload: unknown) => Promise<unknown>;
   onVoiceCallStateChanged: (callback: (state: VoiceCallState) => void) => Unsubscribe;
   onVoiceInstallProgress: (callback: (line: string) => void) => Unsubscribe;
   onVoiceError: (callback: (error: { code: string; message: string }) => void) => Unsubscribe;

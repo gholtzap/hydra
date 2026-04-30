@@ -287,7 +287,8 @@ const { createVoiceManager } = require("./voice-manager") as {
   createVoiceManager: (
     mainWindow: ElectronBrowserWindow,
     getPreferences: () => Record<string, unknown>,
-    updatePreferences: (patch: Record<string, unknown>) => void
+    updatePreferences: (patch: Record<string, unknown>) => void,
+    ensureMcpServer?: () => Promise<string | null>
   ) => VoiceManager;
 };
 
@@ -644,6 +645,7 @@ class AppController {
   knownPlanFiles: Set<string>;
   plansDirWatcher: ReturnType<typeof fs.watch> | null;
   mcpServer: HydraMcpServer | null;
+  mcpAuthToken: string | null;
   voiceManager: VoiceManager | null;
   authClient: HydraAuthClient | null;
   authMainSetup: Promise<void>;
@@ -675,6 +677,7 @@ class AppController {
     this.knownPlanFiles = new Set();
     this.plansDirWatcher = null;
     this.mcpServer = null;
+    this.mcpAuthToken = null;
     this.voiceManager = null;
     const authServerUrl = this.resolveAuthServerUrl();
     this.authClient = new HydraAuthClient(authServerUrl, {
@@ -1010,6 +1013,22 @@ class AppController {
       this.window = null;
     });
 
+    window.webContents.session.setPermissionRequestHandler(
+      (_webContents, permission, callback) => {
+        if (permission === "media") {
+          callback(true);
+          return;
+        }
+        callback(false);
+      }
+    );
+
+    window.webContents.session.setPermissionCheckHandler(
+      (_webContents, permission) => {
+        return permission === "media";
+      }
+    );
+
     const denyUnexpectedNavigation = (
       event: { preventDefault: () => void },
       navigationUrl: string
@@ -1027,7 +1046,8 @@ class AppController {
     this.voiceManager = createVoiceManager(
       window,
       () => this.state.preferences as unknown as Record<string, unknown>,
-      (patch) => this.updatePreferences(patch)
+      (patch) => this.updatePreferences(patch),
+      () => this.ensureMcpServerForVoice()
     );
     // Auth gate: check for valid session before loading the main app
     this.loadAuthenticatedPage(window);
@@ -3259,6 +3279,26 @@ class AppController {
     }
   }
 
+  private async ensureMcpServerForVoice(): Promise<string | null> {
+    if (this.mcpServer) {
+      if (this.mcpAuthToken) {
+        this.voiceManager?.setMcpAuthToken(this.mcpAuthToken);
+      }
+      return this.mcpAuthToken;
+    }
+    try {
+      const auth = await resolveMcpServerAuthToken();
+      this.mcpAuthToken = auth.token;
+      this.mcpServer = await startMcpServer(this, { authToken: auth.token });
+      this.voiceManager?.setMcpAuthToken(auth.token);
+      console.log("[MCP] Auto-started MCP server for voice mode.");
+      return auth.token;
+    } catch (err) {
+      console.error("[MCP] Failed to auto-start MCP server:", err);
+      return null;
+    }
+  }
+
   async performShutdown(): Promise<void> {
     if (this.voiceManager) {
       await this.voiceManager.dispose();
@@ -3707,6 +3747,8 @@ async function maybeStartMcpServer(controller: AppController): Promise<void> {
   }
 
   const auth = await resolveMcpServerAuthToken();
+  controller.mcpAuthToken = auth.token;
+  controller.voiceManager?.setMcpAuthToken(auth.token);
   controller.mcpServer = await startMcpServer(controller, { authToken: auth.token });
 
   if (auth.source === "env") {

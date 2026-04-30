@@ -366,6 +366,7 @@ type UiState = {
   selectedSessionIds: Set<string>;
   voiceCallState: VoiceCallState;
   voiceMuted: boolean;
+  voiceMinimized: boolean;
   voiceTranscript: { role: "user" | "bot" | "system"; text: string; time: string }[];
   voiceInstallLog: string[];
   voiceLiveUserText: string;
@@ -476,6 +477,7 @@ const ui: UiState = {
   selectedSessionIds: new Set<string>(),
   voiceCallState: "idle" as VoiceCallState,
   voiceMuted: false,
+  voiceMinimized: false,
   voiceTranscript: [] as { role: "user" | "bot" | "system"; text: string; time: string }[],
   voiceInstallLog: [] as string[],
   voiceLiveUserText: "",
@@ -496,6 +498,7 @@ const planReviewDialog = document.getElementById("plan-review-dialog") as HTMLDi
 const tokscaleDialog = document.getElementById("tokscale-dialog") as HTMLDialogElement;
 const lazygitDialog = document.getElementById("lazygit-dialog") as HTMLDialogElement;
 const voiceDialog = document.getElementById("voice-dialog") as HTMLDialogElement;
+const voiceMiniOverlayElement = document.getElementById("voice-mini-overlay") as HTMLElement;
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
 const EPHEMERAL_TOOL_DIALOGS: Record<
@@ -1187,10 +1190,15 @@ planReviewDialog.addEventListener("cancel", (event) => {
 
 api.onVoiceCallStateChanged((voiceState) => {
   ui.voiceCallState = voiceState;
+  if (voiceState === "idle") {
+    ui.voiceMinimized = false;
+  }
   renderSidebar();
   if (voiceDialog.open) {
     renderVoiceDialog();
   }
+  renderVoiceLiveCaption();
+  renderVoiceMiniOverlay();
 });
 
 api.onVoiceInstallProgress((line) => {
@@ -1208,6 +1216,7 @@ api.onVoiceError((err) => {
   if (voiceDialog.open) {
     renderVoiceDialog();
   }
+  renderVoiceMiniOverlay();
 });
 
 for (const [toolId, definition] of Object.entries(EPHEMERAL_TOOL_DIALOGS) as Array<
@@ -6253,6 +6262,12 @@ async function handleClick(event) {
     case "voice-end":
       closeVoiceModal();
       break;
+    case "voice-minimize":
+      minimizeVoiceModal();
+      break;
+    case "voice-restore":
+      restoreVoiceModal();
+      break;
     case "voice-settings-toggle":
       break;
     case "voice-save-config":
@@ -8487,8 +8502,17 @@ function handleEphemeralToolOutput(
 
 // ── Voice modal ─────────────────────────────────────────────────
 
-let pipecatClient: InstanceType<typeof window.PipecatClient> | null = null;
+type VoiceClientLike = {
+  initDevices: () => Promise<void>;
+  connect: (params?: unknown) => Promise<unknown>;
+  disconnect: () => Promise<void>;
+  enableMic: (enabled: boolean) => void | Promise<void>;
+  readonly isMicEnabled?: boolean;
+};
+
+let pipecatClient: VoiceClientLike | null = null;
 let voiceSessionRunId = 0;
+let voiceDialogCloseMode: "end" | "minimize" = "end";
 
 function voiceTimeStamp() {
   const d = new Date();
@@ -8496,11 +8520,20 @@ function voiceTimeStamp() {
 }
 
 function appendVoiceTranscript(role: "user" | "bot" | "system", text: string) {
-  ui.voiceTranscript.push({ role, text, time: voiceTimeStamp() });
+  const normalized = text.trim();
+  if (!normalized) return false;
+
+  const lastEntry = ui.voiceTranscript[ui.voiceTranscript.length - 1];
+  if (lastEntry?.role === role && lastEntry.text === normalized) {
+    return false;
+  }
+
+  ui.voiceTranscript.push({ role, text: normalized, time: voiceTimeStamp() });
+  return true;
 }
 
 function voiceSessionIsCurrent(runId: number) {
-  return voiceDialog.open && runId === voiceSessionRunId;
+  return runId === voiceSessionRunId && (voiceDialog.open || ui.voiceMinimized);
 }
 
 function markVoiceError(text: string) {
@@ -8508,6 +8541,391 @@ function markVoiceError(text: string) {
   appendVoiceTranscript("system", text);
   renderSidebar();
   renderVoiceDialog();
+  renderVoiceMiniOverlay();
+}
+
+function logVoiceClient(message: string) {
+  console.log("[Voice]", message);
+  void api.logVoiceClient(message);
+}
+
+type VoiceWebRTCClientCallbacks = {
+  onConnected?: () => void;
+  onDisconnected?: () => void;
+  onBotReady?: () => void;
+  onUserStartedSpeaking?: () => void;
+  onUserStoppedSpeaking?: () => void;
+  onUserTranscript?: (data: { text: string; final: boolean }) => void;
+  onBotStartedSpeaking?: () => void;
+  onBotStoppedSpeaking?: () => void;
+  onBotOutput?: (data: { text: string; spoken: boolean }) => void;
+  onLocalAudioLevel?: (level: number) => void;
+  onError?: (error: { message?: string }) => void;
+  onTrackStarted?: (track: MediaStreamTrack, participant?: { local?: boolean }) => void;
+};
+
+class HydraSmallWebRTCClient implements VoiceClientLike {
+  private callbacks: VoiceWebRTCClientCallbacks;
+  private enableMicOnStart: boolean;
+  private stream: MediaStream | null = null;
+  private pc: RTCPeerConnection | null = null;
+  private dc: RTCDataChannel | null = null;
+  private pcId: string | null = null;
+  private offerEndpoint = "";
+  private queuedCandidates: RTCIceCandidate[] = [];
+  private canSendCandidates = false;
+  private audioContext: AudioContext | null = null;
+  private audioLevelInterval: number | null = null;
+  private keepAliveInterval: number | null = null;
+  private connected = false;
+  private connectReject: ((reason?: unknown) => void) | null = null;
+
+  constructor(options: { enableMic?: boolean; callbacks?: VoiceWebRTCClientCallbacks }) {
+    this.enableMicOnStart = options.enableMic ?? true;
+    this.callbacks = options.callbacks || {};
+  }
+
+  get isMicEnabled() {
+    return !!this.stream?.getAudioTracks().some((track) => track.enabled);
+  }
+
+  async initDevices() {
+    if (this.stream) return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Microphone capture is unavailable in this Electron renderer.");
+    }
+
+    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    for (const track of this.stream.getAudioTracks()) {
+      track.enabled = this.enableMicOnStart;
+    }
+    this.startLocalAudioLevel();
+  }
+
+  async connect(params?: unknown) {
+    const endpoint = this.resolveOfferEndpoint(params);
+    this.offerEndpoint = endpoint;
+
+    await this.initDevices();
+
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let botReady = false;
+      const timeout = window.setTimeout(() => {
+        if (!settled) {
+          reject(new Error(botReady ? "Timed out completing WebRTC connection." : "Timed out waiting for Pipecat bot-ready."));
+          void this.disconnect();
+        }
+      }, 30000);
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        this.connectReject = null;
+        resolve();
+      };
+
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        this.connectReject = null;
+        reject(error instanceof Error ? error : new Error(String(error || "WebRTC connection failed.")));
+        void this.disconnect();
+      };
+
+      this.connectReject = fail;
+
+      this.startPeerConnection(endpoint, () => {
+        botReady = true;
+        finish();
+      }).catch(fail);
+    });
+  }
+
+  async disconnect() {
+    this.connectReject = null;
+    this.connected = false;
+    this.canSendCandidates = false;
+    this.queuedCandidates = [];
+
+    if (this.audioLevelInterval !== null) {
+      window.clearInterval(this.audioLevelInterval);
+      this.audioLevelInterval = null;
+    }
+
+    if (this.keepAliveInterval !== null) {
+      window.clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+    }
+
+    if (this.dc) {
+      this.dc.close();
+      this.dc = null;
+    }
+
+    if (this.pc) {
+      for (const sender of this.pc.getSenders()) {
+        sender.track?.stop();
+      }
+      this.pc.close();
+      this.pc = null;
+    }
+
+    if (this.stream) {
+      for (const track of this.stream.getTracks()) {
+        track.stop();
+      }
+      this.stream = null;
+    }
+
+    if (this.audioContext) {
+      await this.audioContext.close().catch(() => undefined);
+      this.audioContext = null;
+    }
+
+    this.callbacks.onDisconnected?.();
+  }
+
+  enableMic(enabled: boolean) {
+    this.enableMicOnStart = enabled;
+    for (const track of this.stream?.getAudioTracks() || []) {
+      track.enabled = enabled;
+    }
+    this.sendSignallingMessage({ type: "trackStatus", receiver_index: 0, enabled });
+  }
+
+  private resolveOfferEndpoint(params: unknown) {
+    if (!params || typeof params !== "object") {
+      throw new Error("Missing WebRTC offer endpoint.");
+    }
+
+    const record = params as { endpoint?: unknown; webrtcUrl?: unknown; webrtcRequestParams?: { endpoint?: unknown } };
+    const endpoint = record.webrtcRequestParams?.endpoint || record.webrtcUrl || record.endpoint;
+    if (typeof endpoint !== "string") {
+      throw new Error("Invalid WebRTC offer endpoint.");
+    }
+    return endpoint;
+  }
+
+  private async startPeerConnection(endpoint: string, onBotReady: () => void) {
+    const pc = new RTCPeerConnection({ iceServers: [] });
+    this.pc = pc;
+
+    pc.addEventListener("iceconnectionstatechange", () => {
+      logVoiceClient(`ICE state: ${pc.iceConnectionState}`);
+      if (["failed", "closed"].includes(pc.iceConnectionState) && this.connectReject) {
+        this.connectReject?.(new Error(`ICE connection ${pc.iceConnectionState}.`));
+      }
+    });
+    pc.addEventListener("connectionstatechange", () => {
+      logVoiceClient(`Peer connection state: ${pc.connectionState}`);
+      if (["failed", "closed"].includes(pc.connectionState) && this.connectReject) {
+        this.connectReject?.(new Error(`Peer connection ${pc.connectionState}.`));
+      }
+    });
+    pc.addEventListener("track", (event) => {
+      logVoiceClient(`remote ${event.track.kind} track received`);
+      this.callbacks.onTrackStarted?.(event.track, { local: false });
+    });
+    pc.addEventListener("icecandidate", (event) => {
+      if (event.candidate) {
+        this.queuedCandidates.push(event.candidate);
+        void this.flushIceCandidates();
+      }
+    });
+
+    pc.addTransceiver("audio", { direction: "sendrecv" });
+    pc.addTransceiver("video", { direction: "sendrecv" });
+
+    const audioTrack = this.stream?.getAudioTracks()[0];
+    if (!audioTrack) {
+      throw new Error("No microphone track is available.");
+    }
+    await pc.getTransceivers()[0].sender.replaceTrack(audioTrack);
+
+    const dc = pc.createDataChannel("chat", { ordered: true });
+    this.dc = dc;
+
+    dc.addEventListener("open", () => {
+      logVoiceClient("data channel open");
+      this.connected = true;
+      this.callbacks.onConnected?.();
+      this.sendSignallingMessage({ type: "trackStatus", receiver_index: 0, enabled: this.isMicEnabled });
+      this.sendSignallingMessage({ type: "trackStatus", receiver_index: 1, enabled: false });
+      this.sendRtviMessage("client-ready", {
+        version: "1.2.0",
+        about: {
+          library: "hydra",
+          platform: "electron"
+        }
+      });
+      this.keepAliveInterval = window.setInterval(() => {
+        if (this.dc?.readyState === "open") {
+          this.dc.send(`ping: ${Date.now()}`);
+        }
+      }, 1000);
+    });
+    dc.addEventListener("close", () => {
+      logVoiceClient("data channel closed");
+      if (this.keepAliveInterval !== null) {
+        window.clearInterval(this.keepAliveInterval);
+        this.keepAliveInterval = null;
+      }
+      if (this.connectReject) {
+        this.connectReject?.(new Error("Data channel closed before connection completed."));
+      }
+    });
+    dc.addEventListener("error", () => {
+      this.connectReject?.(new Error("Data channel error."));
+    });
+    dc.addEventListener("message", (event) => this.handleDataChannelMessage(event.data, onBotReady));
+
+    logVoiceClient("creating WebRTC offer");
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await this.waitForIceGatheringComplete(pc);
+
+    const localDescription = pc.localDescription;
+    if (!localDescription) {
+      throw new Error("WebRTC local description was not created.");
+    }
+
+    logVoiceClient(`posting WebRTC offer to ${endpoint}`);
+    const answer = await api.postVoiceWebRTCOffer(endpoint, {
+      sdp: localDescription.sdp,
+      type: localDescription.type,
+      pc_id: this.pcId,
+      restart_pc: false
+    }) as { pc_id?: string; sdp: string; type: RTCSdpType };
+    this.pcId = answer.pc_id || null;
+    logVoiceClient(`received WebRTC answer${this.pcId ? ` for ${this.pcId}` : ""}`);
+    await pc.setRemoteDescription({ type: answer.type, sdp: answer.sdp });
+    this.canSendCandidates = true;
+    await this.flushIceCandidates();
+  }
+
+  private waitForIceGatheringComplete(pc: RTCPeerConnection) {
+    if (pc.iceGatheringState === "complete") return Promise.resolve();
+
+    return new Promise<void>((resolve) => {
+      const timeout = window.setTimeout(done, 2000);
+      const onChange = () => {
+        if (pc.iceGatheringState === "complete") done();
+      };
+      function done() {
+        window.clearTimeout(timeout);
+        pc.removeEventListener("icegatheringstatechange", onChange);
+        resolve();
+      }
+      pc.addEventListener("icegatheringstatechange", onChange);
+    });
+  }
+
+  private async flushIceCandidates() {
+    if (!this.canSendCandidates || !this.pcId || !this.queuedCandidates.length) return;
+
+    const candidates = this.queuedCandidates.splice(0, this.queuedCandidates.length).map((candidate) => ({
+      candidate: candidate.candidate,
+      sdp_mid: candidate.sdpMid,
+      sdp_mline_index: candidate.sdpMLineIndex
+    }));
+
+    await api.patchVoiceWebRTCIce(this.offerEndpoint, { pc_id: this.pcId, candidates })
+      .catch((error) => logVoiceClient(`ICE candidate PATCH failed: ${error instanceof Error ? error.message : String(error)}`));
+  }
+
+  private handleDataChannelMessage(raw: unknown, onBotReady: () => void) {
+    if (typeof raw !== "string" || !raw.startsWith("{")) return;
+
+    let message: { label?: string; type?: string; data?: any; message?: { type?: string } };
+    try {
+      message = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    if (message.type === "signalling") {
+      logVoiceClient(`signalling message: ${message.message?.type || "unknown"}`);
+      return;
+    }
+
+    if (message.label !== "rtvi-ai") return;
+
+    switch (message.type) {
+      case "bot-ready":
+        this.callbacks.onBotReady?.();
+        onBotReady();
+        break;
+      case "error":
+        this.callbacks.onError?.({ message: message.data?.message || message.data?.error || "Pipecat bot error." });
+        break;
+      case "user-started-speaking":
+        this.callbacks.onUserStartedSpeaking?.();
+        break;
+      case "user-stopped-speaking":
+        this.callbacks.onUserStoppedSpeaking?.();
+        break;
+      case "user-transcription":
+        this.callbacks.onUserTranscript?.(message.data);
+        break;
+      case "bot-started-speaking":
+        this.callbacks.onBotStartedSpeaking?.();
+        break;
+      case "bot-stopped-speaking":
+        this.callbacks.onBotStoppedSpeaking?.();
+        break;
+      case "bot-output":
+        this.callbacks.onBotOutput?.(message.data);
+        break;
+      default:
+        break;
+    }
+  }
+
+  private sendSignallingMessage(message: unknown) {
+    this.sendDataChannelJson({ type: "signalling", message });
+  }
+
+  private sendRtviMessage(type: string, data: unknown) {
+    this.sendDataChannelJson({
+      id: crypto.randomUUID(),
+      label: "rtvi-ai",
+      type,
+      data
+    });
+  }
+
+  private sendDataChannelJson(payload: unknown) {
+    if (this.dc?.readyState === "open") {
+      this.dc.send(JSON.stringify(payload));
+    }
+  }
+
+  private startLocalAudioLevel() {
+    if (!this.stream || this.audioLevelInterval !== null) return;
+
+    const AudioContextConstructor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextConstructor) return;
+
+    this.audioContext = new AudioContextConstructor();
+    const analyser = this.audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    this.audioContext.createMediaStreamSource(this.stream).connect(analyser);
+
+    const data = new Uint8Array(analyser.fftSize);
+    this.audioLevelInterval = window.setInterval(() => {
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (const value of data) {
+        const normalized = (value - 128) / 128;
+        sum += normalized * normalized;
+      }
+      const rms = Math.sqrt(sum / data.length);
+      this.callbacks.onLocalAudioLevel?.(Math.min(1, rms * 5));
+    }, 100);
+  }
 }
 
 function voiceRequiredApiKeys(config: VoiceConfig) {
@@ -8585,7 +9003,11 @@ function voiceCallIsActive() {
 
 function toggleVoiceCall() {
   if (voiceCallIsActive()) {
-    closeVoiceModal();
+    if (ui.voiceMinimized) {
+      restoreVoiceModal();
+    } else {
+      closeVoiceModal();
+    }
   } else {
     void openVoiceModal();
   }
@@ -8593,9 +9015,14 @@ function toggleVoiceCall() {
 
 async function openVoiceModal() {
   if (voiceDialog.open) return;
+  if (ui.voiceMinimized && voiceCallIsActive()) {
+    restoreVoiceModal();
+    return;
+  }
 
   ui.voiceTranscript = [];
   ui.voiceMuted = false;
+  ui.voiceMinimized = false;
   ui.voiceInstallLog = [];
 
   renderVoiceDialog();
@@ -8607,40 +9034,71 @@ async function openVoiceModal() {
 }
 
 function onVoiceDialogClose() {
+  if (voiceDialogCloseMode === "minimize") {
+    voiceDialogCloseMode = "end";
+    renderSidebar();
+    renderVoiceLiveCaption();
+    renderVoiceMiniOverlay();
+    return;
+  }
+
+  voiceDialogCloseMode = "end";
+  endVoiceSession();
+}
+
+function endVoiceSession() {
   voiceSessionRunId += 1;
   disconnectPipecatClient();
   if (ui.voiceCallState !== "idle") {
     void api.stopVoiceCall();
     ui.voiceCallState = "idle";
   }
+  ui.voiceMinimized = false;
   ui.voiceLiveUserText = "";
   ui.voiceLiveBotText = "";
   renderVoiceLiveCaption();
+  renderVoiceMiniOverlay();
   renderSidebar();
 }
 
 function closeVoiceModal() {
-  voiceSessionRunId += 1;
-  disconnectPipecatClient();
-  if (ui.voiceCallState !== "idle") {
-    void api.stopVoiceCall();
-    ui.voiceCallState = "idle";
-  }
-  ui.voiceLiveUserText = "";
-  ui.voiceLiveBotText = "";
-  renderVoiceLiveCaption();
+  voiceDialogCloseMode = "end";
   if (voiceDialog.open) {
     voiceDialog.close();
+    return;
   }
-  renderSidebar();
+
+  endVoiceSession();
+}
+
+function minimizeVoiceModal() {
+  if (!voiceDialog.open || !voiceCallIsActive()) return;
+
+  ui.voiceMinimized = true;
+  voiceDialogCloseMode = "minimize";
+  voiceDialog.close();
+}
+
+function restoreVoiceModal() {
+  if (voiceDialog.open) return;
+
+  ui.voiceMinimized = false;
+  voiceDialogCloseMode = "end";
+  renderVoiceDialog();
+  voiceDialog.showModal();
+  voiceDialog.addEventListener("close", onVoiceDialogClose, { once: true });
+  renderVoiceLiveCaption();
+  renderVoiceMiniOverlay();
 }
 
 async function startVoiceSession() {
   const runId = ++voiceSessionRunId;
   ui.voiceCallState = "connecting";
   ui.voiceMuted = false;
+  ui.voiceMinimized = false;
   renderSidebar();
   renderVoiceDialog();
+  renderVoiceMiniOverlay();
 
   try {
     const config = await api.getVoiceConfig();
@@ -8698,74 +9156,89 @@ async function startVoiceSession() {
 async function connectPipecatClient(port: number, runId = voiceSessionRunId) {
   disconnectPipecatClient();
 
-  if (typeof window.PipecatClient === "undefined" || typeof window.SmallWebRTCTransport === "undefined") {
+  if (
+    typeof RTCPeerConnection === "undefined" ||
+    !navigator.mediaDevices?.getUserMedia
+  ) {
     await api.stopVoiceCall();
     if (!voiceSessionIsCurrent(runId)) return;
-    markVoiceError("Voice mode is missing required app files. Rebuild or reinstall Hydra, then retry.");
+    markVoiceError("Voice mode is missing browser WebRTC or microphone support in this app build.");
     return;
   }
 
   try {
-    pipecatClient = new window.PipecatClient({
-      transport: new window.SmallWebRTCTransport(),
-      enableCam: false,
+    logVoiceClient(`creating Hydra SmallWebRTC client for port ${port}`);
+    pipecatClient = new HydraSmallWebRTCClient({
       enableMic: true,
       callbacks: {
         onConnected: () => {
           if (!voiceSessionIsCurrent(runId)) return;
+          logVoiceClient("WebRTC transport connected");
           appendVoiceTranscript("system", "Connected. Start speaking.");
           renderVoiceDialog();
+          renderVoiceMiniOverlay();
         },
         onDisconnected: () => {
           if (!voiceSessionIsCurrent(runId)) return;
+          logVoiceClient("WebRTC transport disconnected");
           appendVoiceTranscript("system", "Disconnected.");
           renderVoiceDialog();
+          renderVoiceMiniOverlay();
         },
         onBotReady: () => {
-          // Bot pipeline is ready
+          logVoiceClient("Pipecat bot ready");
         },
         onUserStartedSpeaking: () => {
           if (!voiceSessionIsCurrent(runId)) return;
           ui.voiceLiveUserText = "";
           renderVoiceLiveCaption();
+          renderVoiceMiniOverlay();
         },
         onUserStoppedSpeaking: () => {
           if (!voiceSessionIsCurrent(runId)) return;
           ui.voiceLiveUserText = "";
           renderVoiceLiveCaption();
+          renderVoiceMiniOverlay();
         },
         onUserTranscript: (data: { text: string; final: boolean }) => {
           if (!voiceSessionIsCurrent(runId)) return;
           if (data.final) {
             if (data.text.trim()) {
-              appendVoiceTranscript("user", data.text.trim());
-              renderVoiceDialog();
-              scrollVoiceTranscript();
+              if (appendVoiceTranscript("user", data.text.trim())) {
+                renderVoiceDialog();
+                scrollVoiceTranscript();
+              }
             }
             ui.voiceLiveUserText = "";
           } else {
             ui.voiceLiveUserText = data.text || "";
           }
           renderVoiceLiveCaption();
+          renderVoiceMiniOverlay();
         },
         onBotStartedSpeaking: () => {
           if (!voiceSessionIsCurrent(runId)) return;
           ui.voiceLiveBotText = "";
           renderVoiceLiveCaption();
+          renderVoiceMiniOverlay();
         },
         onBotStoppedSpeaking: () => {
           if (!voiceSessionIsCurrent(runId)) return;
           ui.voiceLiveBotText = "";
           renderVoiceLiveCaption();
+          renderVoiceMiniOverlay();
         },
         onBotOutput: (data: { text: string; spoken: boolean }) => {
           if (!voiceSessionIsCurrent(runId)) return;
-          if (data.text.trim()) {
-            appendVoiceTranscript("bot", data.text.trim());
+          const text = data.text.trim();
+          if (text) {
+            ui.voiceLiveBotText = text;
+            renderVoiceLiveCaption();
+            renderVoiceMiniOverlay();
+          }
+          if (text && data.spoken && appendVoiceTranscript("bot", text)) {
             renderVoiceDialog();
             scrollVoiceTranscript();
-            ui.voiceLiveBotText = data.text.trim();
-            renderVoiceLiveCaption();
           }
         },
         onLocalAudioLevel: (level: number) => {
@@ -8782,7 +9255,7 @@ async function connectPipecatClient(port: number, runId = voiceSessionRunId) {
         },
         onError: (error: { message?: string }) => {
           if (!voiceSessionIsCurrent(runId)) return;
-          console.warn("[Voice] client error:", error.message || "unknown error");
+          logVoiceClient(`Pipecat client error: ${error.message || "unknown error"}`);
           markVoiceError("Voice mode hit a connection problem. Check your provider settings and retry.");
         },
         onTrackStarted: (track: MediaStreamTrack, participant: { local?: boolean } | undefined) => {
@@ -8803,15 +9276,18 @@ async function connectPipecatClient(port: number, runId = voiceSessionRunId) {
 
     if (!voiceSessionIsCurrent(runId)) return;
 
+    logVoiceClient("initializing microphone devices");
+    await pipecatClient.initDevices();
+    if (!voiceSessionIsCurrent(runId)) return;
+
+    logVoiceClient(`connecting WebRTC to http://127.0.0.1:${port}/api/offer`);
     await pipecatClient.connect({
-      webrtcRequestParams: {
-        endpoint: `http://localhost:${port}/api/offer`
-      }
+      endpoint: `http://127.0.0.1:${port}/api/offer`
     });
   } catch (err) {
     if (!voiceSessionIsCurrent(runId)) return;
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn("[Voice] connection failed:", msg);
+    logVoiceClient(`connection failed: ${msg}`);
     await api.stopVoiceCall();
     if (!voiceSessionIsCurrent(runId)) return;
     markVoiceError("Voice mode could not connect. Retry voice mode, or restart Hydra if this keeps happening.");
@@ -8839,6 +9315,7 @@ function toggleVoiceMute() {
   ui.voiceMuted = !ui.voiceMuted;
   pipecatClient.enableMic(!ui.voiceMuted);
   renderVoiceDialog();
+  renderVoiceMiniOverlay();
 }
 
 async function saveVoiceConfig() {
@@ -8883,7 +9360,7 @@ function renderVoiceLiveCaption() {
   const isListening = ui.voiceCallState === "listening";
   const userText = ui.voiceLiveUserText.trim();
   const botText = ui.voiceLiveBotText.trim();
-  const hasContent = isListening && (userText || botText);
+  const hasContent = !ui.voiceMinimized && isListening && (userText || botText);
 
   if (!hasContent) {
     el.hidden = true;
@@ -8921,6 +9398,71 @@ function renderVoiceLiveCaption() {
     botLine.appendChild(text);
     el.appendChild(botLine);
   }
+}
+
+function renderVoiceMiniOverlay() {
+  if (!voiceMiniOverlayElement) return;
+
+  const shouldShow = ui.voiceMinimized && ui.voiceCallState !== "idle";
+  voiceMiniOverlayElement.hidden = !shouldShow;
+  if (!shouldShow) {
+    voiceMiniOverlayElement.replaceChildren();
+    return;
+  }
+
+  const voiceState = ui.voiceCallState;
+  const lastUserEntry = [...ui.voiceTranscript].reverse().find((entry) => entry.role === "user");
+  const userText = ui.voiceLiveUserText.trim() || lastUserEntry?.text || "Listening for your next command.";
+  const statusText = voiceState === "connecting"
+    ? "Preparing voice"
+    : voiceState === "error"
+      ? "Voice needs attention"
+      : ui.voiceMuted
+        ? "Muted"
+        : "Listening";
+  const canMute = voiceState === "listening" && !!pipecatClient;
+
+  replaceDomChildren(
+    voiceMiniOverlayElement,
+    dom(
+      "div",
+      { className: classNames("voice-mini-card", `voice-mini-${voiceState}`) },
+      dom(
+        "div",
+        { className: "voice-mini-topline" },
+        dom(
+          "div",
+          { className: "voice-mini-status" },
+          dom("span", { className: "voice-mini-dot" }),
+          dom("span", {}, statusText)
+        ),
+        dom(
+          "div",
+          { className: "voice-mini-actions" },
+          canMute
+            ? dom("button", {
+                className: "voice-mini-btn",
+                attrs: { "data-action": "voice-mute-toggle" }
+              }, ui.voiceMuted ? "Unmute" : "Mute")
+            : null,
+          dom("button", {
+            className: "voice-mini-btn",
+            attrs: { "data-action": "voice-restore" }
+          }, "Open"),
+          dom("button", {
+            className: "voice-mini-btn voice-mini-btn-end",
+            attrs: { "data-action": "voice-end" }
+          }, "End")
+        )
+      ),
+      dom(
+        "div",
+        { className: "voice-mini-transcript" },
+        dom("span", { className: "voice-mini-speaker" }, "You"),
+        dom("span", { className: "voice-mini-text" }, userText)
+      )
+    )
+  );
 }
 
 function scrollVoiceTranscript() {
@@ -9010,10 +9552,20 @@ function renderVoiceDialog() {
               "Speak naturally. The voice agent can call Hydra MCP tools for sessions, repos, settings, and wiki actions."
             )
           ),
-          dom("button", {
-            className: "voice-close-btn",
-            attrs: { "data-action": "voice-end" }
-          }, "Close")
+          dom(
+            "div",
+            { className: "voice-header-actions" },
+            isActive
+              ? dom("button", {
+                  className: "voice-close-btn",
+                  attrs: { "data-action": "voice-minimize" }
+                }, "Minimize")
+              : null,
+            dom("button", {
+              className: "voice-close-btn",
+              attrs: { "data-action": "voice-end" }
+            }, "Close")
+          )
         ),
         // Content area (status + transcript + install log)
         dom(

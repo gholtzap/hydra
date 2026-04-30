@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import os
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -25,9 +26,9 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import IceServer, SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
+from pipecat.observers.loggers.transcription_log_observer import TranscriptionLogObserver
 from pipecat.turns.user_mute import (
     FunctionCallUserMuteStrategy,
-    MuteUntilFirstBotCompleteUserMuteStrategy,
 )
 
 
@@ -46,7 +47,7 @@ Guidelines:
 
 
 pcs_map: dict[str, SmallWebRTCConnection] = {}
-ice_servers = [IceServer(urls="stun:stun.l.google.com:19302")]
+ice_servers: list[IceServer] = []
 
 
 def create_stt(provider: str):
@@ -144,6 +145,31 @@ def create_tts(provider: str, voice: str | None = None):
     raise ValueError(f"Unknown TTS provider: {provider}")
 
 
+async def endpoint_accepts_tcp(url: str) -> bool:
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host:
+        return False
+
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=1.0)
+        writer.close()
+        await writer.wait_closed()
+        return True
+    except Exception:
+        return False
+
+
+async def close_mcp_client(mcp_client) -> None:
+    if not mcp_client:
+        return
+    try:
+        await mcp_client.close()
+    except Exception as exc:
+        logger.debug(f"Failed to close Hydra MCP client cleanly: {exc}")
+
+
 async def run_bot(webrtc_connection: SmallWebRTCConnection, args: argparse.Namespace):
     logger.info("Starting Hydra voice bot")
 
@@ -159,27 +185,43 @@ async def run_bot(webrtc_connection: SmallWebRTCConnection, args: argparse.Names
     mcp_client = None
     tools = None
     if args.mcp_url:
-        try:
-            from mcp.client.session_group import StreamableHttpParameters
-            from pipecat.services.mcp_service import MCPClient
-
-            mcp_client = MCPClient(
-                server_params=StreamableHttpParameters(url=args.mcp_url),
-            )
-            await mcp_client.start()
-            tools = await mcp_client.register_tools(llm)
-            logger.info(f"Registered {len(tools.standard_tools)} MCP tools from Hydra")
-        except Exception as exc:
-            logger.warning(f"Failed to connect to Hydra MCP server: {exc}")
+        if not await endpoint_accepts_tcp(args.mcp_url):
+            logger.warning(f"Hydra MCP server is unavailable at {args.mcp_url}")
             logger.warning("Voice agent will run without tool access")
+        else:
+            try:
+                from mcp.client.session_group import StreamableHttpParameters
+                from pipecat.services.mcp_service import MCPClient
 
-    context = LLMContext(tools=tools)
+                mcp_auth_token = os.environ.get("HYDRA_MCP_AUTH_TOKEN", "").strip()
+                mcp_headers = (
+                    {"Authorization": f"Bearer {mcp_auth_token}"}
+                    if mcp_auth_token
+                    else None
+                )
+
+                mcp_client = MCPClient(
+                    server_params=StreamableHttpParameters(
+                        url=args.mcp_url,
+                        headers=mcp_headers,
+                    ),
+                )
+                await mcp_client.start()
+                tools = await mcp_client.register_tools(llm)
+                logger.info(f"Registered {len(tools.standard_tools)} MCP tools from Hydra")
+            except Exception as exc:
+                logger.warning(f"Failed to connect to Hydra MCP server: {exc}")
+                logger.warning("Voice agent will run without tool access")
+                if mcp_client:
+                    await close_mcp_client(mcp_client)
+                    mcp_client = None
+
+    context = LLMContext(tools=tools) if tools is not None else LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(),
             user_mute_strategies=[
-                MuteUntilFirstBotCompleteUserMuteStrategy(),
                 FunctionCallUserMuteStrategy(),
             ],
         ),
@@ -202,29 +244,34 @@ async def run_bot(webrtc_connection: SmallWebRTCConnection, args: argparse.Names
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
     )
 
-    @transport.event_handler("on_client_connected")
-    async def on_client_connected(transport, client):
-        logger.info("Client connected")
+    @task.rtvi.event_handler("on_client_ready")
+    async def on_client_ready(rtvi):
+        logger.info("RTVI client ready")
         context.add_message(
             {
-                "role": "developer",
-                "content": "Greet the user briefly and say you can help control Hydra by voice. Keep it to one sentence.",
+                "role": "user",
+                "content": "Greet me briefly and say you can help control Hydra by voice. Keep it to one sentence.",
             }
         )
         await task.queue_frames([LLMRunFrame()])
+
+    @transport.event_handler("on_client_connected")
+    async def on_client_connected(transport, client):
+        logger.info("Client connected")
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.info("Client disconnected")
         await task.cancel()
 
+    task.add_observer(TranscriptionLogObserver())
+
     runner = PipelineRunner(handle_sigint=False)
 
     try:
         await runner.run(task)
     finally:
-        if mcp_client:
-            await mcp_client.close()
+        await close_mcp_client(mcp_client)
 
 
 def create_app(args: argparse.Namespace) -> FastAPI:
@@ -325,7 +372,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Hydra Voice Bot")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--host", default="localhost")
-    parser.add_argument("--mcp-url", default="http://127.0.0.1:4141/mcp")
+    parser.add_argument("--mcp-url", default=None)
     parser.add_argument("--llm-provider", default="openai")
     parser.add_argument("--stt-provider", default="deepgram")
     parser.add_argument("--tts-provider", default="cartesia")

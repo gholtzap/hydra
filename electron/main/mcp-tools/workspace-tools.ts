@@ -11,6 +11,43 @@ function textResult(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
+type RepoSearchArgs = {
+  query: string;
+  workspaceId?: string;
+  limit?: number;
+};
+
+type RepoSearchResult = {
+  id: string;
+  name: string;
+  path: string;
+  workspaceID: string;
+  matchedFields: string[];
+};
+
+type WorkspaceSearchArgs = {
+  query: string;
+  limit?: number;
+};
+
+type WorkspaceSearchResult = {
+  id: string;
+  name: string;
+  rootPath: string;
+  createdAt: string;
+  matchedFields: string[];
+};
+
+const DEFAULT_REPO_SEARCH_LIMIT = 10;
+const MAX_REPO_SEARCH_LIMIT = 50;
+
+function boundedSearchLimit(limit: number | undefined): number {
+  if (typeof limit !== "number" || !Number.isFinite(limit)) {
+    return DEFAULT_REPO_SEARCH_LIMIT;
+  }
+  return Math.max(1, Math.min(MAX_REPO_SEARCH_LIMIT, Math.trunc(limit)));
+}
+
 export function register(server: McpServer, appController: AppControllerHandle): void {
   server.tool(
     "list_workspaces",
@@ -18,6 +55,44 @@ export function register(server: McpServer, appController: AppControllerHandle):
     {},
     async () => {
       return textResult(appController.state.workspaces);
+    }
+  );
+
+  server.tool(
+    "find_workspace",
+    "Search known workspaces by name or root path and return matching workspace IDs",
+    {
+      query: z.string().describe("Case-insensitive search text"),
+      limit: z.number().optional().describe("Max results to return, capped at 50"),
+    },
+    async (args: WorkspaceSearchArgs) => {
+      const needle = args.query.trim().toLowerCase();
+      if (!needle) return textResult({ query: args.query, matches: [] });
+
+      const limit = boundedSearchLimit(args.limit);
+      const matches: WorkspaceSearchResult[] = appController.state.workspaces
+        .map((workspace) => {
+          const matchedFields: string[] = [];
+          if (workspace.name.toLowerCase().includes(needle)) matchedFields.push("name");
+          if (workspace.rootPath.toLowerCase().includes(needle)) matchedFields.push("rootPath");
+
+          return {
+            id: workspace.id,
+            name: workspace.name,
+            rootPath: workspace.rootPath,
+            createdAt: workspace.createdAt,
+            matchedFields,
+          };
+        })
+        .filter((workspace) => workspace.matchedFields.length > 0)
+        .sort((left, right) => {
+          const leftNameMatch = left.matchedFields.includes("name") ? 0 : 1;
+          const rightNameMatch = right.matchedFields.includes("name") ? 0 : 1;
+          return leftNameMatch - rightNameMatch || left.name.localeCompare(right.name);
+        })
+        .slice(0, limit);
+
+      return textResult({ query: args.query, limit, matches });
     }
   );
 
@@ -55,6 +130,46 @@ export function register(server: McpServer, appController: AppControllerHandle):
       let repos = [...appController.state.repos];
       if (args.workspaceId) repos = repos.filter((repo) => repo.workspaceID === args.workspaceId);
       return textResult(repos);
+    }
+  );
+
+  server.tool(
+    "find_repo",
+    "Search known repos by name or path and return matching repo IDs",
+    {
+      query: z.string().describe("Case-insensitive search text"),
+      workspaceId: z.string().optional().describe("Optional workspace ID to limit results"),
+      limit: z.number().optional().describe("Max results to return, capped at 50"),
+    },
+    async (args: RepoSearchArgs) => {
+      const needle = args.query.trim().toLowerCase();
+      if (!needle) return textResult({ query: args.query, matches: [] });
+
+      const limit = boundedSearchLimit(args.limit);
+      const matches: RepoSearchResult[] = appController.state.repos
+        .filter((repo) => !args.workspaceId || repo.workspaceID === args.workspaceId)
+        .map((repo) => {
+          const matchedFields: string[] = [];
+          if (repo.name.toLowerCase().includes(needle)) matchedFields.push("name");
+          if (repo.path.toLowerCase().includes(needle)) matchedFields.push("path");
+
+          return {
+            id: repo.id,
+            name: repo.name,
+            path: repo.path,
+            workspaceID: repo.workspaceID,
+            matchedFields,
+          };
+        })
+        .filter((repo) => repo.matchedFields.length > 0)
+        .sort((left, right) => {
+          const leftNameMatch = left.matchedFields.includes("name") ? 0 : 1;
+          const rightNameMatch = right.matchedFields.includes("name") ? 0 : 1;
+          return leftNameMatch - rightNameMatch || left.name.localeCompare(right.name);
+        })
+        .slice(0, limit);
+
+      return textResult({ query: args.query, limit, matches });
     }
   );
 

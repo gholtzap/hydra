@@ -72,6 +72,14 @@ const marketplaceInstallSourceSchema = z.object({
 }).strict();
 
 const preferencesPatchSchema = z.record(z.string(), z.unknown());
+const sessionPromptSchema = z.string().max(20_000);
+const sessionTitleSchema = z.string().max(120);
+const sessionCommandSchema = z.string().max(20_000).refine(
+  (command) => !/[\u0000-\u001f\u007f]/u.test(command),
+  "Command must not contain terminal control characters"
+);
+const terminalColsSchema = z.number().int().min(1).max(500);
+const terminalRowsSchema = z.number().int().min(1).max(200);
 
 export type MarketplaceSkillSourcePayload = z.output<typeof marketplaceSkillSourceSchema>;
 
@@ -99,7 +107,12 @@ export const MCP_ACTION_ARGS_SCHEMAS = {
     repoId: z.string(),
     autoLaunch: z.boolean().optional(),
     agentId: z.string().optional(),
-    prompt: z.string().optional()
+    prompt: sessionPromptSchema.optional()
+  }).strict(),
+  create_shell_session: z.object({
+    repoId: z.string(),
+    title: sessionTitleSchema.optional(),
+    command: sessionCommandSchema.optional()
   }).strict(),
   rename_session: z.object({
     sessionId: z.string(),
@@ -110,6 +123,30 @@ export const MCP_ACTION_ARGS_SCHEMAS = {
   }).strict(),
   reopen_session: z.object({
     sessionId: z.string()
+  }).strict(),
+  restart_session: z.object({
+    sessionId: z.string()
+  }).strict(),
+  stop_session: z.object({
+    sessionId: z.string()
+  }).strict(),
+  stop_sessions: z.object({
+    repoId: z.string().optional()
+  }).strict(),
+  mark_session_read: z.object({
+    sessionId: z.string()
+  }).strict(),
+  mark_sessions_read: z.object({
+    repoId: z.string().optional()
+  }).strict(),
+  resize_session: z.object({
+    sessionId: z.string(),
+    cols: terminalColsSchema,
+    rows: terminalRowsSchema
+  }).strict(),
+  send_command: z.object({
+    sessionId: z.string(),
+    command: sessionCommandSchema
   }).strict(),
   organize_session: z.object({
     sessionId: z.string(),
@@ -220,9 +257,17 @@ export type McpActionArgsMap = {
 
 export type McpActionResultMap = {
   create_session: string | null;
+  create_shell_session: string | null;
   rename_session: boolean;
   close_session: void;
   reopen_session: void;
+  restart_session: void;
+  stop_session: void;
+  stop_sessions: { stoppedSessionIds: string[] };
+  mark_session_read: { clearedUnreadCount: number };
+  mark_sessions_read: { clearedSessionIds: string[]; clearedUnreadCount: number };
+  resize_session: void;
+  send_command: { sentChars: number };
   organize_session: boolean;
   search_sessions: SessionSearchResponse;
   resume_session: string | null;

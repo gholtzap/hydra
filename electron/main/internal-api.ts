@@ -46,10 +46,9 @@ export interface AppControllerHandle {
   lazygitPath: string | null;
   snapshot(): AppStateSnapshot;
   sessionById(sessionId: string): SessionRecord | null;
+  setFocusedSession(sessionId: string | null): void;
+  handleSessionInput(sessionId: string, data: string): void;
   broadcastState(): void;
-  ptyHost: {
-    sendInput(sessionId: string, data: string): void;
-  };
   handleMcpAction<Action extends McpActionName>(
     action: Action,
     args: McpActionArgs<Action>
@@ -140,6 +139,14 @@ export class InternalApi {
     return this.ctrl.handleMcpAction("create_session", { repoId, ...options });
   }
 
+  async createShellSession(
+    repoId: string,
+    title?: string,
+    command?: string
+  ): Promise<McpActionResult<"create_shell_session">> {
+    return this.ctrl.handleMcpAction("create_shell_session", { repoId, title, command });
+  }
+
   async renameSession(sessionId: string, title: string): Promise<McpActionResult<"rename_session">> {
     return this.ctrl.handleMcpAction("rename_session", { sessionId, title });
   }
@@ -150,6 +157,41 @@ export class InternalApi {
 
   async reopenSession(sessionId: string): Promise<McpActionResult<"reopen_session">> {
     return this.ctrl.handleMcpAction("reopen_session", { sessionId });
+  }
+
+  async restartSession(sessionId: string): Promise<McpActionResult<"restart_session">> {
+    return this.ctrl.handleMcpAction("restart_session", { sessionId });
+  }
+
+  async stopSession(sessionId: string): Promise<McpActionResult<"stop_session">> {
+    return this.ctrl.handleMcpAction("stop_session", { sessionId });
+  }
+
+  async stopSessions(repoId?: string): Promise<McpActionResult<"stop_sessions">> {
+    return this.ctrl.handleMcpAction("stop_sessions", { repoId });
+  }
+
+  async markSessionRead(sessionId: string): Promise<McpActionResult<"mark_session_read">> {
+    return this.ctrl.handleMcpAction("mark_session_read", { sessionId });
+  }
+
+  async markSessionsRead(repoId?: string): Promise<McpActionResult<"mark_sessions_read">> {
+    return this.ctrl.handleMcpAction("mark_sessions_read", { repoId });
+  }
+
+  async resizeSession(
+    sessionId: string,
+    cols: number,
+    rows: number
+  ): Promise<McpActionResult<"resize_session">> {
+    return this.ctrl.handleMcpAction("resize_session", { sessionId, cols, rows });
+  }
+
+  async sendCommand(
+    sessionId: string,
+    command: string
+  ): Promise<McpActionResult<"send_command">> {
+    return this.ctrl.handleMcpAction("send_command", { sessionId, command });
   }
 
   async organizeSession(

@@ -110,9 +110,16 @@ type EphemeralSessionRecord = {
 type PendingSessionRestart = {
   requestedAt: string;
 };
+type PendingSessionStop = {
+  requestedAt: string;
+};
 type QueuedSessionLaunch = {
   title?: string;
   input: string;
+};
+type CreateSessionOptions = {
+  agentId?: string | null;
+  prompt?: string;
 };
 type UpdaterLogLevel = "debug" | "info" | "warn" | "error";
 type AutoUpdateSupport = {
@@ -631,6 +638,7 @@ class AppController {
   pendingAgentLaunch: Set<string>;
   pendingAgentLaunchTimers: Map<string, NodeJS.Timeout>;
   pendingSessionRestarts: Map<string, PendingSessionRestart>;
+  pendingSessionStops: Map<string, PendingSessionStop>;
   sessionSizes: Map<string, { cols: number; rows: number }>;
   terminalBuffers: Map<string, TerminalTranscriptBufferInstance>;
   signalBuffers: Map<string, string>;
@@ -664,6 +672,7 @@ class AppController {
     this.pendingAgentLaunch = new Set();
     this.pendingAgentLaunchTimers = new Map();
     this.pendingSessionRestarts = new Map();
+    this.pendingSessionStops = new Map();
     this.sessionSizes = new Map();
     this.terminalBuffers = new Map();
     this.signalBuffers = new Map();
@@ -1581,7 +1590,19 @@ class AppController {
         const parsedArgs = parseArgs("create_session");
         return this.createSession(
           parsedArgs.repoId,
-          parsedArgs.autoLaunch ?? true
+          parsedArgs.autoLaunch ?? true,
+          {
+            agentId: parsedArgs.agentId,
+            prompt: parsedArgs.prompt
+          }
+        ) as McpActionResult<Action>;
+      }
+      case "create_shell_session": {
+        const parsedArgs = parseArgs("create_shell_session");
+        return this.createShellSession(
+          parsedArgs.repoId,
+          parsedArgs.title,
+          parsedArgs.command ? `${parsedArgs.command}\r` : undefined
         ) as McpActionResult<Action>;
       }
       case "rename_session": {
@@ -1595,6 +1616,41 @@ class AppController {
       case "reopen_session": {
         const parsedArgs = parseArgs("reopen_session");
         return this.reopenSession(parsedArgs.sessionId) as McpActionResult<Action>;
+      }
+      case "restart_session": {
+        const parsedArgs = parseArgs("restart_session");
+        return this.restartSession(parsedArgs.sessionId) as McpActionResult<Action>;
+      }
+      case "stop_session": {
+        const parsedArgs = parseArgs("stop_session");
+        return this.stopSession(parsedArgs.sessionId) as McpActionResult<Action>;
+      }
+      case "stop_sessions": {
+        const parsedArgs = parseArgs("stop_sessions");
+        return this.stopSessions(parsedArgs.repoId) as McpActionResult<Action>;
+      }
+      case "mark_session_read": {
+        const parsedArgs = parseArgs("mark_session_read");
+        return this.markSessionRead(parsedArgs.sessionId) as McpActionResult<Action>;
+      }
+      case "mark_sessions_read": {
+        const parsedArgs = parseArgs("mark_sessions_read");
+        return this.markSessionsRead(parsedArgs.repoId) as McpActionResult<Action>;
+      }
+      case "resize_session": {
+        const parsedArgs = parseArgs("resize_session");
+        return this.handleSessionResize(
+          parsedArgs.sessionId,
+          parsedArgs.cols,
+          parsedArgs.rows
+        ) as McpActionResult<Action>;
+      }
+      case "send_command": {
+        const parsedArgs = parseArgs("send_command");
+        return this.submitSessionCommand(
+          parsedArgs.sessionId,
+          parsedArgs.command
+        ) as McpActionResult<Action>;
       }
       case "organize_session": {
         const parsedArgs = parseArgs("organize_session");
@@ -2014,23 +2070,33 @@ class AppController {
     this.broadcastState();
   }
 
-  createSession(repoId: string, launchesClaudeOnStart?: boolean): string | null {
+  createSession(
+    repoId: string,
+    launchesClaudeOnStart?: boolean,
+    options: CreateSessionOptions = {}
+  ): string | null {
     const repo = this.repoById(repoId);
     if (!repo) {
       return null;
     }
 
     const sessionId = randomUUID();
-    const startupAgentId =
-      launchesClaudeOnStart !== false
-        ? normalizeAgentId(this.state.preferences.defaultAgentId)
-        : null;
+    const requestedAgentId =
+      options.agentId !== undefined
+        ? normalizeAgentId(options.agentId, null)
+        : normalizeAgentId(this.state.preferences.defaultAgentId);
+    if (launchesClaudeOnStart !== false && !requestedAgentId) {
+      return null;
+    }
+
+    const startupAgentId = launchesClaudeOnStart !== false ? requestedAgentId : null;
+    const initialPrompt = typeof options.prompt === "string" ? options.prompt : "";
     const session: SessionRecord = {
       id: sessionId,
       repoID: repoId,
       title: repo.name,
       launchProfile: "agent",
-      initialPrompt: "",
+      initialPrompt,
       launchesClaudeOnStart: !!startupAgentId,
       startupAgentId,
       claudeSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
@@ -2057,6 +2123,10 @@ class AppController {
     this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(launchMsg));
     session.transcript = launchMsg;
     this.broadcastState();
+
+    if (initialPrompt) {
+      this.queueSessionLaunch(session.id, `${initialPrompt}\r`);
+    }
 
     if (startupAgentId) {
       invalidateSessionSearchCache(repo.path);
@@ -2199,6 +2269,7 @@ class AppController {
       return;
     }
 
+    this.pendingSessionStops.delete(sessionId);
     session.runtimeState = "live";
     session.status = "running";
     session.blocker = null;
@@ -2223,6 +2294,7 @@ class AppController {
       return;
     }
 
+    this.pendingSessionStops.delete(sessionId);
     if (session.runtimeState === "live") {
       if (this.pendingSessionRestarts.has(sessionId)) {
         return;
@@ -2239,9 +2311,58 @@ class AppController {
     this.startRestartedSession(sessionId);
   }
 
+  stopSession(sessionId: string): void {
+    const session = this.sessionById(sessionId);
+    if (!session) {
+      return;
+    }
+
+    if (session.runtimeState === "stopped") {
+      return;
+    }
+
+    this.pendingSessionRestarts.delete(sessionId);
+    this.cancelPendingAgentLaunch(sessionId);
+    this.queuedSessionLaunches.delete(sessionId);
+    this.resetSignalTracking(sessionId);
+    this.sessionSizes.delete(sessionId);
+
+    if (session.runtimeState === "live" || session.runtimeState === "launching") {
+      this.pendingSessionStops.set(sessionId, { requestedAt: now() });
+      this.ptyHost.killSession(sessionId);
+    }
+
+    const banner = `[Session stopped ${timestampLabel()}]`;
+    const bannerChunk = `\r\n${banner}\r\n`;
+    session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${bannerChunk}`);
+    session.transcript = trimTranscript(this.terminalBuffer(session.id, session.transcript).consume(bannerChunk));
+    session.runtimeState = "stopped";
+    session.status = "idle";
+    session.blocker = null;
+    session.stoppedAt = now();
+    session.updatedAt = now();
+    this.scheduleSave();
+    this.broadcastState();
+  }
+
+  stopSessions(repoId?: string): { stoppedSessionIds: string[] } {
+    const stoppedSessionIds: string[] = [];
+    const sessions = this.state.sessions.filter((session) =>
+      session.runtimeState !== "stopped" && (!repoId || session.repoID === repoId)
+    );
+
+    for (const session of sessions) {
+      this.stopSession(session.id);
+      stoppedSessionIds.push(session.id);
+    }
+
+    return { stoppedSessionIds };
+  }
+
   closeSession(sessionId: string): void {
     const session = this.sessionById(sessionId);
     this.pendingSessionRestarts.delete(sessionId);
+    this.pendingSessionStops.delete(sessionId);
     this.cancelPendingAgentLaunch(sessionId);
     this.queuedSessionLaunches.delete(sessionId);
     this.sessionSizes.delete(sessionId);
@@ -2269,6 +2390,47 @@ class AppController {
         this.sendSessionUpdated(sessionId);
       }
     }
+  }
+
+  markSessionRead(sessionId: string): { clearedUnreadCount: number } {
+    const session = this.sessionById(sessionId);
+    if (!session) {
+      return { clearedUnreadCount: 0 };
+    }
+
+    const clearedUnreadCount = session.unreadCount;
+    if (clearedUnreadCount > 0) {
+      session.unreadCount = 0;
+      session.updatedAt = now();
+      this.scheduleSave();
+      this.sendSessionUpdated(sessionId);
+      this.broadcastState();
+    }
+
+    return { clearedUnreadCount };
+  }
+
+  markSessionsRead(repoId?: string): { clearedSessionIds: string[]; clearedUnreadCount: number } {
+    const sessions = this.state.sessions.filter((session) =>
+      session.unreadCount > 0 && (!repoId || session.repoID === repoId)
+    );
+    const clearedSessionIds: string[] = [];
+    let clearedUnreadCount = 0;
+
+    for (const session of sessions) {
+      clearedSessionIds.push(session.id);
+      clearedUnreadCount += session.unreadCount;
+      session.unreadCount = 0;
+      session.updatedAt = now();
+      this.sendSessionUpdated(session.id);
+    }
+
+    if (clearedSessionIds.length > 0) {
+      this.scheduleSave();
+      this.broadcastState();
+    }
+
+    return { clearedSessionIds, clearedUnreadCount };
   }
 
   revealRepo(repoId: string): void {
@@ -2685,6 +2847,11 @@ class AppController {
     this.resolveInteractiveBlockerFromInput(sessionId, data);
   }
 
+  submitSessionCommand(sessionId: string, command: string): { sentChars: number } {
+    this.handleSessionInput(sessionId, `${command}\r`);
+    return { sentChars: command.length };
+  }
+
   handlePtyMessage(message: PtyHostMessage): void {
     const ephemeralSession = this.ephemeralSessions.get(message.sessionId);
     if (ephemeralSession) {
@@ -2792,6 +2959,10 @@ class AppController {
 
     if (this.pendingSessionRestarts.delete(sessionId)) {
       this.startRestartedSession(sessionId);
+      return;
+    }
+
+    if (this.pendingSessionStops.delete(sessionId)) {
       return;
     }
 

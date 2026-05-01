@@ -1582,6 +1582,10 @@ class AppController {
         const parsedArgs = parseArgs("stop_session");
         return this.stopSession(parsedArgs.sessionId) as McpActionResult<Action>;
       }
+      case "stop_sessions": {
+        const parsedArgs = parseArgs("stop_sessions");
+        return this.stopSessions(parsedArgs.repoId) as McpActionResult<Action>;
+      }
       case "mark_session_read": {
         const parsedArgs = parseArgs("mark_session_read");
         return this.markSessionRead(parsedArgs.sessionId) as McpActionResult<Action>;
@@ -2296,6 +2300,20 @@ class AppController {
     session.updatedAt = now();
     this.scheduleSave();
     this.broadcastState();
+  }
+
+  stopSessions(repoId?: string): { stoppedSessionIds: string[] } {
+    const stoppedSessionIds: string[] = [];
+    const sessions = this.state.sessions.filter((session) =>
+      session.runtimeState !== "stopped" && (!repoId || session.repoID === repoId)
+    );
+
+    for (const session of sessions) {
+      this.stopSession(session.id);
+      stoppedSessionIds.push(session.id);
+    }
+
+    return { stoppedSessionIds };
   }
 
   closeSession(sessionId: string): void {

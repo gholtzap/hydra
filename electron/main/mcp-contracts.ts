@@ -111,7 +111,8 @@ export const MCP_ACTION_ARGS_SCHEMAS = {
   }).strict(),
   create_shell_session: z.object({
     repoId: z.string(),
-    title: sessionTitleSchema.optional()
+    title: sessionTitleSchema.optional(),
+    command: sessionCommandSchema.optional()
   }).strict(),
   rename_session: z.object({
     sessionId: z.string(),

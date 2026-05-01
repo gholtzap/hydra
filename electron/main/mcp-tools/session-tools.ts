@@ -56,6 +56,7 @@ type SessionTextArgs = {
 };
 
 type SessionCommandArgs = McpActionArgs<"send_command">;
+type CreateShellSessionArgs = McpActionArgs<"create_shell_session">;
 
 type FocusSessionArgs = {
   sessionId?: string | null;
@@ -382,10 +383,18 @@ export function register(server: McpServer, appController: AppControllerHandle):
     {
       repoId: z.string().describe("Repo ID to create a shell session in"),
       title: z.string().max(MAX_SESSION_TITLE_CHARS).optional().describe("Optional session title"),
+      command: z.string().max(MAX_SESSION_TEXT_CHARS).optional().describe("Optional printable command to submit after launch"),
     },
-    async (args: McpActionArgs<"create_shell_session">) => {
+    async (args: CreateShellSessionArgs) => {
+      if (args.command && containsTerminalControlCharacter(args.command)) {
+        return textResult({
+          ok: false,
+          error: "Command contains terminal control characters; use send_key for special keys.",
+        });
+      }
+
       const result = await appController.handleMcpAction("create_shell_session", args);
-      return textResult(result);
+      return textResult({ sessionId: result, commandQueued: !!args.command });
     }
   );
 

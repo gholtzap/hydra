@@ -1558,7 +1558,8 @@ class AppController {
         const parsedArgs = parseArgs("create_shell_session");
         return this.createShellSession(
           parsedArgs.repoId,
-          parsedArgs.title
+          parsedArgs.title,
+          parsedArgs.command ? `${parsedArgs.command}\r` : undefined
         ) as McpActionResult<Action>;
       }
       case "rename_session": {

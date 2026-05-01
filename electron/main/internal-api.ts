@@ -139,8 +139,12 @@ export class InternalApi {
     return this.ctrl.handleMcpAction("create_session", { repoId, ...options });
   }
 
-  async createShellSession(repoId: string, title?: string): Promise<McpActionResult<"create_shell_session">> {
-    return this.ctrl.handleMcpAction("create_shell_session", { repoId, title });
+  async createShellSession(
+    repoId: string,
+    title?: string,
+    command?: string
+  ): Promise<McpActionResult<"create_shell_session">> {
+    return this.ctrl.handleMcpAction("create_shell_session", { repoId, title, command });
   }
 
   async renameSession(sessionId: string, title: string): Promise<McpActionResult<"rename_session">> {

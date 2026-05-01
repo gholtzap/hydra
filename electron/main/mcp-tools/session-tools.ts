@@ -188,6 +188,7 @@ type RunSessionCommandArgs = SessionCommandArgs & {
   timeoutMs?: number;
   pollIntervalMs?: number;
   quietMs?: number;
+  stopOnQuiet?: boolean;
   lines?: number;
   maxChars?: number;
   includeRawTranscript?: boolean;
@@ -696,6 +697,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       timeoutMs: z.number().optional().describe("Maximum wait in milliseconds, capped at 300000"),
       pollIntervalMs: z.number().optional().describe("Polling interval in milliseconds, capped from 100 to 5000"),
       quietMs: z.number().optional().describe("Required no-output window in milliseconds, capped from 250 to 30000"),
+      stopOnQuiet: z.boolean().optional().describe("Stop the session after quiet output is reached, preserving transcript"),
       lines: z.number().optional().describe("Number of recent lines to return, capped at 500"),
       maxChars: z.number().optional().describe("Maximum returned transcript characters, capped at 50000"),
       includeRawTranscript: z.boolean().optional().describe("Include raw ANSI transcript tail"),
@@ -723,6 +725,10 @@ export function register(server: McpServer, appController: AppControllerHandle):
         afterActivityAt,
         quietMs: args.quietMs,
       });
+      const stopped = !!args.stopOnQuiet && wait.ok;
+      if (stopped) {
+        await appController.handleMcpAction("stop_session", { sessionId: args.sessionId });
+      }
       const currentSession = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
       const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
@@ -731,6 +737,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         ok: wait.ok,
         command: commandResult,
         wait,
+        stopped,
         transcript: currentSession ? transcriptTail(currentSession.transcript, lineLimit, charLimit) : null,
         rawTranscript: currentSession && args.includeRawTranscript
           ? transcriptTail(currentSession.rawTranscript, lineLimit, charLimit)
@@ -750,6 +757,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       timeoutMs: z.number().optional().describe("Maximum wait in milliseconds, capped at 300000"),
       pollIntervalMs: z.number().optional().describe("Polling interval in milliseconds, capped from 100 to 5000"),
       quietMs: z.number().optional().describe("Required no-output window in milliseconds, capped from 250 to 30000"),
+      stopOnQuiet: z.boolean().optional().describe("Stop the session after quiet output is reached, preserving transcript"),
       lines: z.number().optional().describe("Number of recent lines to return, capped at 500"),
       maxChars: z.number().optional().describe("Maximum returned transcript characters, capped at 50000"),
       includeRawTranscript: z.boolean().optional().describe("Include raw ANSI transcript tail"),
@@ -783,6 +791,10 @@ export function register(server: McpServer, appController: AppControllerHandle):
         afterActivityAt,
         quietMs: args.quietMs,
       });
+      const stopped = !!args.stopOnQuiet && wait.ok;
+      if (stopped) {
+        await appController.handleMcpAction("stop_session", { sessionId });
+      }
       const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
       const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
       const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
@@ -792,6 +804,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         sessionId,
         repoId: args.repoId,
         wait,
+        stopped,
         transcript: session ? transcriptTail(session.transcript, lineLimit, charLimit) : null,
         rawTranscript: session && args.includeRawTranscript
           ? transcriptTail(session.rawTranscript, lineLimit, charLimit)

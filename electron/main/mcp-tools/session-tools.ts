@@ -162,6 +162,37 @@ type SessionWaitSnapshot = {
   updatedAt: string;
 };
 
+type SessionWaitSuccess = SessionWaitSnapshot & {
+  ok: true;
+  timedOut: false;
+  elapsedMs: number;
+  afterActivityAt: string;
+  quietMs?: number;
+};
+
+type SessionWaitFailure = {
+  ok: false;
+  timedOut: boolean;
+  elapsedMs?: number;
+  afterActivityAt: string;
+  quietMs?: number;
+  sessionId: string;
+  condition: SessionWaitCondition;
+  error?: string;
+  lastSnapshot?: SessionWaitSnapshot | null;
+};
+
+type SessionWaitResult = SessionWaitSuccess | SessionWaitFailure;
+
+type RunSessionCommandArgs = SessionCommandArgs & {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  quietMs?: number;
+  lines?: number;
+  maxChars?: number;
+  includeRawTranscript?: boolean;
+};
+
 const DEFAULT_SESSION_WAIT_TIMEOUT_MS = 30_000;
 const MAX_SESSION_WAIT_TIMEOUT_MS = 300_000;
 const DEFAULT_SESSION_WAIT_POLL_INTERVAL_MS = 500;
@@ -246,6 +277,74 @@ function sessionMatchesWaitCondition(
     default:
       return session.status === condition;
   }
+}
+
+async function waitForSessionState(
+  appController: AppControllerHandle,
+  args: SessionWaitArgs
+): Promise<SessionWaitResult> {
+  const timeoutMs = boundedInteger(
+    args.timeoutMs,
+    DEFAULT_SESSION_WAIT_TIMEOUT_MS,
+    MIN_SESSION_WAIT_POLL_INTERVAL_MS,
+    MAX_SESSION_WAIT_TIMEOUT_MS
+  );
+  const pollIntervalMs = boundedInteger(
+    args.pollIntervalMs,
+    DEFAULT_SESSION_WAIT_POLL_INTERVAL_MS,
+    MIN_SESSION_WAIT_POLL_INTERVAL_MS,
+    MAX_SESSION_WAIT_POLL_INTERVAL_MS
+  );
+  const quietMs = boundedInteger(
+    args.quietMs,
+    DEFAULT_SESSION_QUIET_MS,
+    MIN_SESSION_QUIET_MS,
+    MAX_SESSION_QUIET_MS
+  );
+  const startedAt = new Date();
+  const afterActivityAt = args.afterActivityAt || (args.condition === "quiet" ? "" : startedAt.toISOString());
+  const deadline = startedAt.getTime() + timeoutMs;
+  let lastSnapshot: SessionWaitSnapshot | null = null;
+
+  while (Date.now() <= deadline) {
+    const nowMs = Date.now();
+    const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+    if (!session) {
+      return {
+        ok: false,
+        timedOut: false,
+        afterActivityAt,
+        sessionId: args.sessionId,
+        condition: args.condition,
+        error: "Session not found",
+      };
+    }
+
+    lastSnapshot = sessionSnapshot(session, args.condition, nowMs);
+    if (sessionMatchesWaitCondition(session, args.condition, afterActivityAt, quietMs, nowMs)) {
+      return {
+        ok: true,
+        timedOut: false,
+        elapsedMs: nowMs - startedAt.getTime(),
+        afterActivityAt,
+        quietMs: args.condition === "quiet" ? quietMs : undefined,
+        ...lastSnapshot,
+      };
+    }
+
+    await delayMs(Math.min(pollIntervalMs, Math.max(deadline - Date.now(), 0)));
+  }
+
+  return {
+    ok: false,
+    timedOut: true,
+    elapsedMs: Date.now() - startedAt.getTime(),
+    afterActivityAt,
+    quietMs: args.condition === "quiet" ? quietMs : undefined,
+    sessionId: args.sessionId,
+    condition: args.condition,
+    lastSnapshot,
+  };
 }
 
 function transcriptTail(text: string, lineLimit: number, charLimit: number): SessionTailText {
@@ -582,6 +681,59 @@ export function register(server: McpServer, appController: AppControllerHandle):
     }
   );
 
+  // ── run_session_command ────────────────────────────────────────
+  server.tool(
+    "run_session_command",
+    "Send a printable command, wait for session output to quiet, and return a transcript tail",
+    {
+      sessionId: z.string().describe("Session ID"),
+      command: z.string().max(MAX_SESSION_TEXT_CHARS).describe("Printable command to submit"),
+      timeoutMs: z.number().optional().describe("Maximum wait in milliseconds, capped at 300000"),
+      pollIntervalMs: z.number().optional().describe("Polling interval in milliseconds, capped from 100 to 5000"),
+      quietMs: z.number().optional().describe("Required no-output window in milliseconds, capped from 250 to 30000"),
+      lines: z.number().optional().describe("Number of recent lines to return, capped at 500"),
+      maxChars: z.number().optional().describe("Maximum returned transcript characters, capped at 50000"),
+      includeRawTranscript: z.boolean().optional().describe("Include raw ANSI transcript tail"),
+    },
+    async (args: RunSessionCommandArgs) => {
+      const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+      if (!session) return textResult({ ok: false, error: "Session not found" });
+      if (containsTerminalControlCharacter(args.command)) {
+        return textResult({
+          ok: false,
+          error: "Command contains terminal control characters; use send_key for special keys.",
+        });
+      }
+
+      const afterActivityAt = new Date().toISOString();
+      const commandResult = await appController.handleMcpAction("send_command", {
+        sessionId: args.sessionId,
+        command: args.command,
+      });
+      const wait = await waitForSessionState(appController, {
+        sessionId: args.sessionId,
+        condition: "quiet",
+        timeoutMs: args.timeoutMs,
+        pollIntervalMs: args.pollIntervalMs,
+        afterActivityAt,
+        quietMs: args.quietMs,
+      });
+      const currentSession = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
+      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
+
+      return textResult({
+        ok: wait.ok,
+        command: commandResult,
+        wait,
+        transcript: currentSession ? transcriptTail(currentSession.transcript, lineLimit, charLimit) : null,
+        rawTranscript: currentSession && args.includeRawTranscript
+          ? transcriptTail(currentSession.rawTranscript, lineLimit, charLimit)
+          : undefined,
+      });
+    }
+  );
+
   // ── send_text ──────────────────────────────────────────────────
   server.tool(
     "send_text",
@@ -700,67 +852,8 @@ export function register(server: McpServer, appController: AppControllerHandle):
       quietMs: z.number().optional().describe("For quiet waits, required no-output window in milliseconds, capped from 250 to 30000"),
     },
     async (args: SessionWaitArgs) => {
-      const timeoutMs = boundedInteger(
-        args.timeoutMs,
-        DEFAULT_SESSION_WAIT_TIMEOUT_MS,
-        MIN_SESSION_WAIT_POLL_INTERVAL_MS,
-        MAX_SESSION_WAIT_TIMEOUT_MS
-      );
-      const pollIntervalMs = boundedInteger(
-        args.pollIntervalMs,
-        DEFAULT_SESSION_WAIT_POLL_INTERVAL_MS,
-        MIN_SESSION_WAIT_POLL_INTERVAL_MS,
-        MAX_SESSION_WAIT_POLL_INTERVAL_MS
-      );
-      const quietMs = boundedInteger(
-        args.quietMs,
-        DEFAULT_SESSION_QUIET_MS,
-        MIN_SESSION_QUIET_MS,
-        MAX_SESSION_QUIET_MS
-      );
-      const startedAt = new Date();
-      const afterActivityAt = args.afterActivityAt || (args.condition === "quiet" ? "" : startedAt.toISOString());
-      const deadline = startedAt.getTime() + timeoutMs;
-      let lastSnapshot: SessionWaitSnapshot | null = null;
-
-      while (Date.now() <= deadline) {
-        const nowMs = Date.now();
-        const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
-        if (!session) {
-          return textResult({
-            ok: false,
-            timedOut: false,
-            sessionId: args.sessionId,
-            condition: args.condition,
-            error: "Session not found",
-          });
-        }
-
-        lastSnapshot = sessionSnapshot(session, args.condition, nowMs);
-        if (sessionMatchesWaitCondition(session, args.condition, afterActivityAt, quietMs, nowMs)) {
-          return textResult({
-            ok: true,
-            timedOut: false,
-            elapsedMs: nowMs - startedAt.getTime(),
-            afterActivityAt,
-            quietMs: args.condition === "quiet" ? quietMs : undefined,
-            ...lastSnapshot,
-          });
-        }
-
-        await delayMs(Math.min(pollIntervalMs, Math.max(deadline - Date.now(), 0)));
-      }
-
-      return textResult({
-        ok: false,
-        timedOut: true,
-        elapsedMs: Date.now() - startedAt.getTime(),
-        afterActivityAt,
-        quietMs: args.condition === "quiet" ? quietMs : undefined,
-        sessionId: args.sessionId,
-        condition: args.condition,
-        lastSnapshot,
-      });
+      const result = await waitForSessionState(appController, args);
+      return textResult(result);
     }
   );
 

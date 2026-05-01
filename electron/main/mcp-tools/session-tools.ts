@@ -609,6 +609,21 @@ export function register(server: McpServer, appController: AppControllerHandle):
     }
   );
 
+  // ── mark_session_read ──────────────────────────────────────────
+  server.tool(
+    "mark_session_read",
+    "Clear unread output count for a session without changing focus",
+    {
+      sessionId: z.string().describe("Session ID"),
+    },
+    async (args: McpActionArgs<"mark_session_read">) => {
+      const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+      if (!session) return textResult({ ok: false, error: "Session not found" });
+      const result = await appController.handleMcpAction("mark_session_read", args);
+      return textResult({ ok: true, ...result });
+    }
+  );
+
   // ── resize_session ─────────────────────────────────────────────
   server.tool(
     "resize_session",

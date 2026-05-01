@@ -111,6 +111,9 @@ export const MCP_ACTION_ARGS_SCHEMAS = {
   reopen_session: z.object({
     sessionId: z.string()
   }).strict(),
+  restart_session: z.object({
+    sessionId: z.string()
+  }).strict(),
   organize_session: z.object({
     sessionId: z.string(),
     pin: z.boolean().optional(),
@@ -223,6 +226,7 @@ export type McpActionResultMap = {
   rename_session: boolean;
   close_session: void;
   reopen_session: void;
+  restart_session: void;
   organize_session: boolean;
   search_sessions: SessionSearchResponse;
   resume_session: string | null;

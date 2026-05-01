@@ -1553,6 +1553,10 @@ class AppController {
         const parsedArgs = parseArgs("reopen_session");
         return this.reopenSession(parsedArgs.sessionId) as McpActionResult<Action>;
       }
+      case "restart_session": {
+        const parsedArgs = parseArgs("restart_session");
+        return this.restartSession(parsedArgs.sessionId) as McpActionResult<Action>;
+      }
       case "organize_session": {
         const parsedArgs = parseArgs("organize_session");
         const organizeArgs = normalizeOrganizeSessionArgs(parsedArgs);

@@ -166,6 +166,7 @@ const MAX_SESSION_TAIL_LINES = 500;
 const DEFAULT_SESSION_TAIL_CHARS = 12_000;
 const MAX_SESSION_TAIL_CHARS = 50_000;
 const MAX_SESSION_TEXT_CHARS = 20_000;
+const MAX_SESSION_PROMPT_CHARS = 20_000;
 const TERMINAL_TEXT_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
 
 function delayMs(durationMs: number): Promise<void> {
@@ -361,7 +362,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
     {
       repoId: z.string().describe("Repo ID to create session in"),
       agentId: z.string().optional().describe("Agent ID (defaults to user preference)"),
-      prompt: z.string().optional().describe("Initial prompt to send"),
+      prompt: z.string().max(MAX_SESSION_PROMPT_CHARS).optional().describe("Initial prompt to send"),
     },
     async (args: McpActionArgs<"create_session">) => {
       const result = await appController.handleMcpAction("create_session", args);

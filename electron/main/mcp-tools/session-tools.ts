@@ -135,7 +135,8 @@ const SESSION_WAIT_CONDITION_VALUES = [
   "idle",
   "done",
   "failed",
-  "stopped"
+  "stopped",
+  "quiet"
 ] as const;
 
 type SessionWaitCondition = (typeof SESSION_WAIT_CONDITION_VALUES)[number];
@@ -146,6 +147,7 @@ type SessionWaitArgs = {
   timeoutMs?: number;
   pollIntervalMs?: number;
   afterActivityAt?: string;
+  quietMs?: number;
 };
 
 type SessionWaitSnapshot = {
@@ -156,6 +158,7 @@ type SessionWaitSnapshot = {
   unreadCount: number;
   blocker: SessionRecord["blocker"];
   lastActivityAt: string | null;
+  quietForMs: number;
   updatedAt: string;
 };
 
@@ -164,6 +167,9 @@ const MAX_SESSION_WAIT_TIMEOUT_MS = 300_000;
 const DEFAULT_SESSION_WAIT_POLL_INTERVAL_MS = 500;
 const MIN_SESSION_WAIT_POLL_INTERVAL_MS = 100;
 const MAX_SESSION_WAIT_POLL_INTERVAL_MS = 5_000;
+const DEFAULT_SESSION_QUIET_MS = 1_000;
+const MIN_SESSION_QUIET_MS = 250;
+const MAX_SESSION_QUIET_MS = 30_000;
 const DEFAULT_SESSION_TAIL_LINES = 80;
 const MAX_SESSION_TAIL_LINES = 500;
 const DEFAULT_SESSION_TAIL_CHARS = 12_000;
@@ -192,7 +198,19 @@ function sessionActivityTimestamp(session: SessionRecord): string {
   return session.lastActivityAt || session.updatedAt;
 }
 
-function sessionSnapshot(session: SessionRecord, condition: SessionWaitCondition): SessionWaitSnapshot {
+function sessionQuietDurationMs(session: SessionRecord, nowMs: number): number {
+  const activityMs = Date.parse(sessionActivityTimestamp(session));
+  if (!Number.isFinite(activityMs)) {
+    return 0;
+  }
+  return Math.max(0, nowMs - activityMs);
+}
+
+function sessionSnapshot(
+  session: SessionRecord,
+  condition: SessionWaitCondition,
+  nowMs: number
+): SessionWaitSnapshot {
   return {
     sessionId: session.id,
     condition,
@@ -201,6 +219,7 @@ function sessionSnapshot(session: SessionRecord, condition: SessionWaitCondition
     unreadCount: session.unreadCount,
     blocker: session.blocker,
     lastActivityAt: session.lastActivityAt,
+    quietForMs: sessionQuietDurationMs(session, nowMs),
     updatedAt: session.updatedAt,
   };
 }
@@ -208,11 +227,16 @@ function sessionSnapshot(session: SessionRecord, condition: SessionWaitCondition
 function sessionMatchesWaitCondition(
   session: SessionRecord,
   condition: SessionWaitCondition,
-  afterActivityAt: string
+  afterActivityAt: string,
+  quietMs: number,
+  nowMs: number
 ): boolean {
   switch (condition) {
     case "activity":
       return sessionActivityTimestamp(session) > afterActivityAt;
+    case "quiet":
+      return (!afterActivityAt || sessionActivityTimestamp(session) > afterActivityAt) &&
+        sessionQuietDurationMs(session, nowMs) >= quietMs;
     case "unread":
       return session.unreadCount > 0;
     case "blocked":
@@ -672,7 +696,8 @@ export function register(server: McpServer, appController: AppControllerHandle):
       condition: z.enum(SESSION_WAIT_CONDITION_VALUES).describe("Condition to wait for"),
       timeoutMs: z.number().optional().describe("Maximum wait in milliseconds, capped at 300000"),
       pollIntervalMs: z.number().optional().describe("Polling interval in milliseconds, capped from 100 to 5000"),
-      afterActivityAt: z.string().optional().describe("For activity waits, require activity after this ISO timestamp"),
+      afterActivityAt: z.string().optional().describe("For activity or quiet waits, require activity after this ISO timestamp"),
+      quietMs: z.number().optional().describe("For quiet waits, required no-output window in milliseconds, capped from 250 to 30000"),
     },
     async (args: SessionWaitArgs) => {
       const timeoutMs = boundedInteger(
@@ -687,12 +712,19 @@ export function register(server: McpServer, appController: AppControllerHandle):
         MIN_SESSION_WAIT_POLL_INTERVAL_MS,
         MAX_SESSION_WAIT_POLL_INTERVAL_MS
       );
+      const quietMs = boundedInteger(
+        args.quietMs,
+        DEFAULT_SESSION_QUIET_MS,
+        MIN_SESSION_QUIET_MS,
+        MAX_SESSION_QUIET_MS
+      );
       const startedAt = new Date();
-      const afterActivityAt = args.afterActivityAt || startedAt.toISOString();
+      const afterActivityAt = args.afterActivityAt || (args.condition === "quiet" ? "" : startedAt.toISOString());
       const deadline = startedAt.getTime() + timeoutMs;
       let lastSnapshot: SessionWaitSnapshot | null = null;
 
       while (Date.now() <= deadline) {
+        const nowMs = Date.now();
         const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
         if (!session) {
           return textResult({
@@ -704,13 +736,14 @@ export function register(server: McpServer, appController: AppControllerHandle):
           });
         }
 
-        lastSnapshot = sessionSnapshot(session, args.condition);
-        if (sessionMatchesWaitCondition(session, args.condition, afterActivityAt)) {
+        lastSnapshot = sessionSnapshot(session, args.condition, nowMs);
+        if (sessionMatchesWaitCondition(session, args.condition, afterActivityAt, quietMs, nowMs)) {
           return textResult({
             ok: true,
             timedOut: false,
-            elapsedMs: Date.now() - startedAt.getTime(),
+            elapsedMs: nowMs - startedAt.getTime(),
             afterActivityAt,
+            quietMs: args.condition === "quiet" ? quietMs : undefined,
             ...lastSnapshot,
           });
         }
@@ -723,6 +756,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         timedOut: true,
         elapsedMs: Date.now() - startedAt.getTime(),
         afterActivityAt,
+        quietMs: args.condition === "quiet" ? quietMs : undefined,
         sessionId: args.sessionId,
         condition: args.condition,
         lastSnapshot,

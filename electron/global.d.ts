@@ -33,6 +33,8 @@ import type {
   SessionSummary,
   SessionUpdatedPayload,
   TrackedPortStatus,
+  VoiceCallState,
+  VoiceConfig,
   WikiContext,
   WikiFileContents
 } from "./shared-types";
@@ -147,6 +149,24 @@ interface ClaudeWorkspaceApi {
   onPlanDetected: (
     callback: (payload: { sessionId: string; markdown: string }) => void
   ) => Unsubscribe;
+  startVoiceCall: (config?: Partial<VoiceConfig>) => Promise<{
+    success: boolean;
+    port?: number;
+    error?: string;
+  }>;
+  stopVoiceCall: () => Promise<void>;
+  getVoiceCallState: () => Promise<VoiceCallState>;
+  getVoiceConfig: () => Promise<VoiceConfig>;
+  updateVoiceConfig: (patch: Partial<VoiceConfig>) => Promise<void>;
+  checkPython: () => Promise<{ found: boolean; path?: string; version?: string }>;
+  installVoiceDeps: () => Promise<{ success: boolean; error?: string }>;
+  getVoiceBotPort: () => Promise<number | null>;
+  logVoiceClient: (message: string) => Promise<void>;
+  postVoiceWebRTCOffer: (endpoint: string, payload: unknown) => Promise<unknown>;
+  patchVoiceWebRTCIce: (endpoint: string, payload: unknown) => Promise<unknown>;
+  onVoiceCallStateChanged: (callback: (state: VoiceCallState) => void) => Unsubscribe;
+  onVoiceInstallProgress: (callback: (line: string) => void) => Unsubscribe;
+  onVoiceError: (callback: (error: { code: string; message: string }) => void) => Unsubscribe;
 
   // Auth
   signInWithEmail: (email: string, password: string) => Promise<AuthResult>;
@@ -158,6 +178,20 @@ interface ClaudeWorkspaceApi {
   requestPasswordReset: (email: string, redirectUrl: string) => Promise<AuthResult>;
   verifyTotp: (code: string) => Promise<AuthResult>;
   onAuthStateChanged: (callback: (session: AuthSession | null) => void) => Unsubscribe;
+}
+
+interface PipecatClientLike {
+  connect: (params?: unknown) => Promise<unknown>;
+  disconnect: () => Promise<void>;
+  enableMic: (enabled: boolean) => void | Promise<void>;
+  readonly isMicEnabled?: boolean;
+}
+
+interface PipecatClientOptionsLike {
+  transport: unknown;
+  enableMic?: boolean;
+  enableCam?: boolean;
+  callbacks?: Record<string, (...args: any[]) => void>;
 }
 
 interface ClaudeTerminalOptions {
@@ -196,12 +230,16 @@ interface ClaudeFitAddonLike {
 declare global {
   interface Window {
     claudeWorkspace: ClaudeWorkspaceApi;
+    PipecatClient: new (options: PipecatClientOptionsLike) => PipecatClientLike;
+    SmallWebRTCTransport: new (options?: Record<string, unknown>) => unknown;
   }
 
   const Terminal: new (options: ClaudeTerminalOptions) => ClaudeTerminalLike;
   const FitAddon: {
     FitAddon: new () => ClaudeFitAddonLike;
   };
+  const PipecatClient: new (options: PipecatClientOptionsLike) => PipecatClientLike;
+  const SmallWebRTCTransport: new (options?: Record<string, unknown>) => unknown;
 }
 
 export {};

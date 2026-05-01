@@ -580,11 +580,11 @@ export function register(server: McpServer, appController: AppControllerHandle):
   // ── create_session ─────────────────────────────────────────────
   server.tool(
     "create_session",
-    "Create a new agent session in a repo",
+    "Create a new agent session in a repo. If the user gives a task or instructions for the new session, include them in prompt; do not create a blank session first.",
     {
       repoId: z.string().describe("Repo ID to create session in"),
       agentId: z.string().optional().describe("Agent ID (defaults to user preference)"),
-      prompt: z.string().max(MAX_SESSION_PROMPT_CHARS).optional().describe("Initial prompt to send"),
+      prompt: z.string().max(MAX_SESSION_PROMPT_CHARS).optional().describe("Initial prompt to send. Required when the user asks the new session to do anything specific."),
     },
     async (args: McpActionArgs<"create_session">) => {
       const result = await appController.handleMcpAction("create_session", args);

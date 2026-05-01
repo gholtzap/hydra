@@ -22,6 +22,8 @@ import type {
   SessionSummary,
   SessionTagColor,
   TrackedPortStatus,
+  VoiceCallState,
+  VoiceConfig,
   WikiContext,
   WikiTreeNode as SharedWikiTreeNode,
   WorkspaceRecord
@@ -204,7 +206,15 @@ const INITIAL_PREFERENCES: AppPreferences = {
   keybindings: {},
   themeAppearance: "system",
   themeActiveId: "workspace-default",
-  themeCustomThemes: []
+  themeCustomThemes: [],
+  voiceConfig: {
+    llmProvider: "openai",
+    sttProvider: "deepgram",
+    ttsProvider: "cartesia",
+    ttsVoice: "",
+    enableSubagents: false,
+    apiKeys: {}
+  }
 };
 
 const state: AppStateSnapshot = {
@@ -354,6 +364,13 @@ type UiState = {
   lassoPressedSessionId: string | null;
   lassoSuppressClickUntil: number;
   selectedSessionIds: Set<string>;
+  voiceCallState: VoiceCallState;
+  voiceMuted: boolean;
+  voiceMinimized: boolean;
+  voiceTranscript: { role: "user" | "bot" | "system"; text: string; time: string }[];
+  voiceInstallLog: string[];
+  voiceLiveUserText: string;
+  voiceLiveBotText: string;
 };
 
 const ui: UiState = {
@@ -457,7 +474,14 @@ const ui: UiState = {
   lassoContainerRepoId: null as string | null,
   lassoPressedSessionId: null as string | null,
   lassoSuppressClickUntil: 0,
-  selectedSessionIds: new Set<string>()
+  selectedSessionIds: new Set<string>(),
+  voiceCallState: "idle" as VoiceCallState,
+  voiceMuted: false,
+  voiceMinimized: false,
+  voiceTranscript: [] as { role: "user" | "bot" | "system"; text: string; time: string }[],
+  voiceInstallLog: [] as string[],
+  voiceLiveUserText: "",
+  voiceLiveBotText: ""
 };
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
@@ -473,6 +497,8 @@ const appLaunchDialog = document.getElementById("app-launch-dialog") as HTMLDial
 const planReviewDialog = document.getElementById("plan-review-dialog") as HTMLDialogElement;
 const tokscaleDialog = document.getElementById("tokscale-dialog") as HTMLDialogElement;
 const lazygitDialog = document.getElementById("lazygit-dialog") as HTMLDialogElement;
+const voiceDialog = document.getElementById("voice-dialog") as HTMLDialogElement;
+const voiceMiniOverlayElement = document.getElementById("voice-mini-overlay") as HTMLElement;
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
 const EPHEMERAL_TOOL_DIALOGS: Record<
@@ -1162,6 +1188,43 @@ planReviewDialog.addEventListener("cancel", (event) => {
   closePlanReviewDialog();
 });
 
+api.onVoiceCallStateChanged((voiceState) => {
+  ui.voiceCallState = voiceState;
+  if (voiceState === "idle") {
+    ui.voiceMinimized = false;
+    clearVoiceSilenceIdleTimer();
+  } else if (voiceState === "listening") {
+    resetVoiceSilenceIdleTimer();
+  } else if (voiceState === "error") {
+    clearVoiceSilenceIdleTimer();
+  }
+  renderSidebar();
+  if (voiceDialog.open) {
+    renderVoiceDialog();
+  }
+  renderVoiceLiveCaption();
+  renderVoiceMiniOverlay();
+});
+
+api.onVoiceInstallProgress((line) => {
+  ui.voiceInstallLog.push(line);
+  if (voiceDialog.open) {
+    renderVoiceDialog();
+  }
+});
+
+api.onVoiceError((err) => {
+  clearVoiceSilenceIdleTimer();
+  ui.voiceCallState = "error";
+  console.warn("[Voice] runtime error:", err.message);
+  appendVoiceTranscript("system", "Voice mode stopped unexpectedly. Check your provider settings and retry.");
+  renderSidebar();
+  if (voiceDialog.open) {
+    renderVoiceDialog();
+  }
+  renderVoiceMiniOverlay();
+});
+
 for (const [toolId, definition] of Object.entries(EPHEMERAL_TOOL_DIALOGS) as Array<
   [EphemeralToolId, (typeof EPHEMERAL_TOOL_DIALOGS)[EphemeralToolId]]
 >) {
@@ -1577,6 +1640,7 @@ function renderSidebar() {
               sidebarNavMatches(sidebarActionNavId("open-status")) ? "keyboard-active" : undefined
             )
           ),
+          renderVoiceRailButton(),
           renderSidebarUtilityButton(
             "open-settings",
             "Settings",
@@ -6195,6 +6259,29 @@ async function handleClick(event) {
     case "open-status":
       await selectStatus();
       break;
+    case "toggle-voice-call":
+      toggleVoiceCall();
+      break;
+    case "voice-mute-toggle":
+      toggleVoiceMute();
+      break;
+    case "voice-end":
+      closeVoiceModal();
+      break;
+    case "voice-minimize":
+      minimizeVoiceModal();
+      break;
+    case "voice-restore":
+      restoreVoiceModal();
+      break;
+    case "voice-settings-toggle":
+      break;
+    case "voice-save-config":
+      await saveVoiceConfig();
+      break;
+    case "voice-retry":
+      await startVoiceSession();
+      break;
     case "open-settings":
       await openSettings(target.dataset.settingsTab || "general", {
         claudeView: (target.dataset.settingsClaudeView || undefined) as ClaudeSettingsView | undefined
@@ -8419,6 +8506,1413 @@ function handleEphemeralToolOutput(
   }
 }
 
+// ── Voice modal ─────────────────────────────────────────────────
+
+type VoiceClientLike = {
+  initDevices: () => Promise<void>;
+  connect: (params?: unknown) => Promise<unknown>;
+  disconnect: () => Promise<void>;
+  enableMic: (enabled: boolean) => void | Promise<void>;
+  readonly isMicEnabled?: boolean;
+};
+
+let pipecatClient: VoiceClientLike | null = null;
+let voiceSessionRunId = 0;
+let voiceDialogCloseMode: "end" | "minimize" = "end";
+const VOICE_SILENCE_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+let voiceSilenceIdleTimer: number | null = null;
+
+function voiceTimeStamp() {
+  const d = new Date();
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function appendVoiceTranscript(role: "user" | "bot" | "system", text: string) {
+  const normalized = text.trim();
+  if (!normalized) return false;
+
+  const lastEntry = ui.voiceTranscript[ui.voiceTranscript.length - 1];
+  if (lastEntry?.role === role && lastEntry.text === normalized) {
+    return false;
+  }
+
+  ui.voiceTranscript.push({ role, text: normalized, time: voiceTimeStamp() });
+  return true;
+}
+
+function voiceSessionIsCurrent(runId: number) {
+  return runId === voiceSessionRunId && (voiceDialog.open || ui.voiceMinimized);
+}
+
+function clearVoiceSilenceIdleTimer() {
+  if (voiceSilenceIdleTimer !== null) {
+    window.clearTimeout(voiceSilenceIdleTimer);
+    voiceSilenceIdleTimer = null;
+  }
+}
+
+function resetVoiceSilenceIdleTimer(runId = voiceSessionRunId) {
+  clearVoiceSilenceIdleTimer();
+  if (!voiceSessionIsCurrent(runId) || !voiceCallIsActive()) return;
+
+  voiceSilenceIdleTimer = window.setTimeout(() => {
+    if (!voiceSessionIsCurrent(runId) || !voiceCallIsActive()) return;
+    appendVoiceTranscript("system", "Voice mode went idle after 5 minutes of silence.");
+    endVoiceSession();
+    if (voiceDialog.open) {
+      renderVoiceDialog();
+    }
+  }, VOICE_SILENCE_IDLE_TIMEOUT_MS);
+}
+
+function markVoiceError(text: string) {
+  clearVoiceSilenceIdleTimer();
+  ui.voiceCallState = "error";
+  appendVoiceTranscript("system", text);
+  renderSidebar();
+  renderVoiceDialog();
+  renderVoiceMiniOverlay();
+}
+
+function logVoiceClient(message: string) {
+  console.log("[Voice]", message);
+  void api.logVoiceClient(message);
+}
+
+function attachVoiceRemoteAudioTrack(track: MediaStreamTrack) {
+  const host = document.getElementById("voice-audio-host");
+  if (!host) {
+    logVoiceClient("remote audio host missing");
+    return;
+  }
+
+  let audio = host.querySelector("audio") as HTMLAudioElement | null;
+  if (!audio) {
+    audio = document.createElement("audio");
+    audio.autoplay = true;
+    audio.controls = false;
+    audio.setAttribute("playsinline", "");
+    host.replaceChildren(audio);
+  }
+
+  audio.srcObject = new MediaStream([track]);
+  audio.muted = false;
+  audio.volume = 1;
+  void audio.play().catch((error) => {
+    logVoiceClient(`remote audio playback failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+}
+
+type VoiceWebRTCClientCallbacks = {
+  onConnected?: () => void;
+  onDisconnected?: () => void;
+  onBotReady?: () => void;
+  onUserStartedSpeaking?: () => void;
+  onUserStoppedSpeaking?: () => void;
+  onUserTranscript?: (data: { text: string; final: boolean }) => void;
+  onBotStartedSpeaking?: () => void;
+  onBotStoppedSpeaking?: () => void;
+  onBotOutput?: (data: { text: string; spoken: boolean }) => void;
+  onLocalAudioLevel?: (level: number) => void;
+  onError?: (error: { message?: string }) => void;
+  onTrackStarted?: (track: MediaStreamTrack, participant?: { local?: boolean }) => void;
+};
+
+class HydraSmallWebRTCClient implements VoiceClientLike {
+  private callbacks: VoiceWebRTCClientCallbacks;
+  private enableMicOnStart: boolean;
+  private stream: MediaStream | null = null;
+  private pc: RTCPeerConnection | null = null;
+  private dc: RTCDataChannel | null = null;
+  private pcId: string | null = null;
+  private offerEndpoint = "";
+  private queuedCandidates: RTCIceCandidate[] = [];
+  private canSendCandidates = false;
+  private audioContext: AudioContext | null = null;
+  private audioLevelInterval: number | null = null;
+  private keepAliveInterval: number | null = null;
+  private connected = false;
+  private connectReject: ((reason?: unknown) => void) | null = null;
+
+  constructor(options: { enableMic?: boolean; callbacks?: VoiceWebRTCClientCallbacks }) {
+    this.enableMicOnStart = options.enableMic ?? true;
+    this.callbacks = options.callbacks || {};
+  }
+
+  get isMicEnabled() {
+    return !!this.stream?.getAudioTracks().some((track) => track.enabled);
+  }
+
+  async initDevices() {
+    if (this.stream) return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Microphone capture is unavailable in this Electron renderer.");
+    }
+
+    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    for (const track of this.stream.getAudioTracks()) {
+      track.enabled = this.enableMicOnStart;
+    }
+    this.startLocalAudioLevel();
+  }
+
+  async connect(params?: unknown) {
+    const endpoint = this.resolveOfferEndpoint(params);
+    this.offerEndpoint = endpoint;
+
+    await this.initDevices();
+
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let botReady = false;
+      const timeout = window.setTimeout(() => {
+        if (!settled) {
+          reject(new Error(botReady ? "Timed out completing WebRTC connection." : "Timed out waiting for Pipecat bot-ready."));
+          void this.disconnect();
+        }
+      }, 30000);
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        this.connectReject = null;
+        resolve();
+      };
+
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        this.connectReject = null;
+        reject(error instanceof Error ? error : new Error(String(error || "WebRTC connection failed.")));
+        void this.disconnect();
+      };
+
+      this.connectReject = fail;
+
+      this.startPeerConnection(endpoint, () => {
+        botReady = true;
+        finish();
+      }).catch(fail);
+    });
+  }
+
+  async disconnect() {
+    this.connectReject = null;
+    const wasConnected = this.connected;
+    this.connected = false;
+    this.canSendCandidates = false;
+    this.queuedCandidates = [];
+
+    if (this.audioLevelInterval !== null) {
+      window.clearInterval(this.audioLevelInterval);
+      this.audioLevelInterval = null;
+    }
+
+    if (this.keepAliveInterval !== null) {
+      window.clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+    }
+
+    if (this.dc) {
+      this.dc.close();
+      this.dc = null;
+    }
+
+    if (this.pc) {
+      for (const sender of this.pc.getSenders()) {
+        sender.track?.stop();
+      }
+      this.pc.close();
+      this.pc = null;
+    }
+
+    if (this.stream) {
+      for (const track of this.stream.getTracks()) {
+        track.stop();
+      }
+      this.stream = null;
+    }
+
+    if (this.audioContext) {
+      await this.audioContext.close().catch(() => undefined);
+      this.audioContext = null;
+    }
+
+    if (wasConnected) {
+      this.callbacks.onDisconnected?.();
+    }
+  }
+
+  enableMic(enabled: boolean) {
+    this.enableMicOnStart = enabled;
+    for (const track of this.stream?.getAudioTracks() || []) {
+      track.enabled = enabled;
+    }
+    this.sendSignallingMessage({ type: "trackStatus", receiver_index: 0, enabled });
+  }
+
+  private resolveOfferEndpoint(params: unknown) {
+    if (!params || typeof params !== "object") {
+      throw new Error("Missing WebRTC offer endpoint.");
+    }
+
+    const record = params as { endpoint?: unknown; webrtcUrl?: unknown; webrtcRequestParams?: { endpoint?: unknown } };
+    const endpoint = record.webrtcRequestParams?.endpoint || record.webrtcUrl || record.endpoint;
+    if (typeof endpoint !== "string") {
+      throw new Error("Invalid WebRTC offer endpoint.");
+    }
+    return endpoint;
+  }
+
+  private async startPeerConnection(endpoint: string, onBotReady: () => void) {
+    const pc = new RTCPeerConnection({ iceServers: [] });
+    this.pc = pc;
+
+    pc.addEventListener("iceconnectionstatechange", () => {
+      logVoiceClient(`ICE state: ${pc.iceConnectionState}`);
+      if (["failed", "closed"].includes(pc.iceConnectionState) && this.connectReject) {
+        this.connectReject?.(new Error(`ICE connection ${pc.iceConnectionState}.`));
+      } else if (["failed", "closed"].includes(pc.iceConnectionState)) {
+        this.handleRemoteDisconnect(`ICE connection ${pc.iceConnectionState}.`);
+      }
+    });
+    pc.addEventListener("connectionstatechange", () => {
+      logVoiceClient(`Peer connection state: ${pc.connectionState}`);
+      if (["failed", "closed"].includes(pc.connectionState) && this.connectReject) {
+        this.connectReject?.(new Error(`Peer connection ${pc.connectionState}.`));
+      } else if (["failed", "closed"].includes(pc.connectionState)) {
+        this.handleRemoteDisconnect(`Peer connection ${pc.connectionState}.`);
+      }
+    });
+    pc.addEventListener("track", (event) => {
+      logVoiceClient(`remote ${event.track.kind} track received`);
+      this.callbacks.onTrackStarted?.(event.track, { local: false });
+    });
+    pc.addEventListener("icecandidate", (event) => {
+      if (event.candidate) {
+        this.queuedCandidates.push(event.candidate);
+        void this.flushIceCandidates();
+      }
+    });
+
+    pc.addTransceiver("audio", { direction: "sendrecv" });
+    pc.addTransceiver("video", { direction: "sendrecv" });
+
+    const audioTrack = this.stream?.getAudioTracks()[0];
+    if (!audioTrack) {
+      throw new Error("No microphone track is available.");
+    }
+    await pc.getTransceivers()[0].sender.replaceTrack(audioTrack);
+
+    const dc = pc.createDataChannel("chat", { ordered: true });
+    this.dc = dc;
+
+    dc.addEventListener("open", () => {
+      logVoiceClient("data channel open");
+      this.connected = true;
+      this.callbacks.onConnected?.();
+      this.sendSignallingMessage({ type: "trackStatus", receiver_index: 0, enabled: this.isMicEnabled });
+      this.sendSignallingMessage({ type: "trackStatus", receiver_index: 1, enabled: false });
+      this.sendRtviMessage("client-ready", {
+        version: "1.2.0",
+        about: {
+          library: "hydra",
+          platform: "electron"
+        }
+      });
+      this.keepAliveInterval = window.setInterval(() => {
+        if (this.dc?.readyState === "open") {
+          this.dc.send(`ping: ${Date.now()}`);
+        }
+      }, 1000);
+    });
+    dc.addEventListener("close", () => {
+      logVoiceClient("data channel closed");
+      if (this.keepAliveInterval !== null) {
+        window.clearInterval(this.keepAliveInterval);
+        this.keepAliveInterval = null;
+      }
+      if (this.connectReject) {
+        this.connectReject?.(new Error("Data channel closed before connection completed."));
+      } else {
+        this.handleRemoteDisconnect("Data channel closed.");
+      }
+    });
+    dc.addEventListener("error", () => {
+      this.connectReject?.(new Error("Data channel error."));
+    });
+    dc.addEventListener("message", (event) => this.handleDataChannelMessage(event.data, onBotReady));
+
+    logVoiceClient("creating WebRTC offer");
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await this.waitForIceGatheringComplete(pc);
+
+    const localDescription = pc.localDescription;
+    if (!localDescription) {
+      throw new Error("WebRTC local description was not created.");
+    }
+
+    logVoiceClient(`posting WebRTC offer to ${endpoint}`);
+    const answer = await api.postVoiceWebRTCOffer(endpoint, {
+      sdp: localDescription.sdp,
+      type: localDescription.type,
+      pc_id: this.pcId,
+      restart_pc: false
+    }) as { pc_id?: string; sdp: string; type: RTCSdpType };
+    this.pcId = answer.pc_id || null;
+    logVoiceClient(`received WebRTC answer${this.pcId ? ` for ${this.pcId}` : ""}`);
+    await pc.setRemoteDescription({ type: answer.type, sdp: answer.sdp });
+    this.canSendCandidates = true;
+    await this.flushIceCandidates();
+  }
+
+  private waitForIceGatheringComplete(pc: RTCPeerConnection) {
+    if (pc.iceGatheringState === "complete") return Promise.resolve();
+
+    return new Promise<void>((resolve) => {
+      const timeout = window.setTimeout(done, 2000);
+      const onChange = () => {
+        if (pc.iceGatheringState === "complete") done();
+      };
+      function done() {
+        window.clearTimeout(timeout);
+        pc.removeEventListener("icegatheringstatechange", onChange);
+        resolve();
+      }
+      pc.addEventListener("icegatheringstatechange", onChange);
+    });
+  }
+
+  private handleRemoteDisconnect(message: string) {
+    if (!this.connected) return;
+    logVoiceClient(message);
+    void this.disconnect();
+  }
+
+  private async flushIceCandidates() {
+    if (!this.canSendCandidates || !this.pcId || !this.queuedCandidates.length) return;
+
+    const candidates = this.queuedCandidates.splice(0, this.queuedCandidates.length).map((candidate) => ({
+      candidate: candidate.candidate,
+      sdp_mid: candidate.sdpMid,
+      sdp_mline_index: candidate.sdpMLineIndex
+    }));
+
+    await api.patchVoiceWebRTCIce(this.offerEndpoint, { pc_id: this.pcId, candidates })
+      .catch((error) => logVoiceClient(`ICE candidate PATCH failed: ${error instanceof Error ? error.message : String(error)}`));
+  }
+
+  private handleDataChannelMessage(raw: unknown, onBotReady: () => void) {
+    if (typeof raw !== "string" || !raw.startsWith("{")) return;
+
+    let message: { label?: string; type?: string; data?: any; message?: { type?: string } };
+    try {
+      message = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    if (message.type === "signalling") {
+      logVoiceClient(`signalling message: ${message.message?.type || "unknown"}`);
+      return;
+    }
+
+    if (message.label !== "rtvi-ai") return;
+
+    switch (message.type) {
+      case "bot-ready":
+        this.callbacks.onBotReady?.();
+        onBotReady();
+        break;
+      case "error":
+        this.callbacks.onError?.({ message: message.data?.message || message.data?.error || "Pipecat bot error." });
+        break;
+      case "user-started-speaking":
+        this.callbacks.onUserStartedSpeaking?.();
+        break;
+      case "user-stopped-speaking":
+        this.callbacks.onUserStoppedSpeaking?.();
+        break;
+      case "user-transcription":
+        this.callbacks.onUserTranscript?.(message.data);
+        break;
+      case "bot-started-speaking":
+        this.callbacks.onBotStartedSpeaking?.();
+        break;
+      case "bot-stopped-speaking":
+        this.callbacks.onBotStoppedSpeaking?.();
+        break;
+      case "bot-output":
+        this.callbacks.onBotOutput?.(message.data);
+        break;
+      default:
+        break;
+    }
+  }
+
+  private sendSignallingMessage(message: unknown) {
+    this.sendDataChannelJson({ type: "signalling", message });
+  }
+
+  private sendRtviMessage(type: string, data: unknown) {
+    this.sendDataChannelJson({
+      id: crypto.randomUUID(),
+      label: "rtvi-ai",
+      type,
+      data
+    });
+  }
+
+  private sendDataChannelJson(payload: unknown) {
+    if (this.dc?.readyState === "open") {
+      this.dc.send(JSON.stringify(payload));
+    }
+  }
+
+  private startLocalAudioLevel() {
+    if (!this.stream || this.audioLevelInterval !== null) return;
+
+    const AudioContextConstructor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextConstructor) return;
+
+    this.audioContext = new AudioContextConstructor();
+    const analyser = this.audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    this.audioContext.createMediaStreamSource(this.stream).connect(analyser);
+
+    const data = new Uint8Array(analyser.fftSize);
+    this.audioLevelInterval = window.setInterval(() => {
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (const value of data) {
+        const normalized = (value - 128) / 128;
+        sum += normalized * normalized;
+      }
+      const rms = Math.sqrt(sum / data.length);
+      this.callbacks.onLocalAudioLevel?.(Math.min(1, rms * 5));
+    }, 100);
+  }
+}
+
+function voiceRequiredApiKeys(config: VoiceConfig) {
+  const keys = new Set<string>();
+  const add = (key: string | null) => {
+    if (key) keys.add(key);
+  };
+
+  add(config.llmProvider === "openai" ? "OPENAI_API_KEY" : null);
+  add(config.llmProvider === "anthropic" ? "ANTHROPIC_API_KEY" : null);
+  add(config.llmProvider === "google" ? "GOOGLE_API_KEY" : null);
+  add(config.sttProvider === "deepgram" ? "DEEPGRAM_API_KEY" : null);
+  add(config.sttProvider === "google" ? "GOOGLE_API_KEY" : null);
+  add(config.ttsProvider === "cartesia" ? "CARTESIA_API_KEY" : null);
+  add(config.ttsProvider === "elevenlabs" ? "ELEVENLABS_API_KEY" : null);
+  add(config.ttsProvider === "deepgram" ? "DEEPGRAM_API_KEY" : null);
+
+  return [...keys];
+}
+
+function voiceSetupInstructions(config: VoiceConfig) {
+  const requiredKeys = voiceRequiredApiKeys(config);
+  if (!requiredKeys.length) {
+    return "To get started, choose your providers and allow microphone access when prompted.";
+  }
+
+  return `To get started, choose your providers, make sure ${requiredKeys.join(", ")} ${
+    requiredKeys.length === 1 ? "is" : "are"
+  } configured in the right panel or your shell, and allow microphone access when prompted.`;
+}
+
+function voiceTooltip(voiceState: VoiceCallState) {
+  if (voiceState === "listening") return "Voice Active";
+  if (voiceState === "connecting") return "Preparing...";
+  if (voiceState === "error") return "Voice Error";
+  return "Voice Mode";
+}
+
+function voiceStatusLabel(voiceState: VoiceCallState) {
+  if (voiceState === "connecting") return "Preparing";
+  if (voiceState === "listening") return "Listening";
+  if (voiceState === "error") return "Error";
+  return "";
+}
+
+function appendVoiceSetupInstructions(_config: VoiceConfig) {
+  // Setup guidance is shown via the status banner, not transcript entries
+}
+
+function renderVoiceRailButton() {
+  const voiceState = ui.voiceCallState;
+  return dom(
+    "button",
+    {
+      className: classNames(
+        "sidebar-rail-button",
+        "sidebar-voice-button",
+        voiceState !== "idle" ? `voice-${voiceState}` : undefined,
+        sidebarNavMatches(sidebarActionNavId("toggle-voice-call")) ? "keyboard-active" : undefined
+      ),
+      attrs: {
+        "data-action": "toggle-voice-call",
+        "data-tooltip": voiceTooltip(voiceState),
+        title: "Voice Mode",
+        "aria-label": "Voice Mode"
+      }
+    },
+    renderUtilityIconElement("microphone")
+  );
+}
+
+function voiceCallIsActive() {
+  return ui.voiceCallState === "connecting" || ui.voiceCallState === "listening";
+}
+
+function toggleVoiceCall() {
+  if (voiceCallIsActive()) {
+    if (ui.voiceMinimized) {
+      restoreVoiceModal();
+    } else {
+      closeVoiceModal();
+    }
+  } else {
+    void openVoiceModal();
+  }
+}
+
+async function openVoiceModal() {
+  if (voiceDialog.open) return;
+  if (ui.voiceMinimized && voiceCallIsActive()) {
+    restoreVoiceModal();
+    return;
+  }
+
+  ui.voiceTranscript = [];
+  ui.voiceMuted = false;
+  ui.voiceMinimized = false;
+  ui.voiceInstallLog = [];
+
+  renderVoiceDialog();
+  voiceDialog.showModal();
+
+  voiceDialog.addEventListener("close", onVoiceDialogClose, { once: true });
+
+  await startVoiceSession();
+}
+
+function onVoiceDialogClose() {
+  if (voiceDialogCloseMode === "minimize") {
+    voiceDialogCloseMode = "end";
+    renderSidebar();
+    renderVoiceLiveCaption();
+    renderVoiceMiniOverlay();
+    return;
+  }
+
+  voiceDialogCloseMode = "end";
+  endVoiceSession();
+}
+
+function endVoiceSession() {
+  voiceSessionRunId += 1;
+  clearVoiceSilenceIdleTimer();
+  disconnectPipecatClient();
+  if (ui.voiceCallState !== "idle") {
+    void api.stopVoiceCall();
+    ui.voiceCallState = "idle";
+  }
+  ui.voiceMinimized = false;
+  ui.voiceLiveUserText = "";
+  ui.voiceLiveBotText = "";
+  renderVoiceLiveCaption();
+  renderVoiceMiniOverlay();
+  renderSidebar();
+}
+
+function closeVoiceModal() {
+  voiceDialogCloseMode = "end";
+  if (voiceDialog.open) {
+    voiceDialog.close();
+    return;
+  }
+
+  endVoiceSession();
+}
+
+function minimizeVoiceModal() {
+  if (!voiceDialog.open || !voiceCallIsActive()) return;
+  ui.voiceMinimized = true;
+  voiceDialogCloseMode = "minimize";
+  // Reset overlay to default center-top position
+  if (voiceMiniOverlayElement) {
+    voiceMiniOverlayElement.style.left = "";
+    voiceMiniOverlayElement.style.top = "";
+    voiceMiniOverlayElement.style.right = "";
+    voiceMiniOverlayElement.style.bottom = "";
+    voiceMiniOverlayElement.style.transform = "";
+    voiceMiniOverlayElement.style.width = "";
+    voiceMiniOverlayElement.style.height = "";
+    voiceMiniOverlayElement.style.animation = "";
+  }
+  voiceDialog.close();
+}
+
+function restoreVoiceModal() {
+  if (voiceDialog.open) return;
+
+  ui.voiceMinimized = false;
+  voiceDialogCloseMode = "end";
+  renderVoiceDialog();
+  voiceDialog.showModal();
+  voiceDialog.addEventListener("close", onVoiceDialogClose, { once: true });
+  renderVoiceLiveCaption();
+  renderVoiceMiniOverlay();
+}
+
+async function startVoiceSession() {
+  const runId = ++voiceSessionRunId;
+  ui.voiceCallState = "connecting";
+  ui.voiceMuted = false;
+  ui.voiceMinimized = false;
+  resetVoiceSilenceIdleTimer(runId);
+  renderSidebar();
+  renderVoiceDialog();
+  renderVoiceMiniOverlay();
+
+  try {
+    const config = await api.getVoiceConfig();
+    if (!voiceSessionIsCurrent(runId)) return;
+    state.preferences.voiceConfig = config;
+    appendVoiceSetupInstructions(config);
+    renderVoiceDialog();
+
+    const pyCheck = await api.checkPython();
+    if (!voiceSessionIsCurrent(runId)) return;
+
+    if (!pyCheck.found) {
+      markVoiceError(
+        "Python 3.10+ is required for voice mode. Install it from python.org or run: brew install python3"
+      );
+      return;
+    }
+
+    const deps = await api.installVoiceDeps();
+    if (!voiceSessionIsCurrent(runId)) return;
+
+    if (!deps.success) {
+      console.warn("[Voice] dependency setup failed:", deps.error || "unknown error");
+      markVoiceError(
+        "Voice mode could not finish setup. Make sure Python 3.10+ can install packages with pip or uv, then retry."
+      );
+      return;
+    }
+
+    const result = await api.startVoiceCall(config);
+    if (!voiceSessionIsCurrent(runId)) {
+      if (result.success) {
+        void api.stopVoiceCall();
+      }
+      return;
+    }
+
+    if (!result.success || !result.port) {
+      console.warn("[Voice] bot start failed:", result.error || "unknown error");
+      markVoiceError(
+        "Voice mode could not start. Check that the selected provider API keys are configured, then retry."
+      );
+      return;
+    }
+
+    await connectPipecatClient(result.port, runId);
+  } catch (err) {
+    if (!voiceSessionIsCurrent(runId)) return;
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[Voice] setup failed:", msg);
+    markVoiceError("Voice mode could not start. Check your provider settings and retry.");
+  }
+}
+
+async function connectPipecatClient(port: number, runId = voiceSessionRunId) {
+  disconnectPipecatClient();
+
+  if (
+    typeof RTCPeerConnection === "undefined" ||
+    !navigator.mediaDevices?.getUserMedia
+  ) {
+    await api.stopVoiceCall();
+    if (!voiceSessionIsCurrent(runId)) return;
+    markVoiceError("Voice mode is missing browser WebRTC or microphone support in this app build.");
+    return;
+  }
+
+  try {
+    logVoiceClient(`creating Hydra SmallWebRTC client for port ${port}`);
+    pipecatClient = new HydraSmallWebRTCClient({
+      enableMic: true,
+      callbacks: {
+        onConnected: () => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
+          logVoiceClient("WebRTC transport connected");
+          appendVoiceTranscript("system", "Connected. Start speaking.");
+          renderVoiceDialog();
+          renderVoiceMiniOverlay();
+        },
+        onDisconnected: () => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          clearVoiceSilenceIdleTimer();
+          logVoiceClient("WebRTC transport disconnected");
+          appendVoiceTranscript("system", "Disconnected.");
+          void api.stopVoiceCall();
+          ui.voiceCallState = "idle";
+          ui.voiceMinimized = false;
+          renderSidebar();
+          renderVoiceDialog();
+          renderVoiceMiniOverlay();
+        },
+        onBotReady: () => {
+          logVoiceClient("Pipecat bot ready");
+        },
+        onUserStartedSpeaking: () => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
+          ui.voiceLiveUserText = "";
+          renderVoiceLiveCaption();
+          renderVoiceMiniOverlay();
+        },
+        onUserStoppedSpeaking: () => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
+          ui.voiceLiveUserText = "";
+          renderVoiceLiveCaption();
+          renderVoiceMiniOverlay();
+        },
+        onUserTranscript: (data: { text: string; final: boolean }) => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
+          if (data.final) {
+            if (data.text.trim()) {
+              if (appendVoiceTranscript("user", data.text.trim())) {
+                renderVoiceDialog();
+                scrollVoiceTranscript();
+              }
+            }
+            ui.voiceLiveUserText = "";
+          } else {
+            ui.voiceLiveUserText = data.text || "";
+          }
+          renderVoiceLiveCaption();
+          renderVoiceMiniOverlay();
+        },
+        onBotStartedSpeaking: () => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
+          ui.voiceLiveBotText = "";
+          renderVoiceLiveCaption();
+          renderVoiceMiniOverlay();
+        },
+        onBotStoppedSpeaking: () => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
+          ui.voiceLiveBotText = "";
+          renderVoiceLiveCaption();
+          renderVoiceMiniOverlay();
+        },
+        onBotOutput: (data: { text: string; spoken: boolean }) => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
+          const text = data.text.trim();
+          if (text) {
+            ui.voiceLiveBotText = text;
+            renderVoiceLiveCaption();
+            renderVoiceMiniOverlay();
+          }
+          if (text && data.spoken && appendVoiceTranscript("bot", text)) {
+            renderVoiceDialog();
+            scrollVoiceTranscript();
+          }
+        },
+        onLocalAudioLevel: (level: number) => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          const pct = Math.min(100, Math.round(level * 100));
+          const bar = document.getElementById("voice-mic-bar");
+          if (bar) {
+            bar.style.width = `${pct}%`;
+          }
+          const pctEl = document.getElementById("voice-mic-pct");
+          if (pctEl) {
+            pctEl.textContent = `${pct}%`;
+          }
+        },
+        onError: (error: { message?: string }) => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          logVoiceClient(`Pipecat client error: ${error.message || "unknown error"}`);
+          markVoiceError("Voice mode hit a connection problem. Check your provider settings and retry.");
+        },
+        onTrackStarted: (track: MediaStreamTrack, participant: { local?: boolean } | undefined) => {
+          if (!voiceSessionIsCurrent(runId)) return;
+          if (!participant?.local && track.kind === "audio") {
+            attachVoiceRemoteAudioTrack(track);
+          }
+        }
+      }
+    });
+
+    if (!voiceSessionIsCurrent(runId)) return;
+
+    logVoiceClient("initializing microphone devices");
+    await pipecatClient.initDevices();
+    if (!voiceSessionIsCurrent(runId)) return;
+
+    logVoiceClient(`connecting WebRTC to http://127.0.0.1:${port}/api/offer`);
+    await pipecatClient.connect({
+      endpoint: `http://127.0.0.1:${port}/api/offer`
+    });
+  } catch (err) {
+    if (!voiceSessionIsCurrent(runId)) return;
+    const msg = err instanceof Error ? err.message : String(err);
+    logVoiceClient(`connection failed: ${msg}`);
+    await api.stopVoiceCall();
+    if (!voiceSessionIsCurrent(runId)) return;
+    markVoiceError("Voice mode could not connect. Retry voice mode, or restart Hydra if this keeps happening.");
+  }
+}
+
+function disconnectPipecatClient() {
+  if (pipecatClient) {
+    try {
+      pipecatClient.disconnect();
+    } catch {
+      // Ignore disconnect errors
+    }
+    pipecatClient = null;
+  }
+
+  const host = document.getElementById("voice-audio-host");
+  if (host) {
+    host.innerHTML = "";
+  }
+}
+
+function toggleVoiceMute() {
+  if (!pipecatClient) return;
+  ui.voiceMuted = !ui.voiceMuted;
+  pipecatClient.enableMic(!ui.voiceMuted);
+  renderVoiceDialog();
+  renderVoiceMiniOverlay();
+}
+
+async function saveVoiceConfig() {
+  const form = document.getElementById("voice-settings-form") as HTMLFormElement | null;
+  if (!form) return;
+
+  const data = new FormData(form);
+  const nextConfig: VoiceConfig = {
+    llmProvider: (data.get("llmProvider") as string) || "openai",
+    sttProvider: (data.get("sttProvider") as string) || "deepgram",
+    ttsProvider: (data.get("ttsProvider") as string) || "cartesia",
+    ttsVoice: (data.get("ttsVoice") as string) || "",
+    enableSubagents: data.get("enableSubagents") === "on",
+    apiKeys: {
+      OPENAI_API_KEY: (data.get("OPENAI_API_KEY") as string) || "",
+      ANTHROPIC_API_KEY: (data.get("ANTHROPIC_API_KEY") as string) || "",
+      GOOGLE_API_KEY: (data.get("GOOGLE_API_KEY") as string) || "",
+      DEEPGRAM_API_KEY: (data.get("DEEPGRAM_API_KEY") as string) || "",
+      CARTESIA_API_KEY: (data.get("CARTESIA_API_KEY") as string) || "",
+      ELEVENLABS_API_KEY: (data.get("ELEVENLABS_API_KEY") as string) || ""
+    }
+  };
+
+  await api.updateVoiceConfig(nextConfig);
+  state.preferences.voiceConfig = nextConfig;
+
+  appendVoiceTranscript("system", "Settings saved. Voice mode will reconnect automatically.");
+  renderVoiceDialog();
+
+  // Restart the session with new config
+  disconnectPipecatClient();
+  if (ui.voiceCallState !== "idle") {
+    await api.stopVoiceCall();
+  }
+  await startVoiceSession();
+}
+
+function renderVoiceLiveCaption() {
+  const el = document.getElementById("voice-live-caption");
+  if (!el) return;
+
+  const isListening = ui.voiceCallState === "listening";
+  const userText = ui.voiceLiveUserText.trim();
+  const botText = ui.voiceLiveBotText.trim();
+  const hasContent = !ui.voiceMinimized && isListening && (userText || botText);
+
+  if (!hasContent) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+
+  el.hidden = false;
+  el.innerHTML = "";
+
+  if (userText) {
+    const userLine = document.createElement("div");
+    userLine.className = "voice-live-line voice-live-user";
+    const label = document.createElement("span");
+    label.className = "voice-live-label";
+    label.textContent = "You";
+    const text = document.createElement("span");
+    text.className = "voice-live-text";
+    text.textContent = userText;
+    userLine.appendChild(label);
+    userLine.appendChild(text);
+    el.appendChild(userLine);
+  }
+
+  if (botText) {
+    const botLine = document.createElement("div");
+    botLine.className = "voice-live-line voice-live-bot";
+    const label = document.createElement("span");
+    label.className = "voice-live-label";
+    label.textContent = "Bot";
+    const text = document.createElement("span");
+    text.className = "voice-live-text";
+    text.textContent = botText;
+    botLine.appendChild(label);
+    botLine.appendChild(text);
+    el.appendChild(botLine);
+  }
+}
+
+function renderVoiceMiniOverlay() {
+  if (!voiceMiniOverlayElement) return;
+
+  const shouldShow = ui.voiceMinimized && ui.voiceCallState !== "idle";
+  voiceMiniOverlayElement.hidden = !shouldShow;
+  if (!shouldShow) {
+    voiceMiniOverlayElement.replaceChildren();
+    return;
+  }
+
+  const voiceState = ui.voiceCallState;
+  const lastUserEntry = [...ui.voiceTranscript].reverse().find((entry) => entry.role === "user");
+  const userText = ui.voiceLiveUserText.trim() || lastUserEntry?.text || "";
+  const lastBotEntry = [...ui.voiceTranscript].reverse().find((entry) => entry.role === "bot");
+  const botText = ui.voiceLiveBotText.trim() || lastBotEntry?.text || "";
+  const statusText = voiceState === "connecting"
+    ? "Preparing voice"
+    : voiceState === "error"
+      ? "Voice error"
+      : ui.voiceMuted
+        ? "Muted"
+        : "Listening";
+  const canMute = voiceState === "listening" && !!pipecatClient;
+
+  replaceDomChildren(
+    voiceMiniOverlayElement,
+    dom(
+      "div",
+      { className: classNames("voice-mini-card", `voice-mini-${voiceState}`) },
+      dom(
+        "div",
+        { className: "voice-mini-topline" },
+        dom(
+          "div",
+          { className: "voice-mini-status" },
+          dom("span", { className: "voice-mini-dot" }),
+          dom("span", {}, statusText)
+        ),
+        dom(
+          "div",
+          { className: "voice-mini-actions" },
+          canMute
+            ? dom("button", {
+                className: "voice-mini-btn",
+                attrs: { "data-action": "voice-mute-toggle" }
+              }, ui.voiceMuted ? "Unmute" : "Mute")
+            : null,
+          voiceState === "error"
+            ? dom("button", {
+                className: "voice-mini-btn",
+                attrs: { "data-action": "voice-retry" }
+              }, "Retry")
+            : null,
+          dom("button", {
+            className: "voice-mini-btn",
+            attrs: { "data-action": "voice-restore" }
+          }, "Open"),
+          dom("button", {
+            className: "voice-mini-btn voice-mini-btn-end",
+            attrs: { "data-action": "voice-end" }
+          }, "End")
+        )
+      ),
+      dom(
+        "div",
+        { className: "voice-mini-transcript" },
+        dom(
+          "div",
+          { className: "voice-mini-stream" },
+          userText
+            ? dom("span", { className: "voice-mini-user-text" }, userText + " ")
+            : null,
+          botText
+            ? dom("span", { className: "voice-mini-bot-text" }, botText)
+            : null,
+          !userText && !botText
+            ? dom("span", { className: "voice-mini-waiting" }, "Listening\u2026")
+            : null
+        )
+      ),
+      trustedElement<HTMLElement>(
+        `<div class="voice-mini-resize-grip"><svg viewBox="0 0 10 10"><line x1="9" y1="1" x2="1" y2="9"/><line x1="9" y1="5" x2="5" y2="9"/><line x1="9" y1="8" x2="8" y2="9"/></svg></div>`
+      )
+    )
+  );
+}
+
+function initVoiceMiniDrag(): void {
+  const el = voiceMiniOverlayElement;
+  if (!el) return;
+
+  let dragging = false;
+  let resizing = false;
+  let startX = 0;
+  let startY = 0;
+  let startLeft = 0;
+  let startTop = 0;
+  let startW = 0;
+  let startH = 0;
+
+  el.addEventListener("mousedown", (e: MouseEvent) => {
+    // Don't drag when clicking buttons
+    if ((e.target as HTMLElement).closest("button")) return;
+
+    const rect = el.getBoundingClientRect();
+
+    // Check if mousedown is on the resize grip
+    if ((e.target as HTMLElement).closest(".voice-mini-resize-grip")) {
+      resizing = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      startW = rect.width;
+      startH = rect.height;
+      el.style.animation = "none";
+      el.style.transition = "none";
+      el.style.transform = "none";
+      el.style.left = rect.left + "px";
+      el.style.top = rect.top + "px";
+      el.style.right = "auto";
+      el.style.bottom = "auto";
+      e.preventDefault();
+      return;
+    }
+
+    dragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    startLeft = rect.left;
+    startTop = rect.top;
+    // Cancel animation fill-mode so inline transform override takes effect
+    el.style.animation = "none";
+    el.style.transition = "none";
+    el.style.transform = "none";
+    el.style.left = rect.left + "px";
+    el.style.top = rect.top + "px";
+    el.style.right = "auto";
+    el.style.bottom = "auto";
+    e.preventDefault();
+  });
+
+  document.addEventListener("mousemove", (e: MouseEvent) => {
+    if (resizing) {
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      el.style.width = Math.max(360, Math.min(720, startW + dx)) + "px";
+      el.style.height = Math.max(180, Math.min(600, startH + dy)) + "px";
+      return;
+    }
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    el.style.left = (startLeft + dx) + "px";
+    el.style.top = (startTop + dy) + "px";
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (resizing) {
+      resizing = false;
+      return;
+    }
+    if (!dragging) return;
+    dragging = false;
+    el.style.transition = "";
+  });
+}
+
+// Initialize drag on the overlay element
+initVoiceMiniDrag();
+
+function scrollVoiceTranscript() {
+  requestAnimationFrame(() => {
+    const el = document.getElementById("voice-transcript-scroll");
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  });
+}
+
+function renderVoiceDialog() {
+  const host = document.getElementById("voice-dialog-host");
+  if (!host) return;
+
+  const voiceState = ui.voiceCallState;
+  const config = state.preferences.voiceConfig as VoiceConfig | undefined;
+  const cfg: VoiceConfig = config || {
+    llmProvider: "openai", sttProvider: "deepgram", ttsProvider: "cartesia",
+    ttsVoice: "", enableSubagents: false, apiKeys: {}
+  };
+
+  const isActive = voiceState === "listening" || voiceState === "connecting";
+  const canMute = voiceState === "listening" && !!pipecatClient;
+  const hasTranscript = ui.voiceTranscript.length > 0;
+  const isVoiceError = (e: { role: string; text: string }) =>
+    e.role === "system" && (e.text.startsWith("Error:") || e.text.includes("could not") || e.text.includes("stopped unexpectedly") || e.text.includes("missing required"));
+  const lastError = [...ui.voiceTranscript].reverse().find(isVoiceError);
+  const hasInstallLog = ui.voiceInstallLog.length > 0;
+
+  // Determine status banner
+  let statusDot: string | null = null;
+  let statusTitle = "";
+  let statusDetail = "";
+
+  if (voiceState === "connecting") {
+    statusDot = "connecting";
+    statusTitle = "Setting up voice mode\u2026";
+    statusDetail = "Checking Python, installing dependencies, and starting the voice agent.";
+  } else if (voiceState === "error") {
+    statusDot = "error";
+    statusTitle = lastError ? "Setup failed" : "Voice error";
+    statusDetail = "Fix the issue, then retry or change settings.";
+  } else if (voiceState === "listening") {
+    statusDot = "listening";
+    statusTitle = "Listening";
+    statusDetail = "Speak naturally. The voice agent is connected and ready.";
+  }
+
+  // Build the relevant API key fields based on selected providers
+  const keyEntries: { key: string; label: string }[] = [];
+  if (cfg.llmProvider === "openai") keyEntries.push({ key: "OPENAI_API_KEY", label: "OpenAI API key" });
+  if (cfg.llmProvider === "anthropic") keyEntries.push({ key: "ANTHROPIC_API_KEY", label: "Anthropic API key" });
+  if (cfg.llmProvider === "google" || cfg.sttProvider === "google") keyEntries.push({ key: "GOOGLE_API_KEY", label: "Google API key" });
+  if (cfg.sttProvider === "deepgram" || cfg.ttsProvider === "deepgram") keyEntries.push({ key: "DEEPGRAM_API_KEY", label: "Deepgram API key" });
+  if (cfg.ttsProvider === "cartesia") keyEntries.push({ key: "CARTESIA_API_KEY", label: "Cartesia API key" });
+  if (cfg.ttsProvider === "elevenlabs") keyEntries.push({ key: "ELEVENLABS_API_KEY", label: "ElevenLabs API key" });
+  // Deduplicate
+  const seenKeys = new Set<string>();
+  const uniqueKeyEntries = keyEntries.filter((e) => {
+    if (seenKeys.has(e.key)) return false;
+    seenKeys.add(e.key);
+    return true;
+  });
+
+  const sel = (name: string, value: string) => value === (cfg as unknown as Record<string, unknown>)[name] ? "selected" : "";
+
+  replaceDomChildren(
+    host,
+    dom(
+      "div",
+      { className: "voice-modal" },
+      // ── Left: main panel ──
+      dom(
+        "div",
+        { className: "voice-main-panel" },
+        // Header
+        dom(
+          "div",
+          { className: "voice-header" },
+          dom(
+            "div",
+            { className: "voice-header-text" },
+            dom("div", { className: "voice-header-label" }, "Voice Mode"),
+            dom("h2", { className: "voice-header-title" }, "Hands-free Hydra control"),
+            dom("div", { className: "voice-header-subtitle" },
+              "Speak naturally. The voice agent can call Hydra MCP tools for sessions, repos, settings, and wiki actions."
+            )
+          ),
+          dom(
+            "div",
+            { className: "voice-header-actions" },
+            isActive
+              ? dom("button", {
+                  className: "voice-close-btn",
+                  attrs: { "data-action": "voice-minimize" }
+                }, "Minimize")
+              : null,
+            dom("button", {
+              className: "voice-close-btn",
+              attrs: { "data-action": "voice-end" }
+            }, "Close")
+          )
+        ),
+        // Content area (status + transcript + install log)
+        dom(
+          "div",
+          { className: "voice-content" },
+          // Status banner
+          statusDot
+            ? dom(
+                "div",
+                { className: "voice-status-banner" },
+                dom("div", { className: classNames("voice-status-dot", statusDot) }),
+                dom(
+                  "div",
+                  { className: "voice-status-info" },
+                  dom("div", { className: "voice-status-title" }, statusTitle),
+                  dom("div", { className: "voice-status-detail" }, statusDetail)
+                )
+              )
+            : null,
+          // Error detail bar
+          voiceState === "error" && lastError
+            ? dom("div", { className: "voice-error-bar" }, lastError.text)
+            : null,
+          // Transcript
+          dom(
+            "div",
+            { className: "voice-transcript-scroll", attrs: { id: "voice-transcript-scroll" } },
+            hasTranscript
+              ? null
+              : dom("div", { className: "voice-transcript-empty" }, "Voice activity and transcripts will appear here."),
+            ...ui.voiceTranscript
+              .filter((e) => !isVoiceError(e))
+              .map((entry) =>
+                dom(
+                  "div",
+                  { className: classNames("voice-transcript-entry", entry.role) },
+                  dom("div", {}, entry.text),
+                  dom("div", { className: "voice-transcript-time" }, entry.time)
+                )
+              )
+          ),
+          // Install log (collapsible)
+          hasInstallLog
+            ? trustedFragment(`
+                <details class="voice-install-details">
+                  <summary>Dependency install log</summary>
+                  <div class="voice-install-log-content">${ui.voiceInstallLog.map((l) => escapeAttribute(l)).join("\n")}</div>
+                </details>
+              `)
+            : null
+        ),
+        // Controls bar
+        dom(
+          "div",
+          { className: "voice-controls" },
+          dom("span", { className: "voice-mic-label" }, "Mic level"),
+          dom(
+            "div",
+            { className: "voice-mic-track" },
+            dom("div", { className: "voice-mic-track-fill", attrs: { id: "voice-mic-bar" } })
+          ),
+          dom("span", { className: "voice-mic-pct", attrs: { id: "voice-mic-pct" } }, "0%"),
+          dom(
+            "div",
+            { className: "voice-controls-right" },
+            canMute
+              ? dom("button", {
+                  className: classNames("voice-btn", ui.voiceMuted ? "voice-btn-muted" : undefined),
+                  attrs: { "data-action": "voice-mute-toggle" }
+                }, ui.voiceMuted ? "Unmute" : "Mute")
+              : null,
+            voiceState === "error"
+              ? dom("button", {
+                  className: "voice-btn voice-btn-primary",
+                  attrs: { "data-action": "voice-retry" }
+                }, "Retry")
+              : null,
+            isActive
+              ? dom("button", {
+                  className: "voice-btn voice-btn-end",
+                  attrs: { "data-action": "voice-end" }
+                }, "End Call")
+              : null
+          )
+        )
+      ),
+      // ── Right: settings panel ──
+      dom(
+        "div",
+        { className: "voice-settings-panel" },
+        trustedFragment(`
+          <div class="voice-settings-scroll">
+            <form id="voice-settings-form">
+              <div class="voice-settings-label">Settings</div>
+              <div class="voice-settings-heading">Voice stack</div>
+
+              <div class="voice-field">
+                <label class="voice-field-label">LLM</label>
+                <select name="llmProvider">
+                  <option value="openai" ${sel("llmProvider", "openai")}>OpenAI</option>
+                  <option value="anthropic" ${sel("llmProvider", "anthropic")}>Anthropic</option>
+                  <option value="google" ${sel("llmProvider", "google")}>Google</option>
+                  <option value="ollama" ${sel("llmProvider", "ollama")}>Ollama (local)</option>
+                </select>
+              </div>
+
+              <div class="voice-field">
+                <label class="voice-field-label">STT</label>
+                <select name="sttProvider">
+                  <option value="deepgram" ${sel("sttProvider", "deepgram")}>Deepgram</option>
+                  <option value="google" ${sel("sttProvider", "google")}>Google</option>
+                  <option value="whisper" ${sel("sttProvider", "whisper")}>Whisper (local)</option>
+                </select>
+              </div>
+
+              <div class="voice-field">
+                <label class="voice-field-label">TTS</label>
+                <select name="ttsProvider">
+                  <option value="cartesia" ${sel("ttsProvider", "cartesia")}>Cartesia</option>
+                  <option value="elevenlabs" ${sel("ttsProvider", "elevenlabs")}>ElevenLabs</option>
+                  <option value="deepgram" ${sel("ttsProvider", "deepgram")}>Deepgram</option>
+                </select>
+              </div>
+
+              <div class="voice-field">
+                <label class="voice-field-label">TTS voice</label>
+                <input type="text" name="ttsVoice" value="${escapeAttribute(cfg.ttsVoice || "")}" placeholder="Provider default" />
+              </div>
+
+              <div class="voice-toggle-row">
+                <input type="checkbox" id="voice-subagents-cb" name="enableSubagents" ${cfg.enableSubagents ? "checked" : ""} />
+                <label for="voice-subagents-cb">Enable subagents</label>
+              </div>
+
+              <div class="voice-settings-divider"></div>
+              <div class="voice-settings-section-title">Provider keys</div>
+
+              ${uniqueKeyEntries.map((entry) => `
+                <div class="voice-key-field">
+                  <label class="voice-key-label">${entry.label}</label>
+                  <input type="password" name="${entry.key}" value="${escapeAttribute((cfg.apiKeys as Record<string, string>)[entry.key] || "")}" />
+                </div>
+              `).join("")}
+
+              <button type="button" class="voice-save-btn" data-action="voice-save-config">
+                Save &amp; Reconnect
+              </button>
+            </form>
+          </div>
+        `)
+      )
+    )
+  );
+
+  scrollVoiceTranscript();
+}
+
 async function openEphemeralToolOverlay(toolId: EphemeralToolId, repoId: string | null) {
   if (!repoId || overlayDialog(toolId).open) {
     return;
@@ -10622,6 +12116,7 @@ function syncSidebarNavItemFromTarget(target) {
     case "open-workspace":
     case "create-project":
     case "open-status":
+    case "toggle-voice-call":
     case "open-settings":
     case "collapse-sidebar":
       ui.sidebarNavItem = sidebarActionNavId(action);
@@ -11771,6 +13266,14 @@ function renderUtilityIcon(kind) {
           <path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0-6 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       `;
+    case "microphone":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.7"/>
+          <path d="M5 12a7 7 0 0 0 14 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+          <path d="M12 19v3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+      `;
     case "collapse":
       return `
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -11899,6 +13402,9 @@ async function activateSidebarNavItem() {
         break;
       case "open-settings":
         await openSettings("general");
+        break;
+      case "toggle-voice-call":
+        toggleVoiceCall();
         break;
       case "collapse-sidebar":
         collapseSidebarChrome();

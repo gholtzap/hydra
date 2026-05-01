@@ -49,6 +49,7 @@ import type {
 } from "../shared-types";
 import type { AppControllerHandle } from "./internal-api";
 import type { HydraMcpServer } from "./mcp-server";
+import type { VoiceManager } from "./voice-manager";
 import type { AuthSession } from "./auth-client";
 import { HydraAuthClient } from "./auth-client";
 import {
@@ -289,6 +290,14 @@ const { startMcpServer } = require("./mcp-server") as {
     options: { authToken: string }
   ) => Promise<HydraMcpServer>;
 };
+const { createVoiceManager } = require("./voice-manager") as {
+  createVoiceManager: (
+    mainWindow: ElectronBrowserWindow,
+    getPreferences: () => Record<string, unknown>,
+    updatePreferences: (patch: Record<string, unknown>) => void,
+    ensureMcpServer?: () => Promise<string | null>
+  ) => VoiceManager;
+};
 
 app.setName("Hydra");
 
@@ -311,6 +320,7 @@ const SMOKE_TEST_RESULT_PATH_FLAG = "--hydra-smoke-result-path";
 const SMOKE_TEST_TIMEOUT_MS_FLAG = "--hydra-smoke-timeout-ms";
 const SMOKE_TEST_USER_DATA_DIR_FLAG = "--hydra-smoke-user-data-dir";
 const SMOKE_TEST_WORKSPACE_PATH_FLAG = "--hydra-smoke-workspace-path";
+const AGENT_INITIAL_PROMPT_DELAY_MS = 2_000;
 
 const FILE_TREE_IGNORED = new Set([
   ".git", "node_modules", "dist", "build", ".next", "__pycache__",
@@ -523,6 +533,9 @@ function sanitizePreferencesPatch(patch: unknown): AppPreferencesPatch {
     nextPatch.themeCustomThemes =
       patch.themeCustomThemes as AppPreferencesPatch["themeCustomThemes"];
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "voiceConfig") && isPlainObject(patch.voiceConfig)) {
+    nextPatch.voiceConfig = patch.voiceConfig as AppPreferencesPatch["voiceConfig"];
+  }
 
   return nextPatch;
 }
@@ -641,6 +654,8 @@ class AppController {
   knownPlanFiles: Set<string>;
   plansDirWatcher: ReturnType<typeof fs.watch> | null;
   mcpServer: HydraMcpServer | null;
+  mcpAuthToken: string | null;
+  voiceManager: VoiceManager | null;
   authClient: HydraAuthClient | null;
   authMainSetup: Promise<void>;
 
@@ -672,6 +687,8 @@ class AppController {
     this.knownPlanFiles = new Set();
     this.plansDirWatcher = null;
     this.mcpServer = null;
+    this.mcpAuthToken = null;
+    this.voiceManager = null;
     const authServerUrl = this.resolveAuthServerUrl();
     this.authClient = new HydraAuthClient(authServerUrl, {
       getWindow: () => this.window,
@@ -999,8 +1016,28 @@ class AppController {
       return;
     }
     window.on("closed", () => {
+      if (this.voiceManager) {
+        void this.voiceManager.dispose();
+        this.voiceManager = null;
+      }
       this.window = null;
     });
+
+    window.webContents.session.setPermissionRequestHandler(
+      (_webContents, permission, callback) => {
+        if (permission === "media") {
+          callback(true);
+          return;
+        }
+        callback(false);
+      }
+    );
+
+    window.webContents.session.setPermissionCheckHandler(
+      (_webContents, permission) => {
+        return permission === "media";
+      }
+    );
 
     const denyUnexpectedNavigation = (
       event: { preventDefault: () => void },
@@ -1015,6 +1052,13 @@ class AppController {
     window.webContents.on("will-redirect", denyUnexpectedNavigation);
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 
+    window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
+    this.voiceManager = createVoiceManager(
+      window,
+      () => this.state.preferences as unknown as Record<string, unknown>,
+      (patch) => this.updatePreferences(patch),
+      () => this.ensureMcpServerForVoice()
+    );
     // Auth gate: check for valid session before loading the main app
     this.loadAuthenticatedPage(window);
   }
@@ -2047,7 +2091,7 @@ class AppController {
     }
 
     const startupAgentId = launchesClaudeOnStart !== false ? requestedAgentId : null;
-    const initialPrompt = typeof options.prompt === "string" ? options.prompt : "";
+    const initialPrompt = typeof options.prompt === "string" ? options.prompt.trim() : "";
     const session: SessionRecord = {
       id: sessionId,
       repoID: repoId,
@@ -3165,6 +3209,21 @@ class AppController {
     }
 
     this.queuedSessionLaunches.delete(sessionId);
+
+    if (session?.launchProfile === "agent" && session.startupAgentId) {
+      this.cancelPendingAgentLaunch(sessionId);
+      this.pendingAgentLaunch.add(sessionId);
+      const timer = setTimeout(() => {
+        this.pendingAgentLaunchTimers.delete(sessionId);
+        if (!this.pendingAgentLaunch.delete(sessionId)) return;
+        const liveSession = this.sessionById(sessionId);
+        if (!liveSession || liveSession.runtimeState !== "live") return;
+        this.ptyHost.sendInput(sessionId, queued.input);
+      }, AGENT_INITIAL_PROMPT_DELAY_MS);
+      this.pendingAgentLaunchTimers.set(sessionId, timer);
+      return;
+    }
+
     this.ptyHost.sendInput(sessionId, queued.input);
   }
 
@@ -3407,7 +3466,32 @@ class AppController {
     }
   }
 
+  private async ensureMcpServerForVoice(): Promise<string | null> {
+    if (this.mcpServer) {
+      if (this.mcpAuthToken) {
+        this.voiceManager?.setMcpAuthToken(this.mcpAuthToken);
+      }
+      return this.mcpAuthToken;
+    }
+    try {
+      const auth = await resolveMcpServerAuthToken();
+      this.mcpAuthToken = auth.token;
+      this.mcpServer = await startMcpServer(this, { authToken: auth.token });
+      this.voiceManager?.setMcpAuthToken(auth.token);
+      console.log("[MCP] Auto-started MCP server for voice mode.");
+      return auth.token;
+    } catch (err) {
+      console.error("[MCP] Failed to auto-start MCP server:", err);
+      return null;
+    }
+  }
+
   async performShutdown(): Promise<void> {
+    if (this.voiceManager) {
+      await this.voiceManager.dispose();
+      this.voiceManager = null;
+    }
+
     for (const session of this.state.sessions) {
       if (session.runtimeState === "live") {
         this.cancelPendingAgentLaunch(session.id);
@@ -3850,6 +3934,8 @@ async function maybeStartMcpServer(controller: AppController): Promise<void> {
   }
 
   const auth = await resolveMcpServerAuthToken();
+  controller.mcpAuthToken = auth.token;
+  controller.voiceManager?.setMcpAuthToken(auth.token);
   controller.mcpServer = await startMcpServer(controller, { authToken: auth.token });
 
   if (auth.source === "env") {

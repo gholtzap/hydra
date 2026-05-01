@@ -7,7 +7,8 @@ import type {
   SessionLaunchProfile,
   SessionRecord,
   SessionTagColor,
-  StoredAppState
+  StoredAppState,
+  VoiceConfig
 } from "../shared-types";
 
 const fs = require("node:fs");
@@ -61,7 +62,15 @@ const DEFAULT_PREFERENCES: AppPreferences = {
   keybindings: {},
   themeAppearance: "system",
   themeActiveId: "workspace-default",
-  themeCustomThemes: []
+  themeCustomThemes: [],
+  voiceConfig: {
+    llmProvider: "openai",
+    sttProvider: "deepgram",
+    ttsProvider: "cartesia",
+    ttsVoice: "",
+    enableSubagents: false,
+    apiKeys: {}
+  }
 };
 async function loadState(): Promise<StoredAppState> {
   const statePath = getStatePath();
@@ -186,6 +195,7 @@ function normalizePreferences(preferences: Record<string, unknown>): AppPreferen
   const themeCustomThemes = Array.isArray(preferences.themeCustomThemes)
     ? preferences.themeCustomThemes as AppPreferences["themeCustomThemes"]
     : DEFAULT_PREFERENCES.themeCustomThemes;
+  const voiceConfig = normalizeVoiceConfig(preferences.voiceConfig);
 
   return {
     defaultAgentId: defaultAgentId || DEFAULT_AGENT_ID,
@@ -199,7 +209,23 @@ function normalizePreferences(preferences: Record<string, unknown>): AppPreferen
     keybindings,
     themeAppearance,
     themeActiveId,
-    themeCustomThemes
+    themeCustomThemes,
+    voiceConfig
+  };
+}
+
+function normalizeVoiceConfig(value: unknown): VoiceConfig {
+  const source = isPlainObject(value) ? value : {};
+  const apiKeys = isPlainObject(source.apiKeys) ? source.apiKeys : {};
+  return {
+    llmProvider: typeof source.llmProvider === "string" ? source.llmProvider : DEFAULT_PREFERENCES.voiceConfig.llmProvider,
+    sttProvider: typeof source.sttProvider === "string" ? source.sttProvider : DEFAULT_PREFERENCES.voiceConfig.sttProvider,
+    ttsProvider: typeof source.ttsProvider === "string" ? source.ttsProvider : DEFAULT_PREFERENCES.voiceConfig.ttsProvider,
+    ttsVoice: typeof source.ttsVoice === "string" ? source.ttsVoice : DEFAULT_PREFERENCES.voiceConfig.ttsVoice,
+    enableSubagents: typeof source.enableSubagents === "boolean" ? source.enableSubagents : DEFAULT_PREFERENCES.voiceConfig.enableSubagents,
+    apiKeys: Object.fromEntries(
+      Object.entries(apiKeys).filter((entry): entry is [string, string] => typeof entry[1] === "string")
+    )
   };
 }
 

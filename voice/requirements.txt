@@ -1,0 +1,7 @@
+# Hydra Voice Agent - Pipecat dependencies
+
+pipecat-ai[webrtc,silero,mcp]
+pipecat-ai[deepgram,openai,anthropic,google,cartesia,elevenlabs,whisper]
+pipecat-ai-subagents
+uvicorn
+fastapi

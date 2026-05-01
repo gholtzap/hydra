@@ -70,7 +70,8 @@ async function searchProjectSessions(repoPath: string): Promise<SessionSearchRes
   const normalizedRepoPath = normalizeRepoSearchPath(trimmedRepoPath);
   const allFiles = await getSessionSearchFileRecords(normalizedRepoPath, tools.rgPath);
   const matches = await collectMatches(normalizedRepoPath, allFiles, tools.rgPath);
-  const results = await rankMatches(matches, normalizedRepoPath, tools.fzfPath);
+  const rankedMatches = await rankMatches(matches, normalizedRepoPath, tools.fzfPath);
+  const results = await hydrateMatchPreviews(rankedMatches);
 
   return {
     ok: true,
@@ -116,7 +117,8 @@ async function queryProjectSessions(repoPath: string, query: string): Promise<Se
   const normalizedRepoPath = normalizeRepoSearchPath(trimmedRepoPath);
   const allFiles = await getSessionSearchFileRecords(normalizedRepoPath, tools.rgPath);
   const matches = await collectMatches(trimmedQuery, allFiles, tools.rgPath);
-  const results = await rankMatches(matches, trimmedQuery, tools.fzfPath);
+  const rankedMatches = await rankMatches(matches, trimmedQuery, tools.fzfPath);
+  const results = await hydrateMatchPreviews(rankedMatches);
 
   return {
     ok: true,
@@ -356,6 +358,7 @@ async function collectMatches(
     "--with-filename",
     "--line-number",
     "--max-columns=400",
+    "--only-matching",
     "--smart-case",
     "--fixed-strings",
     query,
@@ -366,9 +369,25 @@ async function collectMatches(
     files.map((file) => [file.filePath, file])
   );
 
-  return lines
-    .map((line) => parseRgLine(line, fileByPath))
-    .filter((match): match is SessionSearchResult => !!match);
+  const seenMatchLocations = new Set<string>();
+  const matches: SessionSearchResult[] = [];
+
+  for (const line of lines) {
+    const match = parseRgLine(line, fileByPath);
+    if (!match) {
+      continue;
+    }
+
+    const locationKey = `${match.filePath}:${match.lineNumber ?? ""}`;
+    if (seenMatchLocations.has(locationKey)) {
+      continue;
+    }
+
+    seenMatchLocations.add(locationKey);
+    matches.push(match);
+  }
+
+  return matches;
 }
 
 function parseRgLine(
@@ -391,6 +410,48 @@ function parseRgLine(
     lineNumber: matchLine.lineNumber,
     preview: matchLine.lineText
   };
+}
+
+async function hydrateMatchPreviews(
+  matches: SessionSearchResult[]
+): Promise<SessionSearchResult[]> {
+  return Promise.all(
+    matches.map(async (match) => {
+      if (!match.lineNumber) {
+        return match;
+      }
+
+      const preview = await readJsonlLineAt(match.filePath, match.lineNumber);
+      return preview ? { ...match, preview } : match;
+    })
+  );
+}
+
+async function readJsonlLineAt(filePath: string, lineNumber: number): Promise<string> {
+  if (!Number.isInteger(lineNumber) || lineNumber < 1) {
+    return "";
+  }
+
+  let fileHandle: import("node:fs/promises").FileHandle | null = null;
+
+  try {
+    fileHandle = await fsp.open(filePath, "r");
+    let currentLineNumber = 1;
+
+    for await (const line of fileHandle.readLines({ encoding: "utf8" })) {
+      if (currentLineNumber === lineNumber) {
+        return line.trim();
+      }
+
+      currentLineNumber += 1;
+    }
+  } catch {
+    return "";
+  } finally {
+    await fileHandle?.close().catch(() => undefined);
+  }
+
+  return "";
 }
 
 function parseRipgrepMatchLine(line: string): RipgrepMatchLine | null {

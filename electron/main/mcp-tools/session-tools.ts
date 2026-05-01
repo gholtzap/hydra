@@ -58,6 +58,46 @@ const SESSION_SEARCH_SOURCE_VALUES = [
   "codex"
 ] as const;
 
+const SESSION_TERMINAL_KEY_VALUES = [
+  "enter",
+  "escape",
+  "tab",
+  "backspace",
+  "delete",
+  "up",
+  "down",
+  "left",
+  "right",
+  "home",
+  "end",
+  "page-up",
+  "page-down",
+  "ctrl-c",
+  "ctrl-d",
+  "ctrl-l"
+] as const;
+
+type SessionTerminalKey = (typeof SESSION_TERMINAL_KEY_VALUES)[number];
+
+const SESSION_TERMINAL_KEY_INPUTS: Record<SessionTerminalKey, string> = {
+  enter: "\r",
+  escape: "\x1b",
+  tab: "\t",
+  backspace: "\x7f",
+  delete: "\x1b[3~",
+  up: "\x1b[A",
+  down: "\x1b[B",
+  left: "\x1b[D",
+  right: "\x1b[C",
+  home: "\x1b[H",
+  end: "\x1b[F",
+  "page-up": "\x1b[5~",
+  "page-down": "\x1b[6~",
+  "ctrl-c": "\x03",
+  "ctrl-d": "\x04",
+  "ctrl-l": "\x0c",
+};
+
 export function register(server: McpServer, appController: AppControllerHandle): void {
   // ── get_app_state ───────────────────────────────────────────────
   server.tool(
@@ -191,6 +231,20 @@ export function register(server: McpServer, appController: AppControllerHandle):
     async (args: { sessionId: string; text: string }) => {
       appController.ptyHost.sendInput(args.sessionId, args.text + "\r");
       return textResult({ ok: true });
+    }
+  );
+
+  // ── send_key ───────────────────────────────────────────────────
+  server.tool(
+    "send_key",
+    "Send an allowed key press to a session terminal",
+    {
+      sessionId: z.string().describe("Session ID"),
+      key: z.enum(SESSION_TERMINAL_KEY_VALUES).describe("Key to send"),
+    },
+    async (args: { sessionId: string; key: SessionTerminalKey }) => {
+      appController.ptyHost.sendInput(args.sessionId, SESSION_TERMINAL_KEY_INPUTS[args.key]);
+      return textResult({ ok: true, key: args.key });
     }
   );
 

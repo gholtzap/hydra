@@ -456,7 +456,9 @@ export function register(server: McpServer, appController: AppControllerHandle):
       text: z.string().describe("Text to send to terminal"),
     },
     async (args: { sessionId: string; text: string }) => {
-      appController.ptyHost.sendInput(args.sessionId, args.text + "\r");
+      const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+      if (!session) return textResult({ ok: false, error: "Session not found" });
+      appController.handleSessionInput(args.sessionId, args.text + "\r");
       return textResult({ ok: true });
     }
   );
@@ -479,7 +481,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         });
       }
 
-      appController.ptyHost.sendInput(args.sessionId, args.text);
+      appController.handleSessionInput(args.sessionId, args.text);
       return textResult({ ok: true, sentChars: args.text.length });
     }
   );
@@ -493,7 +495,9 @@ export function register(server: McpServer, appController: AppControllerHandle):
       key: z.enum(SESSION_TERMINAL_KEY_VALUES).describe("Key to send"),
     },
     async (args: { sessionId: string; key: SessionTerminalKey }) => {
-      appController.ptyHost.sendInput(args.sessionId, SESSION_TERMINAL_KEY_INPUTS[args.key]);
+      const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+      if (!session) return textResult({ ok: false, error: "Session not found" });
+      appController.handleSessionInput(args.sessionId, SESSION_TERMINAL_KEY_INPUTS[args.key]);
       return textResult({ ok: true, key: args.key });
     }
   );
@@ -510,7 +514,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       if (!session) return textResult({ error: "Session not found" });
       const agentId = session.startupAgentId || "claude";
       const input = AGENT_APPROVE_MAP[agentId] ?? defaultApprove();
-      appController.ptyHost.sendInput(args.sessionId, input);
+      appController.handleSessionInput(args.sessionId, input);
       return textResult({ ok: true, agentId });
     }
   );
@@ -527,7 +531,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       if (!session) return textResult({ error: "Session not found" });
       const agentId = session.startupAgentId || "claude";
       const input = AGENT_DENY_MAP[agentId] ?? defaultDeny();
-      appController.ptyHost.sendInput(args.sessionId, input);
+      appController.handleSessionInput(args.sessionId, input);
       return textResult({ ok: true, agentId });
     }
   );

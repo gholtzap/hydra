@@ -193,6 +193,11 @@ type RunSessionCommandArgs = SessionCommandArgs & {
   includeRawTranscript?: boolean;
 };
 
+type RunRepoCommandArgs = Omit<RunSessionCommandArgs, "sessionId"> & {
+  repoId: string;
+  title?: string;
+};
+
 const DEFAULT_SESSION_WAIT_TIMEOUT_MS = 30_000;
 const MAX_SESSION_WAIT_TIMEOUT_MS = 300_000;
 const DEFAULT_SESSION_WAIT_POLL_INTERVAL_MS = 500;
@@ -729,6 +734,67 @@ export function register(server: McpServer, appController: AppControllerHandle):
         transcript: currentSession ? transcriptTail(currentSession.transcript, lineLimit, charLimit) : null,
         rawTranscript: currentSession && args.includeRawTranscript
           ? transcriptTail(currentSession.rawTranscript, lineLimit, charLimit)
+          : undefined,
+      });
+    }
+  );
+
+  // ── run_repo_command ───────────────────────────────────────────
+  server.tool(
+    "run_repo_command",
+    "Create a shell session in a repo, run a printable command, wait for quiet output, and return a transcript tail",
+    {
+      repoId: z.string().describe("Repo ID to create a shell session in"),
+      title: z.string().max(MAX_SESSION_TITLE_CHARS).optional().describe("Optional session title"),
+      command: z.string().max(MAX_SESSION_TEXT_CHARS).describe("Printable command to submit"),
+      timeoutMs: z.number().optional().describe("Maximum wait in milliseconds, capped at 300000"),
+      pollIntervalMs: z.number().optional().describe("Polling interval in milliseconds, capped from 100 to 5000"),
+      quietMs: z.number().optional().describe("Required no-output window in milliseconds, capped from 250 to 30000"),
+      lines: z.number().optional().describe("Number of recent lines to return, capped at 500"),
+      maxChars: z.number().optional().describe("Maximum returned transcript characters, capped at 50000"),
+      includeRawTranscript: z.boolean().optional().describe("Include raw ANSI transcript tail"),
+    },
+    async (args: RunRepoCommandArgs) => {
+      const repo = appController.state.repos.find((candidate) => candidate.id === args.repoId);
+      if (!repo) return textResult({ ok: false, error: "Repo not found" });
+      if (containsTerminalControlCharacter(args.command)) {
+        return textResult({
+          ok: false,
+          error: "Command contains terminal control characters; use send_key for special keys.",
+        });
+      }
+
+      const afterActivityAt = new Date().toISOString();
+      const sessionId = await appController.handleMcpAction("create_shell_session", {
+        repoId: args.repoId,
+        title: args.title,
+        command: args.command,
+      });
+
+      if (!sessionId) {
+        return textResult({ ok: false, error: "Shell session could not be created" });
+      }
+
+      const wait = await waitForSessionState(appController, {
+        sessionId,
+        condition: "quiet",
+        timeoutMs: args.timeoutMs,
+        pollIntervalMs: args.pollIntervalMs,
+        afterActivityAt,
+        quietMs: args.quietMs,
+      });
+      const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
+      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
+      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
+
+      return textResult({
+        ok: wait.ok,
+        sessionId,
+        repoId: args.repoId,
+        wait,
+        transcript: session ? transcriptTail(session.transcript, lineLimit, charLimit) : null,
+        rawTranscript: session && args.includeRawTranscript
+          ? transcriptTail(session.rawTranscript, lineLimit, charLimit)
           : undefined,
       });
     }

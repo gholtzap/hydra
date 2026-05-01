@@ -32,12 +32,17 @@ const DEFAULT_CONFIG: VoiceConfig = {
   enableSubagents: false,
   apiKeys: {}
 };
+const VOICE_IDLE_TIMEOUT_SECS = 5 * 60;
+const HEALTH_CHECK_INTERVAL_MS = 10_000;
+const HEALTH_CHECK_TIMEOUT_MS = 5_000;
+const HEALTH_CHECK_FAILURE_LIMIT = 3;
 
 export class VoiceManager {
   private mainWindow: BrowserWindow | null = null;
   private botProcess: ChildProcessWithoutNullStreams | null = null;
   private botPort: number | null = null;
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private healthCheckFailures = 0;
   private state: VoiceCallState = "idle";
   private internalState: VoiceManagerInternalState = "idle";
   private pythonInfo: PythonInfo | null = null;
@@ -262,7 +267,8 @@ export class VoiceManager {
       "--host", "127.0.0.1",
       "--llm-provider", this.config.llmProvider,
       "--stt-provider", this.config.sttProvider,
-      "--tts-provider", this.config.ttsProvider
+      "--tts-provider", this.config.ttsProvider,
+      "--idle-timeout-secs", String(VOICE_IDLE_TIMEOUT_SECS)
     ];
 
     if (this.mcpAuthToken) {
@@ -281,15 +287,17 @@ export class VoiceManager {
       env["HYDRA_MCP_AUTH_TOKEN"] = this.mcpAuthToken;
     }
 
-    this.botProcess = spawn(python.path, args, {
+    const child = spawn(python.path, args, {
       cwd: this.voiceDir(),
       env,
       stdio: ["pipe", "pipe", "pipe"]
     }) as ChildProcessWithoutNullStreams;
+    this.botProcess = child;
 
-    this.botProcess.stdout.on("data", (data: Buffer) => console.log("[VoiceBot]", data.toString().trim()));
-    this.botProcess.stderr.on("data", (data: Buffer) => console.error("[VoiceBot]", data.toString().trim()));
-    this.botProcess.on("exit", (code) => {
+    child.stdout.on("data", (data: Buffer) => console.log("[VoiceBot]", data.toString().trim()));
+    child.stderr.on("data", (data: Buffer) => console.error("[VoiceBot]", data.toString().trim()));
+    child.on("exit", (code) => {
+      if (this.botProcess !== child) return;
       if (this.state === "listening" || this.state === "connecting") {
         this.emitError("bot_crashed", `Voice bot exited unexpectedly (code ${code})`);
         void this.cleanup();
@@ -297,7 +305,9 @@ export class VoiceManager {
         this.setState("error");
       }
     });
-    this.botProcess.on("error", (error) => this.emitError("bot_error", error.message));
+    child.on("error", (error) => {
+      if (this.botProcess === child) this.emitError("bot_error", error.message);
+    });
   }
 
   private async waitForReady(port: number, timeoutMs: number): Promise<void> {
@@ -313,15 +323,22 @@ export class VoiceManager {
   }
 
   private startHealthCheck(port: number): void {
+    this.healthCheckFailures = 0;
     this.healthCheckInterval = setInterval(async () => {
       if (this.state !== "listening") return;
-      if (!(await this.healthCheck(port))) {
+      if (await this.healthCheck(port)) {
+        this.healthCheckFailures = 0;
+        return;
+      }
+
+      this.healthCheckFailures += 1;
+      if (this.healthCheckFailures >= HEALTH_CHECK_FAILURE_LIMIT) {
         this.emitError("health_check_failed", "Voice bot is not responding");
         await this.cleanup();
         this.internalState = "error";
         this.setState("error");
       }
-    }, 5000);
+    }, HEALTH_CHECK_INTERVAL_MS);
   }
 
   private healthCheck(port: number): Promise<boolean> {
@@ -331,7 +348,7 @@ export class VoiceManager {
         res.resume();
       });
       req.on("error", () => resolve(false));
-      req.setTimeout(3000, () => {
+      req.setTimeout(HEALTH_CHECK_TIMEOUT_MS, () => {
         req.destroy();
         resolve(false);
       });
@@ -343,6 +360,7 @@ export class VoiceManager {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
     }
+    this.healthCheckFailures = 0;
 
     if (!this.botProcess) return;
     const proc = this.botProcess;

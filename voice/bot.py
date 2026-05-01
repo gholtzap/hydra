@@ -43,7 +43,14 @@ Guidelines:
 - Avoid emojis, bullet points, markdown, or formatting that cannot be spoken.
 - When performing actions, briefly confirm what you did.
 - If a tool call fails, explain the error simply and suggest alternatives.
+- When the user asks you to create, start, or launch an agent session with
+  instructions, pass those exact instructions in create_session.prompt. Do not
+  create a blank session unless the user explicitly asks for an empty session.
+- If a requested prompt was not included during session creation, immediately
+  send that prompt to the new session yourself instead of waiting for correction.
 """
+
+VOICE_IDLE_TIMEOUT_SECS = 5 * 60
 
 
 pcs_map: dict[str, SmallWebRTCConnection] = {}
@@ -220,6 +227,7 @@ async def run_bot(webrtc_connection: SmallWebRTCConnection, args: argparse.Names
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
+            user_idle_timeout=args.idle_timeout_secs,
             vad_analyzer=SileroVADAnalyzer(),
             user_mute_strategies=[
                 FunctionCallUserMuteStrategy(),
@@ -242,7 +250,17 @@ async def run_bot(webrtc_connection: SmallWebRTCConnection, args: argparse.Names
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+        idle_timeout_secs=args.idle_timeout_secs,
     )
+
+    @user_aggregator.event_handler("on_user_turn_idle")
+    async def on_user_turn_idle(aggregator):
+        logger.info(f"User silent for {args.idle_timeout_secs} seconds; ending voice task")
+        await task.cancel()
+
+    @task.event_handler("on_idle_timeout")
+    async def on_idle_timeout(task):
+        logger.info(f"Voice pipeline idle for {args.idle_timeout_secs} seconds")
 
     @task.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
@@ -377,6 +395,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stt-provider", default="deepgram")
     parser.add_argument("--tts-provider", default="cartesia")
     parser.add_argument("--tts-voice", default=None)
+    parser.add_argument("--idle-timeout-secs", type=float, default=VOICE_IDLE_TIMEOUT_SECS)
     parser.add_argument("--enable-subagents", action="store_true")
     return parser.parse_args()
 

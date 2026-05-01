@@ -1192,6 +1192,11 @@ api.onVoiceCallStateChanged((voiceState) => {
   ui.voiceCallState = voiceState;
   if (voiceState === "idle") {
     ui.voiceMinimized = false;
+    clearVoiceSilenceIdleTimer();
+  } else if (voiceState === "listening") {
+    resetVoiceSilenceIdleTimer();
+  } else if (voiceState === "error") {
+    clearVoiceSilenceIdleTimer();
   }
   renderSidebar();
   if (voiceDialog.open) {
@@ -1209,6 +1214,7 @@ api.onVoiceInstallProgress((line) => {
 });
 
 api.onVoiceError((err) => {
+  clearVoiceSilenceIdleTimer();
   ui.voiceCallState = "error";
   console.warn("[Voice] runtime error:", err.message);
   appendVoiceTranscript("system", "Voice mode stopped unexpectedly. Check your provider settings and retry.");
@@ -8513,6 +8519,8 @@ type VoiceClientLike = {
 let pipecatClient: VoiceClientLike | null = null;
 let voiceSessionRunId = 0;
 let voiceDialogCloseMode: "end" | "minimize" = "end";
+const VOICE_SILENCE_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+let voiceSilenceIdleTimer: number | null = null;
 
 function voiceTimeStamp() {
   const d = new Date();
@@ -8536,7 +8544,29 @@ function voiceSessionIsCurrent(runId: number) {
   return runId === voiceSessionRunId && (voiceDialog.open || ui.voiceMinimized);
 }
 
+function clearVoiceSilenceIdleTimer() {
+  if (voiceSilenceIdleTimer !== null) {
+    window.clearTimeout(voiceSilenceIdleTimer);
+    voiceSilenceIdleTimer = null;
+  }
+}
+
+function resetVoiceSilenceIdleTimer(runId = voiceSessionRunId) {
+  clearVoiceSilenceIdleTimer();
+  if (!voiceSessionIsCurrent(runId) || !voiceCallIsActive()) return;
+
+  voiceSilenceIdleTimer = window.setTimeout(() => {
+    if (!voiceSessionIsCurrent(runId) || !voiceCallIsActive()) return;
+    appendVoiceTranscript("system", "Voice mode went idle after 5 minutes of silence.");
+    endVoiceSession();
+    if (voiceDialog.open) {
+      renderVoiceDialog();
+    }
+  }, VOICE_SILENCE_IDLE_TIMEOUT_MS);
+}
+
 function markVoiceError(text: string) {
+  clearVoiceSilenceIdleTimer();
   ui.voiceCallState = "error";
   appendVoiceTranscript("system", text);
   renderSidebar();
@@ -8547,6 +8577,30 @@ function markVoiceError(text: string) {
 function logVoiceClient(message: string) {
   console.log("[Voice]", message);
   void api.logVoiceClient(message);
+}
+
+function attachVoiceRemoteAudioTrack(track: MediaStreamTrack) {
+  const host = document.getElementById("voice-audio-host");
+  if (!host) {
+    logVoiceClient("remote audio host missing");
+    return;
+  }
+
+  let audio = host.querySelector("audio") as HTMLAudioElement | null;
+  if (!audio) {
+    audio = document.createElement("audio");
+    audio.autoplay = true;
+    audio.controls = false;
+    audio.setAttribute("playsinline", "");
+    host.replaceChildren(audio);
+  }
+
+  audio.srcObject = new MediaStream([track]);
+  audio.muted = false;
+  audio.volume = 1;
+  void audio.play().catch((error) => {
+    logVoiceClient(`remote audio playback failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
 }
 
 type VoiceWebRTCClientCallbacks = {
@@ -8646,6 +8700,7 @@ class HydraSmallWebRTCClient implements VoiceClientLike {
 
   async disconnect() {
     this.connectReject = null;
+    const wasConnected = this.connected;
     this.connected = false;
     this.canSendCandidates = false;
     this.queuedCandidates = [];
@@ -8685,7 +8740,9 @@ class HydraSmallWebRTCClient implements VoiceClientLike {
       this.audioContext = null;
     }
 
-    this.callbacks.onDisconnected?.();
+    if (wasConnected) {
+      this.callbacks.onDisconnected?.();
+    }
   }
 
   enableMic(enabled: boolean) {
@@ -8717,12 +8774,16 @@ class HydraSmallWebRTCClient implements VoiceClientLike {
       logVoiceClient(`ICE state: ${pc.iceConnectionState}`);
       if (["failed", "closed"].includes(pc.iceConnectionState) && this.connectReject) {
         this.connectReject?.(new Error(`ICE connection ${pc.iceConnectionState}.`));
+      } else if (["failed", "closed"].includes(pc.iceConnectionState)) {
+        this.handleRemoteDisconnect(`ICE connection ${pc.iceConnectionState}.`);
       }
     });
     pc.addEventListener("connectionstatechange", () => {
       logVoiceClient(`Peer connection state: ${pc.connectionState}`);
       if (["failed", "closed"].includes(pc.connectionState) && this.connectReject) {
         this.connectReject?.(new Error(`Peer connection ${pc.connectionState}.`));
+      } else if (["failed", "closed"].includes(pc.connectionState)) {
+        this.handleRemoteDisconnect(`Peer connection ${pc.connectionState}.`);
       }
     });
     pc.addEventListener("track", (event) => {
@@ -8775,6 +8836,8 @@ class HydraSmallWebRTCClient implements VoiceClientLike {
       }
       if (this.connectReject) {
         this.connectReject?.(new Error("Data channel closed before connection completed."));
+      } else {
+        this.handleRemoteDisconnect("Data channel closed.");
       }
     });
     dc.addEventListener("error", () => {
@@ -8821,6 +8884,12 @@ class HydraSmallWebRTCClient implements VoiceClientLike {
       }
       pc.addEventListener("icegatheringstatechange", onChange);
     });
+  }
+
+  private handleRemoteDisconnect(message: string) {
+    if (!this.connected) return;
+    logVoiceClient(message);
+    void this.disconnect();
   }
 
   private async flushIceCandidates() {
@@ -9048,6 +9117,7 @@ function onVoiceDialogClose() {
 
 function endVoiceSession() {
   voiceSessionRunId += 1;
+  clearVoiceSilenceIdleTimer();
   disconnectPipecatClient();
   if (ui.voiceCallState !== "idle") {
     void api.stopVoiceCall();
@@ -9106,6 +9176,7 @@ async function startVoiceSession() {
   ui.voiceCallState = "connecting";
   ui.voiceMuted = false;
   ui.voiceMinimized = false;
+  resetVoiceSilenceIdleTimer(runId);
   renderSidebar();
   renderVoiceDialog();
   renderVoiceMiniOverlay();
@@ -9183,6 +9254,7 @@ async function connectPipecatClient(port: number, runId = voiceSessionRunId) {
       callbacks: {
         onConnected: () => {
           if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
           logVoiceClient("WebRTC transport connected");
           appendVoiceTranscript("system", "Connected. Start speaking.");
           renderVoiceDialog();
@@ -9190,8 +9262,13 @@ async function connectPipecatClient(port: number, runId = voiceSessionRunId) {
         },
         onDisconnected: () => {
           if (!voiceSessionIsCurrent(runId)) return;
+          clearVoiceSilenceIdleTimer();
           logVoiceClient("WebRTC transport disconnected");
           appendVoiceTranscript("system", "Disconnected.");
+          void api.stopVoiceCall();
+          ui.voiceCallState = "idle";
+          ui.voiceMinimized = false;
+          renderSidebar();
           renderVoiceDialog();
           renderVoiceMiniOverlay();
         },
@@ -9200,18 +9277,21 @@ async function connectPipecatClient(port: number, runId = voiceSessionRunId) {
         },
         onUserStartedSpeaking: () => {
           if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
           ui.voiceLiveUserText = "";
           renderVoiceLiveCaption();
           renderVoiceMiniOverlay();
         },
         onUserStoppedSpeaking: () => {
           if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
           ui.voiceLiveUserText = "";
           renderVoiceLiveCaption();
           renderVoiceMiniOverlay();
         },
         onUserTranscript: (data: { text: string; final: boolean }) => {
           if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
           if (data.final) {
             if (data.text.trim()) {
               if (appendVoiceTranscript("user", data.text.trim())) {
@@ -9228,18 +9308,21 @@ async function connectPipecatClient(port: number, runId = voiceSessionRunId) {
         },
         onBotStartedSpeaking: () => {
           if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
           ui.voiceLiveBotText = "";
           renderVoiceLiveCaption();
           renderVoiceMiniOverlay();
         },
         onBotStoppedSpeaking: () => {
           if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
           ui.voiceLiveBotText = "";
           renderVoiceLiveCaption();
           renderVoiceMiniOverlay();
         },
         onBotOutput: (data: { text: string; spoken: boolean }) => {
           if (!voiceSessionIsCurrent(runId)) return;
+          resetVoiceSilenceIdleTimer(runId);
           const text = data.text.trim();
           if (text) {
             ui.voiceLiveBotText = text;
@@ -9271,14 +9354,7 @@ async function connectPipecatClient(port: number, runId = voiceSessionRunId) {
         onTrackStarted: (track: MediaStreamTrack, participant: { local?: boolean } | undefined) => {
           if (!voiceSessionIsCurrent(runId)) return;
           if (!participant?.local && track.kind === "audio") {
-            const audio = document.createElement("audio");
-            audio.srcObject = new MediaStream([track]);
-            audio.autoplay = true;
-            const host = document.getElementById("voice-audio-host");
-            if (host) {
-              host.innerHTML = "";
-              host.appendChild(audio);
-            }
+            attachVoiceRemoteAudioTrack(track);
           }
         }
       }
@@ -9830,9 +9906,7 @@ function renderVoiceDialog() {
             </form>
           </div>
         `)
-      ),
-      // Hidden audio host for bot playback
-      dom("div", { attrs: { id: "voice-audio-host" }, className: "hidden" })
+      )
     )
   );
 

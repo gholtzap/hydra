@@ -320,6 +320,7 @@ const SMOKE_TEST_RESULT_PATH_FLAG = "--hydra-smoke-result-path";
 const SMOKE_TEST_TIMEOUT_MS_FLAG = "--hydra-smoke-timeout-ms";
 const SMOKE_TEST_USER_DATA_DIR_FLAG = "--hydra-smoke-user-data-dir";
 const SMOKE_TEST_WORKSPACE_PATH_FLAG = "--hydra-smoke-workspace-path";
+const AGENT_INITIAL_PROMPT_DELAY_MS = 2_000;
 
 const FILE_TREE_IGNORED = new Set([
   ".git", "node_modules", "dist", "build", ".next", "__pycache__",
@@ -2090,7 +2091,7 @@ class AppController {
     }
 
     const startupAgentId = launchesClaudeOnStart !== false ? requestedAgentId : null;
-    const initialPrompt = typeof options.prompt === "string" ? options.prompt : "";
+    const initialPrompt = typeof options.prompt === "string" ? options.prompt.trim() : "";
     const session: SessionRecord = {
       id: sessionId,
       repoID: repoId,
@@ -3208,6 +3209,21 @@ class AppController {
     }
 
     this.queuedSessionLaunches.delete(sessionId);
+
+    if (session?.launchProfile === "agent" && session.startupAgentId) {
+      this.cancelPendingAgentLaunch(sessionId);
+      this.pendingAgentLaunch.add(sessionId);
+      const timer = setTimeout(() => {
+        this.pendingAgentLaunchTimers.delete(sessionId);
+        if (!this.pendingAgentLaunch.delete(sessionId)) return;
+        const liveSession = this.sessionById(sessionId);
+        if (!liveSession || liveSession.runtimeState !== "live") return;
+        this.ptyHost.sendInput(sessionId, queued.input);
+      }, AGENT_INITIAL_PROMPT_DELAY_MS);
+      this.pendingAgentLaunchTimers.set(sessionId, timer);
+      return;
+    }
+
     this.ptyHost.sendInput(sessionId, queued.input);
   }
 

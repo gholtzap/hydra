@@ -215,6 +215,8 @@ type RunSessionCommandArgs = SessionCommandArgs & {
   includeRawTranscript?: boolean;
 };
 
+type RunFocusedCommandArgs = Omit<RunSessionCommandArgs, "sessionId">;
+
 type RunRepoCommandArgs = Omit<RunSessionCommandArgs, "sessionId"> & {
   repoId: string;
   title?: string;
@@ -867,6 +869,68 @@ export function register(server: McpServer, appController: AppControllerHandle):
 
       return textResult({
         ok: wait.ok,
+        command: commandResult,
+        wait,
+        stopped,
+        transcript: currentSession ? transcriptTail(currentSession.transcript, lineLimit, charLimit) : null,
+        rawTranscript: currentSession && args.includeRawTranscript
+          ? transcriptTail(currentSession.rawTranscript, lineLimit, charLimit)
+          : undefined,
+      });
+    }
+  );
+
+  // ── run_focused_command ────────────────────────────────────────
+  server.tool(
+    "run_focused_command",
+    "Send a printable command to the focused session, wait for quiet output, and return a transcript tail",
+    {
+      command: z.string().max(MAX_SESSION_TEXT_CHARS).describe("Printable command to submit"),
+      timeoutMs: z.number().optional().describe("Maximum wait in milliseconds, capped at 300000"),
+      pollIntervalMs: z.number().optional().describe("Polling interval in milliseconds, capped from 100 to 5000"),
+      quietMs: z.number().optional().describe("Required no-output window in milliseconds, capped from 250 to 30000"),
+      stopOnQuiet: z.boolean().optional().describe("Stop the session after quiet output is reached, preserving transcript"),
+      lines: z.number().optional().describe("Number of recent lines to return, capped at 500"),
+      maxChars: z.number().optional().describe("Maximum returned transcript characters, capped at 50000"),
+      includeRawTranscript: z.boolean().optional().describe("Include raw ANSI transcript tail"),
+    },
+    async (args: RunFocusedCommandArgs) => {
+      const sessionId = appController.focusedSessionId;
+      if (!sessionId) return textResult({ ok: false, error: "No focused session" });
+
+      const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
+      if (!session) return textResult({ ok: false, error: "Focused session not found", sessionId });
+      if (containsTerminalControlCharacter(args.command)) {
+        return textResult({
+          ok: false,
+          error: "Command contains terminal control characters; use send_key for special keys.",
+        });
+      }
+
+      const afterActivityAt = new Date().toISOString();
+      const commandResult = await appController.handleMcpAction("send_command", {
+        sessionId,
+        command: args.command,
+      });
+      const wait = await waitForSessionState(appController, {
+        sessionId,
+        condition: "quiet",
+        timeoutMs: args.timeoutMs,
+        pollIntervalMs: args.pollIntervalMs,
+        afterActivityAt,
+        quietMs: args.quietMs,
+      });
+      const stopped = !!args.stopOnQuiet && wait.ok;
+      if (stopped) {
+        await appController.handleMcpAction("stop_session", { sessionId });
+      }
+      const currentSession = appController.state.sessions.find((candidate) => candidate.id === sessionId);
+      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
+      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
+
+      return textResult({
+        ok: wait.ok,
+        sessionId,
         command: commandResult,
         wait,
         stopped,

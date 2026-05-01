@@ -55,6 +55,8 @@ type SessionTextArgs = {
   text: string;
 };
 
+type SessionCommandArgs = McpActionArgs<"send_command">;
+
 type FocusSessionArgs = {
   sessionId?: string | null;
 };
@@ -521,6 +523,29 @@ export function register(server: McpServer, appController: AppControllerHandle):
       if (!session) return textResult({ ok: false, error: "Session not found" });
       appController.handleSessionInput(args.sessionId, args.text + "\r");
       return textResult({ ok: true });
+    }
+  );
+
+  // ── send_command ───────────────────────────────────────────────
+  server.tool(
+    "send_command",
+    "Send a printable command to a session terminal and press Enter",
+    {
+      sessionId: z.string().describe("Session ID"),
+      command: z.string().max(MAX_SESSION_TEXT_CHARS).describe("Printable command to submit"),
+    },
+    async (args: SessionCommandArgs) => {
+      const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+      if (!session) return textResult({ ok: false, error: "Session not found" });
+      if (containsTerminalControlCharacter(args.command)) {
+        return textResult({
+          ok: false,
+          error: "Command contains terminal control characters; use send_key for special keys.",
+        });
+      }
+
+      const result = await appController.handleMcpAction("send_command", args);
+      return textResult({ ok: true, ...result });
     }
   );
 

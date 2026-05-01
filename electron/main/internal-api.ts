@@ -171,6 +171,13 @@ export class InternalApi {
     return this.ctrl.handleMcpAction("resize_session", { sessionId, cols, rows });
   }
 
+  async sendCommand(
+    sessionId: string,
+    command: string
+  ): Promise<McpActionResult<"send_command">> {
+    return this.ctrl.handleMcpAction("send_command", { sessionId, command });
+  }
+
   async organizeSession(
     sessionId: string,
     patch: { isPinned?: boolean; tagColor?: SessionTagColor | null; repoId?: string }

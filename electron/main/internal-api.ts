@@ -46,6 +46,7 @@ export interface AppControllerHandle {
   lazygitPath: string | null;
   snapshot(): AppStateSnapshot;
   sessionById(sessionId: string): SessionRecord | null;
+  setFocusedSession(sessionId: string | null): void;
   broadcastState(): void;
   ptyHost: {
     sendInput(sessionId: string, data: string): void;

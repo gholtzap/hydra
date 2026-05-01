@@ -448,6 +448,27 @@ export function register(server: McpServer, appController: AppControllerHandle):
     }
   );
 
+  // ── stop_session ───────────────────────────────────────────────
+  server.tool(
+    "stop_session",
+    "Stop a session terminal while keeping its history",
+    {
+      sessionId: z.string().describe("Session ID to stop"),
+    },
+    async (args: McpActionArgs<"stop_session">) => {
+      const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+      if (!session) return textResult({ ok: false, error: "Session not found" });
+      const previousRuntimeState = session.runtimeState;
+      const result = await appController.handleMcpAction("stop_session", args);
+      return textResult({
+        ok: true,
+        previousRuntimeState,
+        stopped: true,
+        result: result ?? null,
+      });
+    }
+  );
+
   // ── resize_session ─────────────────────────────────────────────
   server.tool(
     "resize_session",

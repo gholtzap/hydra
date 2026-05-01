@@ -109,6 +109,9 @@ type EphemeralSessionRecord = {
 type PendingSessionRestart = {
   requestedAt: string;
 };
+type PendingSessionStop = {
+  requestedAt: string;
+};
 type QueuedSessionLaunch = {
   title?: string;
   input: string;
@@ -623,6 +626,7 @@ class AppController {
   pendingAgentLaunch: Set<string>;
   pendingAgentLaunchTimers: Map<string, NodeJS.Timeout>;
   pendingSessionRestarts: Map<string, PendingSessionRestart>;
+  pendingSessionStops: Map<string, PendingSessionStop>;
   sessionSizes: Map<string, { cols: number; rows: number }>;
   terminalBuffers: Map<string, TerminalTranscriptBufferInstance>;
   signalBuffers: Map<string, string>;
@@ -654,6 +658,7 @@ class AppController {
     this.pendingAgentLaunch = new Set();
     this.pendingAgentLaunchTimers = new Map();
     this.pendingSessionRestarts = new Map();
+    this.pendingSessionStops = new Map();
     this.sessionSizes = new Map();
     this.terminalBuffers = new Map();
     this.signalBuffers = new Map();
@@ -1572,6 +1577,10 @@ class AppController {
         const parsedArgs = parseArgs("restart_session");
         return this.restartSession(parsedArgs.sessionId) as McpActionResult<Action>;
       }
+      case "stop_session": {
+        const parsedArgs = parseArgs("stop_session");
+        return this.stopSession(parsedArgs.sessionId) as McpActionResult<Action>;
+      }
       case "resize_session": {
         const parsedArgs = parseArgs("resize_session");
         return this.handleSessionResize(
@@ -2197,6 +2206,7 @@ class AppController {
       return;
     }
 
+    this.pendingSessionStops.delete(sessionId);
     session.runtimeState = "live";
     session.status = "running";
     session.blocker = null;
@@ -2221,6 +2231,7 @@ class AppController {
       return;
     }
 
+    this.pendingSessionStops.delete(sessionId);
     if (session.runtimeState === "live") {
       if (this.pendingSessionRestarts.has(sessionId)) {
         return;
@@ -2237,9 +2248,44 @@ class AppController {
     this.startRestartedSession(sessionId);
   }
 
+  stopSession(sessionId: string): void {
+    const session = this.sessionById(sessionId);
+    if (!session) {
+      return;
+    }
+
+    if (session.runtimeState === "stopped") {
+      return;
+    }
+
+    this.pendingSessionRestarts.delete(sessionId);
+    this.cancelPendingAgentLaunch(sessionId);
+    this.queuedSessionLaunches.delete(sessionId);
+    this.resetSignalTracking(sessionId);
+    this.sessionSizes.delete(sessionId);
+
+    if (session.runtimeState === "live" || session.runtimeState === "launching") {
+      this.pendingSessionStops.set(sessionId, { requestedAt: now() });
+      this.ptyHost.killSession(sessionId);
+    }
+
+    const banner = `[Session stopped ${timestampLabel()}]`;
+    const bannerChunk = `\r\n${banner}\r\n`;
+    session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${bannerChunk}`);
+    session.transcript = trimTranscript(this.terminalBuffer(session.id, session.transcript).consume(bannerChunk));
+    session.runtimeState = "stopped";
+    session.status = "idle";
+    session.blocker = null;
+    session.stoppedAt = now();
+    session.updatedAt = now();
+    this.scheduleSave();
+    this.broadcastState();
+  }
+
   closeSession(sessionId: string): void {
     const session = this.sessionById(sessionId);
     this.pendingSessionRestarts.delete(sessionId);
+    this.pendingSessionStops.delete(sessionId);
     this.cancelPendingAgentLaunch(sessionId);
     this.queuedSessionLaunches.delete(sessionId);
     this.sessionSizes.delete(sessionId);
@@ -2790,6 +2836,10 @@ class AppController {
 
     if (this.pendingSessionRestarts.delete(sessionId)) {
       this.startRestartedSession(sessionId);
+      return;
+    }
+
+    if (this.pendingSessionStops.delete(sessionId)) {
       return;
     }
 

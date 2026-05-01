@@ -9073,9 +9073,19 @@ function closeVoiceModal() {
 
 function minimizeVoiceModal() {
   if (!voiceDialog.open || !voiceCallIsActive()) return;
-
   ui.voiceMinimized = true;
   voiceDialogCloseMode = "minimize";
+  // Reset overlay to default center-top position
+  if (voiceMiniOverlayElement) {
+    voiceMiniOverlayElement.style.left = "";
+    voiceMiniOverlayElement.style.top = "";
+    voiceMiniOverlayElement.style.right = "";
+    voiceMiniOverlayElement.style.bottom = "";
+    voiceMiniOverlayElement.style.transform = "";
+    voiceMiniOverlayElement.style.width = "";
+    voiceMiniOverlayElement.style.height = "";
+    voiceMiniOverlayElement.style.animation = "";
+  }
   voiceDialog.close();
 }
 
@@ -9412,11 +9422,13 @@ function renderVoiceMiniOverlay() {
 
   const voiceState = ui.voiceCallState;
   const lastUserEntry = [...ui.voiceTranscript].reverse().find((entry) => entry.role === "user");
-  const userText = ui.voiceLiveUserText.trim() || lastUserEntry?.text || "Listening for your next command.";
+  const userText = ui.voiceLiveUserText.trim() || lastUserEntry?.text || "";
+  const lastBotEntry = [...ui.voiceTranscript].reverse().find((entry) => entry.role === "bot");
+  const botText = ui.voiceLiveBotText.trim() || lastBotEntry?.text || "";
   const statusText = voiceState === "connecting"
     ? "Preparing voice"
     : voiceState === "error"
-      ? "Voice needs attention"
+      ? "Voice error"
       : ui.voiceMuted
         ? "Muted"
         : "Listening";
@@ -9445,6 +9457,12 @@ function renderVoiceMiniOverlay() {
                 attrs: { "data-action": "voice-mute-toggle" }
               }, ui.voiceMuted ? "Unmute" : "Mute")
             : null,
+          voiceState === "error"
+            ? dom("button", {
+                className: "voice-mini-btn",
+                attrs: { "data-action": "voice-retry" }
+              }, "Retry")
+            : null,
           dom("button", {
             className: "voice-mini-btn",
             attrs: { "data-action": "voice-restore" }
@@ -9458,12 +9476,108 @@ function renderVoiceMiniOverlay() {
       dom(
         "div",
         { className: "voice-mini-transcript" },
-        dom("span", { className: "voice-mini-speaker" }, "You"),
-        dom("span", { className: "voice-mini-text" }, userText)
+        dom(
+          "div",
+          { className: "voice-mini-stream" },
+          userText
+            ? dom("span", { className: "voice-mini-user-text" }, userText + " ")
+            : null,
+          botText
+            ? dom("span", { className: "voice-mini-bot-text" }, botText)
+            : null,
+          !userText && !botText
+            ? dom("span", { className: "voice-mini-waiting" }, "Listening\u2026")
+            : null
+        )
+      ),
+      trustedElement<HTMLElement>(
+        `<div class="voice-mini-resize-grip"><svg viewBox="0 0 10 10"><line x1="9" y1="1" x2="1" y2="9"/><line x1="9" y1="5" x2="5" y2="9"/><line x1="9" y1="8" x2="8" y2="9"/></svg></div>`
       )
     )
   );
 }
+
+function initVoiceMiniDrag(): void {
+  const el = voiceMiniOverlayElement;
+  if (!el) return;
+
+  let dragging = false;
+  let resizing = false;
+  let startX = 0;
+  let startY = 0;
+  let startLeft = 0;
+  let startTop = 0;
+  let startW = 0;
+  let startH = 0;
+
+  el.addEventListener("mousedown", (e: MouseEvent) => {
+    // Don't drag when clicking buttons
+    if ((e.target as HTMLElement).closest("button")) return;
+
+    const rect = el.getBoundingClientRect();
+
+    // Check if mousedown is on the resize grip
+    if ((e.target as HTMLElement).closest(".voice-mini-resize-grip")) {
+      resizing = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      startW = rect.width;
+      startH = rect.height;
+      el.style.animation = "none";
+      el.style.transition = "none";
+      el.style.transform = "none";
+      el.style.left = rect.left + "px";
+      el.style.top = rect.top + "px";
+      el.style.right = "auto";
+      el.style.bottom = "auto";
+      e.preventDefault();
+      return;
+    }
+
+    dragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    startLeft = rect.left;
+    startTop = rect.top;
+    // Cancel animation fill-mode so inline transform override takes effect
+    el.style.animation = "none";
+    el.style.transition = "none";
+    el.style.transform = "none";
+    el.style.left = rect.left + "px";
+    el.style.top = rect.top + "px";
+    el.style.right = "auto";
+    el.style.bottom = "auto";
+    e.preventDefault();
+  });
+
+  document.addEventListener("mousemove", (e: MouseEvent) => {
+    if (resizing) {
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      el.style.width = Math.max(360, Math.min(720, startW + dx)) + "px";
+      el.style.height = Math.max(180, Math.min(600, startH + dy)) + "px";
+      return;
+    }
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    el.style.left = (startLeft + dx) + "px";
+    el.style.top = (startTop + dy) + "px";
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (resizing) {
+      resizing = false;
+      return;
+    }
+    if (!dragging) return;
+    dragging = false;
+    el.style.transition = "";
+  });
+}
+
+// Initialize drag on the overlay element
+initVoiceMiniDrag();
 
 function scrollVoiceTranscript() {
   requestAnimationFrame(() => {

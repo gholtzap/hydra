@@ -76,6 +76,10 @@ type SessionTextArgs = {
   text: string;
 };
 
+type FocusedSessionTextArgs = {
+  text: string;
+};
+
 type SessionCommandArgs = McpActionArgs<"send_command">;
 type CreateShellSessionArgs = McpActionArgs<"create_shell_session">;
 
@@ -1032,6 +1036,31 @@ export function register(server: McpServer, appController: AppControllerHandle):
     }
   );
 
+  // ── send_focused_text ──────────────────────────────────────────
+  server.tool(
+    "send_focused_text",
+    "Send literal printable text to the focused session terminal without pressing Enter",
+    {
+      text: z.string().max(MAX_SESSION_TEXT_CHARS).describe("Printable text to send without Enter"),
+    },
+    async (args: FocusedSessionTextArgs) => {
+      const sessionId = appController.focusedSessionId;
+      if (!sessionId) return textResult({ ok: false, error: "No focused session" });
+
+      const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
+      if (!session) return textResult({ ok: false, error: "Focused session not found", sessionId });
+      if (containsTerminalControlCharacter(args.text)) {
+        return textResult({
+          ok: false,
+          error: "Text contains terminal control characters; use send_focused_key for special keys.",
+        });
+      }
+
+      appController.handleSessionInput(sessionId, args.text);
+      return textResult({ ok: true, sessionId, sentChars: args.text.length });
+    }
+  );
+
   // ── send_key ───────────────────────────────────────────────────
   server.tool(
     "send_key",
@@ -1045,6 +1074,24 @@ export function register(server: McpServer, appController: AppControllerHandle):
       if (!session) return textResult({ ok: false, error: "Session not found" });
       appController.handleSessionInput(args.sessionId, SESSION_TERMINAL_KEY_INPUTS[args.key]);
       return textResult({ ok: true, key: args.key });
+    }
+  );
+
+  // ── send_focused_key ───────────────────────────────────────────
+  server.tool(
+    "send_focused_key",
+    "Send an allowed key press to the focused session terminal",
+    {
+      key: z.enum(SESSION_TERMINAL_KEY_VALUES).describe("Key to send"),
+    },
+    async (args: { key: SessionTerminalKey }) => {
+      const sessionId = appController.focusedSessionId;
+      if (!sessionId) return textResult({ ok: false, error: "No focused session" });
+
+      const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
+      if (!session) return textResult({ ok: false, error: "Focused session not found", sessionId });
+      appController.handleSessionInput(sessionId, SESSION_TERMINAL_KEY_INPUTS[args.key]);
+      return textResult({ ok: true, sessionId, key: args.key });
     }
   );
 

@@ -34,6 +34,27 @@ type SessionDetailsResult = Omit<SessionRecord, "sessionIconPath" | "rawTranscri
   rawTranscript?: string;
 };
 
+type SessionFindArgs = {
+  query: string;
+  repoId?: string;
+  status?: SessionStatus;
+  limit?: number;
+};
+
+type SessionFindResult = {
+  sessionId: string;
+  title: string;
+  repoId: string;
+  repoName: string | null;
+  status: SessionStatus;
+  runtimeState: SessionRecord["runtimeState"];
+  unreadCount: number;
+  blocker: SessionRecord["blocker"];
+  lastActivityAt: string | null;
+  updatedAt: string;
+  matchedFields: string[];
+};
+
 type SessionTailArgs = {
   sessionId: string;
   lines?: number;
@@ -214,6 +235,8 @@ const MAX_SESSION_TAIL_CHARS = 50_000;
 const MAX_SESSION_TEXT_CHARS = 20_000;
 const MAX_SESSION_PROMPT_CHARS = 20_000;
 const MAX_SESSION_TITLE_CHARS = 120;
+const DEFAULT_SESSION_FIND_LIMIT = 10;
+const MAX_SESSION_FIND_LIMIT = 50;
 const MAX_TERMINAL_COLS = 500;
 const MAX_TERMINAL_ROWS = 200;
 const TERMINAL_TEXT_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
@@ -405,6 +428,64 @@ export function register(server: McpServer, appController: AppControllerHandle):
         return rest;
       });
       return textResult(summaries);
+    }
+  );
+
+  // ── find_session ───────────────────────────────────────────────
+  server.tool(
+    "find_session",
+    "Search session metadata by title, ID, repo, status, or runtime state",
+    {
+      query: z.string().describe("Case-insensitive search text"),
+      repoId: z.string().optional().describe("Optional repo ID to limit results"),
+      status: z.enum(SESSION_STATUS_VALUES).optional().describe("Optional session status filter"),
+      limit: z.number().optional().describe("Max results to return, capped at 50"),
+    },
+    async (args: SessionFindArgs) => {
+      const needle = args.query.trim().toLowerCase();
+      if (!needle) return textResult({ query: args.query, matches: [] });
+
+      const limit = boundedInteger(args.limit, DEFAULT_SESSION_FIND_LIMIT, 1, MAX_SESSION_FIND_LIMIT);
+      const matches: SessionFindResult[] = appController.state.sessions
+        .filter((session) => !args.repoId || session.repoID === args.repoId)
+        .filter((session) => !args.status || session.status === args.status)
+        .map((session) => {
+          const repo = appController.state.repos.find((candidate) => candidate.id === session.repoID);
+          const repoName = repo?.name ?? null;
+          const repoPath = repo?.path ?? "";
+          const matchedFields: string[] = [];
+          if (session.id.toLowerCase().includes(needle)) matchedFields.push("id");
+          if (session.title.toLowerCase().includes(needle)) matchedFields.push("title");
+          if (session.status.toLowerCase().includes(needle)) matchedFields.push("status");
+          if (session.runtimeState.toLowerCase().includes(needle)) matchedFields.push("runtimeState");
+          if (repoName?.toLowerCase().includes(needle)) matchedFields.push("repoName");
+          if (repoPath.toLowerCase().includes(needle)) matchedFields.push("repoPath");
+
+          return {
+            sessionId: session.id,
+            title: session.title,
+            repoId: session.repoID,
+            repoName,
+            status: session.status,
+            runtimeState: session.runtimeState,
+            unreadCount: session.unreadCount,
+            blocker: session.blocker,
+            lastActivityAt: session.lastActivityAt,
+            updatedAt: session.updatedAt,
+            matchedFields,
+          };
+        })
+        .filter((session) => session.matchedFields.length > 0)
+        .sort((left, right) => {
+          const leftTitleMatch = left.matchedFields.includes("title") ? 0 : 1;
+          const rightTitleMatch = right.matchedFields.includes("title") ? 0 : 1;
+          const leftActivity = left.lastActivityAt || left.updatedAt;
+          const rightActivity = right.lastActivityAt || right.updatedAt;
+          return leftTitleMatch - rightTitleMatch || rightActivity.localeCompare(leftActivity);
+        })
+        .slice(0, limit);
+
+      return textResult({ query: args.query, limit, matches });
     }
   );
 

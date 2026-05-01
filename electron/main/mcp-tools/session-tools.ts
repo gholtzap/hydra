@@ -98,6 +98,94 @@ const SESSION_TERMINAL_KEY_INPUTS: Record<SessionTerminalKey, string> = {
   "ctrl-l": "\x0c",
 };
 
+const SESSION_WAIT_CONDITION_VALUES = [
+  "activity",
+  "unread",
+  "blocked",
+  "needs_input",
+  "running",
+  "idle",
+  "done",
+  "failed",
+  "stopped"
+] as const;
+
+type SessionWaitCondition = (typeof SESSION_WAIT_CONDITION_VALUES)[number];
+
+type SessionWaitArgs = {
+  sessionId: string;
+  condition: SessionWaitCondition;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  afterActivityAt?: string;
+};
+
+type SessionWaitSnapshot = {
+  sessionId: string;
+  condition: SessionWaitCondition;
+  status: SessionStatus;
+  runtimeState: SessionRecord["runtimeState"];
+  unreadCount: number;
+  blocker: SessionRecord["blocker"];
+  lastActivityAt: string | null;
+  updatedAt: string;
+};
+
+const DEFAULT_SESSION_WAIT_TIMEOUT_MS = 30_000;
+const MAX_SESSION_WAIT_TIMEOUT_MS = 300_000;
+const DEFAULT_SESSION_WAIT_POLL_INTERVAL_MS = 500;
+const MIN_SESSION_WAIT_POLL_INTERVAL_MS = 100;
+const MAX_SESSION_WAIT_POLL_INTERVAL_MS = 5_000;
+
+function delayMs(durationMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, durationMs);
+  });
+}
+
+function boundedInteger(value: number | undefined, fallback: number, minimum: number, maximum: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(minimum, Math.min(maximum, Math.trunc(value)));
+}
+
+function sessionActivityTimestamp(session: SessionRecord): string {
+  return session.lastActivityAt || session.updatedAt;
+}
+
+function sessionSnapshot(session: SessionRecord, condition: SessionWaitCondition): SessionWaitSnapshot {
+  return {
+    sessionId: session.id,
+    condition,
+    status: session.status,
+    runtimeState: session.runtimeState,
+    unreadCount: session.unreadCount,
+    blocker: session.blocker,
+    lastActivityAt: session.lastActivityAt,
+    updatedAt: session.updatedAt,
+  };
+}
+
+function sessionMatchesWaitCondition(
+  session: SessionRecord,
+  condition: SessionWaitCondition,
+  afterActivityAt: string
+): boolean {
+  switch (condition) {
+    case "activity":
+      return sessionActivityTimestamp(session) > afterActivityAt;
+    case "unread":
+      return session.unreadCount > 0;
+    case "blocked":
+      return session.status === "blocked" || session.blocker !== null;
+    case "stopped":
+      return session.runtimeState === "stopped";
+    default:
+      return session.status === condition;
+  }
+}
+
 export function register(server: McpServer, appController: AppControllerHandle): void {
   // ── get_app_state ───────────────────────────────────────────────
   server.tool(
@@ -311,6 +399,73 @@ export function register(server: McpServer, appController: AppControllerHandle):
         });
       const next = unread[0] ?? null;
       return textResult({ sessionId: next?.id ?? null, unreadTotal: unread.length });
+    }
+  );
+
+  // ── wait_for_session ───────────────────────────────────────────
+  server.tool(
+    "wait_for_session",
+    "Wait for a session to reach a bounded actionable state",
+    {
+      sessionId: z.string().describe("Session ID"),
+      condition: z.enum(SESSION_WAIT_CONDITION_VALUES).describe("Condition to wait for"),
+      timeoutMs: z.number().optional().describe("Maximum wait in milliseconds, capped at 300000"),
+      pollIntervalMs: z.number().optional().describe("Polling interval in milliseconds, capped from 100 to 5000"),
+      afterActivityAt: z.string().optional().describe("For activity waits, require activity after this ISO timestamp"),
+    },
+    async (args: SessionWaitArgs) => {
+      const timeoutMs = boundedInteger(
+        args.timeoutMs,
+        DEFAULT_SESSION_WAIT_TIMEOUT_MS,
+        MIN_SESSION_WAIT_POLL_INTERVAL_MS,
+        MAX_SESSION_WAIT_TIMEOUT_MS
+      );
+      const pollIntervalMs = boundedInteger(
+        args.pollIntervalMs,
+        DEFAULT_SESSION_WAIT_POLL_INTERVAL_MS,
+        MIN_SESSION_WAIT_POLL_INTERVAL_MS,
+        MAX_SESSION_WAIT_POLL_INTERVAL_MS
+      );
+      const startedAt = new Date();
+      const afterActivityAt = args.afterActivityAt || startedAt.toISOString();
+      const deadline = startedAt.getTime() + timeoutMs;
+      let lastSnapshot: SessionWaitSnapshot | null = null;
+
+      while (Date.now() <= deadline) {
+        const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+        if (!session) {
+          return textResult({
+            ok: false,
+            timedOut: false,
+            sessionId: args.sessionId,
+            condition: args.condition,
+            error: "Session not found",
+          });
+        }
+
+        lastSnapshot = sessionSnapshot(session, args.condition);
+        if (sessionMatchesWaitCondition(session, args.condition, afterActivityAt)) {
+          return textResult({
+            ok: true,
+            timedOut: false,
+            elapsedMs: Date.now() - startedAt.getTime(),
+            afterActivityAt,
+            ...lastSnapshot,
+          });
+        }
+
+        await delayMs(Math.min(pollIntervalMs, Math.max(deadline - Date.now(), 0)));
+      }
+
+      return textResult({
+        ok: false,
+        timedOut: true,
+        elapsedMs: Date.now() - startedAt.getTime(),
+        afterActivityAt,
+        sessionId: args.sessionId,
+        condition: args.condition,
+        lastSnapshot,
+      });
     }
   );
 

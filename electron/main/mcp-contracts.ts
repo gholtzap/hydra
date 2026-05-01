@@ -74,6 +74,10 @@ const marketplaceInstallSourceSchema = z.object({
 const preferencesPatchSchema = z.record(z.string(), z.unknown());
 const sessionPromptSchema = z.string().max(20_000);
 const sessionTitleSchema = z.string().max(120);
+const sessionCommandSchema = z.string().max(20_000).refine(
+  (command) => !/[\u0000-\u001f\u007f]/u.test(command),
+  "Command must not contain terminal control characters"
+);
 const terminalColsSchema = z.number().int().min(1).max(500);
 const terminalRowsSchema = z.number().int().min(1).max(200);
 
@@ -129,6 +133,10 @@ export const MCP_ACTION_ARGS_SCHEMAS = {
     sessionId: z.string(),
     cols: terminalColsSchema,
     rows: terminalRowsSchema
+  }).strict(),
+  send_command: z.object({
+    sessionId: z.string(),
+    command: sessionCommandSchema
   }).strict(),
   organize_session: z.object({
     sessionId: z.string(),
@@ -246,6 +254,7 @@ export type McpActionResultMap = {
   restart_session: void;
   stop_session: void;
   resize_session: void;
+  send_command: { sentChars: number };
   organize_session: boolean;
   search_sessions: SessionSearchResponse;
   resume_session: string | null;

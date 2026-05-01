@@ -1589,6 +1589,13 @@ class AppController {
           parsedArgs.rows
         ) as McpActionResult<Action>;
       }
+      case "send_command": {
+        const parsedArgs = parseArgs("send_command");
+        return this.submitSessionCommand(
+          parsedArgs.sessionId,
+          parsedArgs.command
+        ) as McpActionResult<Action>;
+      }
       case "organize_session": {
         const parsedArgs = parseArgs("organize_session");
         const organizeArgs = normalizeOrganizeSessionArgs(parsedArgs);
@@ -2727,6 +2734,11 @@ class AppController {
   handleSessionInput(sessionId: string, data: string): void {
     this.ptyHost.sendInput(sessionId, data);
     this.resolveInteractiveBlockerFromInput(sessionId, data);
+  }
+
+  submitSessionCommand(sessionId: string, command: string): { sentChars: number } {
+    this.handleSessionInput(sessionId, `${command}\r`);
+    return { sentChars: command.length };
   }
 
   handlePtyMessage(message: PtyHostMessage): void {

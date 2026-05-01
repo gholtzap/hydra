@@ -50,6 +50,11 @@ type SessionTailText = {
   truncated: boolean;
 };
 
+type SessionTextArgs = {
+  sessionId: string;
+  text: string;
+};
+
 const SESSION_STATUS_VALUES = [
   "running",
   "blocked",
@@ -156,6 +161,8 @@ const DEFAULT_SESSION_TAIL_LINES = 80;
 const MAX_SESSION_TAIL_LINES = 500;
 const DEFAULT_SESSION_TAIL_CHARS = 12_000;
 const MAX_SESSION_TAIL_CHARS = 50_000;
+const MAX_SESSION_TEXT_CHARS = 20_000;
+const TERMINAL_TEXT_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
 
 function delayMs(durationMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -222,6 +229,10 @@ function transcriptTail(text: string, lineLimit: number, charLimit: number): Ses
     returnedLines,
     truncated: totalLines > lineLimit || lineTail.length > charLimit,
   };
+}
+
+function containsTerminalControlCharacter(text: string): boolean {
+  return TERMINAL_TEXT_CONTROL_CHARACTER_PATTERN.test(text);
 }
 
 export function register(server: McpServer, appController: AppControllerHandle): void {
@@ -393,6 +404,29 @@ export function register(server: McpServer, appController: AppControllerHandle):
     async (args: { sessionId: string; text: string }) => {
       appController.ptyHost.sendInput(args.sessionId, args.text + "\r");
       return textResult({ ok: true });
+    }
+  );
+
+  // ── send_text ──────────────────────────────────────────────────
+  server.tool(
+    "send_text",
+    "Send literal printable text to a session terminal without pressing Enter",
+    {
+      sessionId: z.string().describe("Session ID"),
+      text: z.string().max(MAX_SESSION_TEXT_CHARS).describe("Printable text to send without Enter"),
+    },
+    async (args: SessionTextArgs) => {
+      const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+      if (!session) return textResult({ ok: false, error: "Session not found" });
+      if (containsTerminalControlCharacter(args.text)) {
+        return textResult({
+          ok: false,
+          error: "Text contains terminal control characters; use send_key for special keys.",
+        });
+      }
+
+      appController.ptyHost.sendInput(args.sessionId, args.text);
+      return textResult({ ok: true, sentChars: args.text.length });
     }
   );
 

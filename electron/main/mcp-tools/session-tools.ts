@@ -168,6 +168,8 @@ const MAX_SESSION_TAIL_CHARS = 50_000;
 const MAX_SESSION_TEXT_CHARS = 20_000;
 const MAX_SESSION_PROMPT_CHARS = 20_000;
 const MAX_SESSION_TITLE_CHARS = 120;
+const MAX_TERMINAL_COLS = 500;
+const MAX_TERMINAL_ROWS = 200;
 const TERMINAL_TEXT_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
 
 function delayMs(durationMs: number): Promise<void> {
@@ -441,6 +443,29 @@ export function register(server: McpServer, appController: AppControllerHandle):
         ok: true,
         previousRuntimeState,
         restartQueued: previousRuntimeState === "live",
+        result: result ?? null,
+      });
+    }
+  );
+
+  // ── resize_session ─────────────────────────────────────────────
+  server.tool(
+    "resize_session",
+    "Resize a session terminal",
+    {
+      sessionId: z.string().describe("Session ID to resize"),
+      cols: z.number().int().min(1).max(MAX_TERMINAL_COLS).describe("Terminal columns"),
+      rows: z.number().int().min(1).max(MAX_TERMINAL_ROWS).describe("Terminal rows"),
+    },
+    async (args: McpActionArgs<"resize_session">) => {
+      const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+      if (!session) return textResult({ ok: false, error: "Session not found" });
+      const result = await appController.handleMcpAction("resize_session", args);
+      return textResult({
+        ok: true,
+        sessionId: args.sessionId,
+        cols: args.cols,
+        rows: args.rows,
         result: result ?? null,
       });
     }

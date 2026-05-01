@@ -47,10 +47,8 @@ export interface AppControllerHandle {
   snapshot(): AppStateSnapshot;
   sessionById(sessionId: string): SessionRecord | null;
   setFocusedSession(sessionId: string | null): void;
+  handleSessionInput(sessionId: string, data: string): void;
   broadcastState(): void;
-  ptyHost: {
-    sendInput(sessionId: string, data: string): void;
-  };
   handleMcpAction<Action extends McpActionName>(
     action: Action,
     args: McpActionArgs<Action>

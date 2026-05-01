@@ -409,6 +409,27 @@ export function register(server: McpServer, appController: AppControllerHandle):
     }
   );
 
+  // ── restart_session ────────────────────────────────────────────
+  server.tool(
+    "restart_session",
+    "Restart a live or stopped session without deleting it",
+    {
+      sessionId: z.string().describe("Session ID to restart"),
+    },
+    async (args: McpActionArgs<"restart_session">) => {
+      const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+      if (!session) return textResult({ ok: false, error: "Session not found" });
+      const previousRuntimeState = session.runtimeState;
+      const result = await appController.handleMcpAction("restart_session", args);
+      return textResult({
+        ok: true,
+        previousRuntimeState,
+        restartQueued: previousRuntimeState === "live",
+        result: result ?? null,
+      });
+    }
+  );
+
   // ── organize_session ───────────────────────────────────────────
   server.tool(
     "organize_session",

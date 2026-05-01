@@ -153,6 +153,10 @@ export class InternalApi {
     return this.ctrl.handleMcpAction("reopen_session", { sessionId });
   }
 
+  async restartSession(sessionId: string): Promise<McpActionResult<"restart_session">> {
+    return this.ctrl.handleMcpAction("restart_session", { sessionId });
+  }
+
   async organizeSession(
     sessionId: string,
     patch: { isPinned?: boolean; tagColor?: SessionTagColor | null; repoId?: string }

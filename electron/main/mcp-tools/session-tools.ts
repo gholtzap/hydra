@@ -624,6 +624,24 @@ export function register(server: McpServer, appController: AppControllerHandle):
     }
   );
 
+  // ── mark_sessions_read ─────────────────────────────────────────
+  server.tool(
+    "mark_sessions_read",
+    "Clear unread output counts for all sessions or only sessions in a repo",
+    {
+      repoId: z.string().optional().describe("Optional repo ID to limit acknowledgements"),
+    },
+    async (args: McpActionArgs<"mark_sessions_read">) => {
+      if (args.repoId) {
+        const repo = appController.state.repos.find((candidate) => candidate.id === args.repoId);
+        if (!repo) return textResult({ ok: false, error: "Repo not found" });
+      }
+
+      const result = await appController.handleMcpAction("mark_sessions_read", args);
+      return textResult({ ok: true, ...result });
+    }
+  );
+
   // ── resize_session ─────────────────────────────────────────────
   server.tool(
     "resize_session",

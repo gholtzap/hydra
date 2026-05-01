@@ -113,6 +113,10 @@ type QueuedSessionLaunch = {
   title?: string;
   input: string;
 };
+type CreateSessionOptions = {
+  agentId?: string | null;
+  prompt?: string;
+};
 type UpdaterLogLevel = "debug" | "info" | "warn" | "error";
 type AutoUpdateSupport = {
   enabled: boolean;
@@ -1538,7 +1542,11 @@ class AppController {
         const parsedArgs = parseArgs("create_session");
         return this.createSession(
           parsedArgs.repoId,
-          parsedArgs.autoLaunch ?? true
+          parsedArgs.autoLaunch ?? true,
+          {
+            agentId: parsedArgs.agentId,
+            prompt: parsedArgs.prompt
+          }
         ) as McpActionResult<Action>;
       }
       case "rename_session": {
@@ -1975,23 +1983,33 @@ class AppController {
     this.broadcastState();
   }
 
-  createSession(repoId: string, launchesClaudeOnStart?: boolean): string | null {
+  createSession(
+    repoId: string,
+    launchesClaudeOnStart?: boolean,
+    options: CreateSessionOptions = {}
+  ): string | null {
     const repo = this.repoById(repoId);
     if (!repo) {
       return null;
     }
 
     const sessionId = randomUUID();
-    const startupAgentId =
-      launchesClaudeOnStart !== false
-        ? normalizeAgentId(this.state.preferences.defaultAgentId)
-        : null;
+    const requestedAgentId =
+      options.agentId !== undefined
+        ? normalizeAgentId(options.agentId, null)
+        : normalizeAgentId(this.state.preferences.defaultAgentId);
+    if (launchesClaudeOnStart !== false && !requestedAgentId) {
+      return null;
+    }
+
+    const startupAgentId = launchesClaudeOnStart !== false ? requestedAgentId : null;
+    const initialPrompt = typeof options.prompt === "string" ? options.prompt : "";
     const session: SessionRecord = {
       id: sessionId,
       repoID: repoId,
       title: repo.name,
       launchProfile: "agent",
-      initialPrompt: "",
+      initialPrompt,
       launchesClaudeOnStart: !!startupAgentId,
       startupAgentId,
       claudeSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
@@ -2018,6 +2036,10 @@ class AppController {
     this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(launchMsg));
     session.transcript = launchMsg;
     this.broadcastState();
+
+    if (initialPrompt) {
+      this.queueSessionLaunch(session.id, `${initialPrompt}\r`);
+    }
 
     if (startupAgentId) {
       invalidateSessionSearchCache(repo.path);

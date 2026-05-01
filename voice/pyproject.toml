@@ -1,0 +1,26 @@
+[project]
+name = "hydra-voice"
+version = "0.1.0"
+description = "Hydra Pipecat voice bot for local development"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi",
+  "pipecat-ai[webrtc,silero,mcp,deepgram,openai]",
+  "python-dotenv",
+  "uvicorn",
+]
+
+[project.optional-dependencies]
+anthropic = ["pipecat-ai[anthropic]"]
+cartesia = ["pipecat-ai[cartesia]"]
+elevenlabs = ["pipecat-ai[elevenlabs]"]
+google = ["pipecat-ai[google]"]
+subagents = ["pipecat-ai-subagents"]
+whisper = ["pipecat-ai[whisper]"]
+all = [
+  "pipecat-ai-subagents",
+  "pipecat-ai[anthropic,cartesia,elevenlabs,google,whisper]",
+]
+
+[tool.uv]
+package = false

@@ -25,6 +25,19 @@ type RepoSearchResult = {
   matchedFields: string[];
 };
 
+type WorkspaceSearchArgs = {
+  query: string;
+  limit?: number;
+};
+
+type WorkspaceSearchResult = {
+  id: string;
+  name: string;
+  rootPath: string;
+  createdAt: string;
+  matchedFields: string[];
+};
+
 const DEFAULT_REPO_SEARCH_LIMIT = 10;
 const MAX_REPO_SEARCH_LIMIT = 50;
 
@@ -42,6 +55,44 @@ export function register(server: McpServer, appController: AppControllerHandle):
     {},
     async () => {
       return textResult(appController.state.workspaces);
+    }
+  );
+
+  server.tool(
+    "find_workspace",
+    "Search known workspaces by name or root path and return matching workspace IDs",
+    {
+      query: z.string().describe("Case-insensitive search text"),
+      limit: z.number().optional().describe("Max results to return, capped at 50"),
+    },
+    async (args: WorkspaceSearchArgs) => {
+      const needle = args.query.trim().toLowerCase();
+      if (!needle) return textResult({ query: args.query, matches: [] });
+
+      const limit = boundedSearchLimit(args.limit);
+      const matches: WorkspaceSearchResult[] = appController.state.workspaces
+        .map((workspace) => {
+          const matchedFields: string[] = [];
+          if (workspace.name.toLowerCase().includes(needle)) matchedFields.push("name");
+          if (workspace.rootPath.toLowerCase().includes(needle)) matchedFields.push("rootPath");
+
+          return {
+            id: workspace.id,
+            name: workspace.name,
+            rootPath: workspace.rootPath,
+            createdAt: workspace.createdAt,
+            matchedFields,
+          };
+        })
+        .filter((workspace) => workspace.matchedFields.length > 0)
+        .sort((left, right) => {
+          const leftNameMatch = left.matchedFields.includes("name") ? 0 : 1;
+          const rightNameMatch = right.matchedFields.includes("name") ? 0 : 1;
+          return leftNameMatch - rightNameMatch || left.name.localeCompare(right.name);
+        })
+        .slice(0, limit);
+
+      return textResult({ query: args.query, limit, matches });
     }
   );
 

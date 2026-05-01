@@ -1586,6 +1586,10 @@ class AppController {
         const parsedArgs = parseArgs("mark_session_read");
         return this.markSessionRead(parsedArgs.sessionId) as McpActionResult<Action>;
       }
+      case "mark_sessions_read": {
+        const parsedArgs = parseArgs("mark_sessions_read");
+        return this.markSessionsRead(parsedArgs.repoId) as McpActionResult<Action>;
+      }
       case "resize_session": {
         const parsedArgs = parseArgs("resize_session");
         return this.handleSessionResize(
@@ -2343,6 +2347,29 @@ class AppController {
     }
 
     return { clearedUnreadCount };
+  }
+
+  markSessionsRead(repoId?: string): { clearedSessionIds: string[]; clearedUnreadCount: number } {
+    const sessions = this.state.sessions.filter((session) =>
+      session.unreadCount > 0 && (!repoId || session.repoID === repoId)
+    );
+    const clearedSessionIds: string[] = [];
+    let clearedUnreadCount = 0;
+
+    for (const session of sessions) {
+      clearedSessionIds.push(session.id);
+      clearedUnreadCount += session.unreadCount;
+      session.unreadCount = 0;
+      session.updatedAt = now();
+      this.sendSessionUpdated(session.id);
+    }
+
+    if (clearedSessionIds.length > 0) {
+      this.scheduleSave();
+      this.broadcastState();
+    }
+
+    return { clearedSessionIds, clearedUnreadCount };
   }
 
   revealRepo(repoId: string): void {

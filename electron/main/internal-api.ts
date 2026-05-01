@@ -171,6 +171,10 @@ export class InternalApi {
     return this.ctrl.handleMcpAction("mark_session_read", { sessionId });
   }
 
+  async markSessionsRead(repoId?: string): Promise<McpActionResult<"mark_sessions_read">> {
+    return this.ctrl.handleMcpAction("mark_sessions_read", { repoId });
+  }
+
   async resizeSession(
     sessionId: string,
     cols: number,

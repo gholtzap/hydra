@@ -1112,6 +1112,24 @@ export function register(server: McpServer, appController: AppControllerHandle):
     }
   );
 
+  // ── approve_focused_action ─────────────────────────────────────
+  server.tool(
+    "approve_focused_action",
+    "Approve the focused session blocker (tool use, plan, permission)",
+    {},
+    async () => {
+      const sessionId = appController.focusedSessionId;
+      if (!sessionId) return textResult({ ok: false, error: "No focused session" });
+
+      const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
+      if (!session) return textResult({ ok: false, error: "Focused session not found", sessionId });
+      const agentId = session.startupAgentId || "claude";
+      const input = AGENT_APPROVE_MAP[agentId] ?? defaultApprove();
+      appController.handleSessionInput(sessionId, input);
+      return textResult({ ok: true, sessionId, agentId });
+    }
+  );
+
   // ── deny_action ────────────────────────────────────────────────
   server.tool(
     "deny_action",
@@ -1126,6 +1144,24 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const input = AGENT_DENY_MAP[agentId] ?? defaultDeny();
       appController.handleSessionInput(args.sessionId, input);
       return textResult({ ok: true, agentId });
+    }
+  );
+
+  // ── deny_focused_action ────────────────────────────────────────
+  server.tool(
+    "deny_focused_action",
+    "Deny the focused session blocker",
+    {},
+    async () => {
+      const sessionId = appController.focusedSessionId;
+      if (!sessionId) return textResult({ ok: false, error: "No focused session" });
+
+      const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
+      if (!session) return textResult({ ok: false, error: "Focused session not found", sessionId });
+      const agentId = session.startupAgentId || "claude";
+      const input = AGENT_DENY_MAP[agentId] ?? defaultDeny();
+      appController.handleSessionInput(sessionId, input);
+      return textResult({ ok: true, sessionId, agentId });
     }
   );
 

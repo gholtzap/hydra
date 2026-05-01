@@ -55,6 +55,10 @@ type SessionTextArgs = {
   text: string;
 };
 
+type FocusSessionArgs = {
+  sessionId?: string | null;
+};
+
 const SESSION_STATUS_VALUES = [
   "running",
   "blocked",
@@ -319,6 +323,34 @@ export function register(server: McpServer, appController: AppControllerHandle):
       };
 
       return textResult(result);
+    }
+  );
+
+  // ── focus_session ──────────────────────────────────────────────
+  server.tool(
+    "focus_session",
+    "Set or clear the focused session used for unread tracking and agent routing",
+    {
+      sessionId: z.string().nullable().optional().describe("Session ID to focus, or null to clear focus"),
+    },
+    async (args: FocusSessionArgs) => {
+      if (!args.sessionId) {
+        appController.setFocusedSession(null);
+        return textResult({ ok: true, focusedSessionId: null });
+      }
+
+      const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+      if (!session) return textResult({ ok: false, error: "Session not found" });
+
+      const clearedUnreadCount = session.unreadCount;
+      appController.setFocusedSession(args.sessionId);
+      return textResult({
+        ok: true,
+        focusedSessionId: args.sessionId,
+        clearedUnreadCount,
+        status: session.status,
+        runtimeState: session.runtimeState,
+      });
     }
   );
 

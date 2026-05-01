@@ -1549,6 +1549,13 @@ class AppController {
           }
         ) as McpActionResult<Action>;
       }
+      case "create_shell_session": {
+        const parsedArgs = parseArgs("create_shell_session");
+        return this.createShellSession(
+          parsedArgs.repoId,
+          parsedArgs.title
+        ) as McpActionResult<Action>;
+      }
       case "rename_session": {
         const parsedArgs = parseArgs("rename_session");
         return this.renameSession(parsedArgs.sessionId, parsedArgs.title) as McpActionResult<Action>;

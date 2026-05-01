@@ -34,6 +34,22 @@ type SessionDetailsResult = Omit<SessionRecord, "sessionIconPath" | "rawTranscri
   rawTranscript?: string;
 };
 
+type SessionTailArgs = {
+  sessionId: string;
+  lines?: number;
+  maxChars?: number;
+  includeRawTranscript?: boolean;
+};
+
+type SessionTailText = {
+  text: string;
+  totalChars: number;
+  totalLines: number;
+  returnedChars: number;
+  returnedLines: number;
+  truncated: boolean;
+};
+
 const SESSION_STATUS_VALUES = [
   "running",
   "blocked",
@@ -136,6 +152,10 @@ const MAX_SESSION_WAIT_TIMEOUT_MS = 300_000;
 const DEFAULT_SESSION_WAIT_POLL_INTERVAL_MS = 500;
 const MIN_SESSION_WAIT_POLL_INTERVAL_MS = 100;
 const MAX_SESSION_WAIT_POLL_INTERVAL_MS = 5_000;
+const DEFAULT_SESSION_TAIL_LINES = 80;
+const MAX_SESSION_TAIL_LINES = 500;
+const DEFAULT_SESSION_TAIL_CHARS = 12_000;
+const MAX_SESSION_TAIL_CHARS = 50_000;
 
 function delayMs(durationMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -186,6 +206,24 @@ function sessionMatchesWaitCondition(
   }
 }
 
+function transcriptTail(text: string, lineLimit: number, charLimit: number): SessionTailText {
+  const totalChars = text.length;
+  const lines = text.length > 0 ? text.split("\n") : [];
+  const totalLines = lines.length;
+  const lineTail = lines.slice(-lineLimit).join("\n");
+  const charTail = lineTail.length > charLimit ? lineTail.slice(-charLimit) : lineTail;
+  const returnedLines = charTail.length > 0 ? charTail.split("\n").length : 0;
+
+  return {
+    text: charTail,
+    totalChars,
+    totalLines,
+    returnedChars: charTail.length,
+    returnedLines,
+    truncated: totalLines > lineLimit || lineTail.length > charLimit,
+  };
+}
+
 export function register(server: McpServer, appController: AppControllerHandle): void {
   // ── get_app_state ───────────────────────────────────────────────
   server.tool(
@@ -233,6 +271,42 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const { sessionIconPath, rawTranscript, ...rest } = session;
       const result: SessionDetailsResult = { ...rest };
       if (args.includeRawTranscript) result.rawTranscript = rawTranscript;
+      return textResult(result);
+    }
+  );
+
+  // ── get_session_tail ───────────────────────────────────────────
+  server.tool(
+    "get_session_tail",
+    "Get bounded recent transcript output for a session",
+    {
+      sessionId: z.string().describe("Session ID"),
+      lines: z.number().optional().describe("Number of recent lines, capped at 500"),
+      maxChars: z.number().optional().describe("Maximum returned characters, capped at 50000"),
+      includeRawTranscript: z.boolean().optional().describe("Include raw ANSI transcript tail"),
+    },
+    async (args: SessionTailArgs) => {
+      const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
+      if (!session) return textResult({ error: "Session not found" });
+
+      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
+      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
+      const result = {
+        sessionId: session.id,
+        repoID: session.repoID,
+        title: session.title,
+        status: session.status,
+        runtimeState: session.runtimeState,
+        unreadCount: session.unreadCount,
+        blocker: session.blocker,
+        lastActivityAt: session.lastActivityAt,
+        updatedAt: session.updatedAt,
+        transcript: transcriptTail(session.transcript, lineLimit, charLimit),
+        rawTranscript: args.includeRawTranscript
+          ? transcriptTail(session.rawTranscript, lineLimit, charLimit)
+          : undefined,
+      };
+
       return textResult(result);
     }
   );

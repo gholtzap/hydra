@@ -159,6 +159,10 @@ export class InternalApi {
     return this.ctrl.handleMcpAction("restart_session", { sessionId });
   }
 
+  async stopSession(sessionId: string): Promise<McpActionResult<"stop_session">> {
+    return this.ctrl.handleMcpAction("stop_session", { sessionId });
+  }
+
   async resizeSession(
     sessionId: string,
     cols: number,

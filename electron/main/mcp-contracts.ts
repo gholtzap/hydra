@@ -122,6 +122,9 @@ export const MCP_ACTION_ARGS_SCHEMAS = {
   restart_session: z.object({
     sessionId: z.string()
   }).strict(),
+  stop_session: z.object({
+    sessionId: z.string()
+  }).strict(),
   resize_session: z.object({
     sessionId: z.string(),
     cols: terminalColsSchema,
@@ -241,6 +244,7 @@ export type McpActionResultMap = {
   close_session: void;
   reopen_session: void;
   restart_session: void;
+  stop_session: void;
   resize_session: void;
   organize_session: boolean;
   search_sessions: SessionSearchResponse;

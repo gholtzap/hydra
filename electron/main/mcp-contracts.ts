@@ -73,6 +73,7 @@ const marketplaceInstallSourceSchema = z.object({
 
 const preferencesPatchSchema = z.record(z.string(), z.unknown());
 const sessionPromptSchema = z.string().max(20_000);
+const sessionTitleSchema = z.string().max(120);
 
 export type MarketplaceSkillSourcePayload = z.output<typeof marketplaceSkillSourceSchema>;
 
@@ -101,6 +102,10 @@ export const MCP_ACTION_ARGS_SCHEMAS = {
     autoLaunch: z.boolean().optional(),
     agentId: z.string().optional(),
     prompt: sessionPromptSchema.optional()
+  }).strict(),
+  create_shell_session: z.object({
+    repoId: z.string(),
+    title: sessionTitleSchema.optional()
   }).strict(),
   rename_session: z.object({
     sessionId: z.string(),
@@ -224,6 +229,7 @@ export type McpActionArgsMap = {
 
 export type McpActionResultMap = {
   create_session: string | null;
+  create_shell_session: string | null;
   rename_session: boolean;
   close_session: void;
   reopen_session: void;

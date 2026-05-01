@@ -167,6 +167,7 @@ const DEFAULT_SESSION_TAIL_CHARS = 12_000;
 const MAX_SESSION_TAIL_CHARS = 50_000;
 const MAX_SESSION_TEXT_CHARS = 20_000;
 const MAX_SESSION_PROMPT_CHARS = 20_000;
+const MAX_SESSION_TITLE_CHARS = 120;
 const TERMINAL_TEXT_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
 
 function delayMs(durationMs: number): Promise<void> {
@@ -366,6 +367,20 @@ export function register(server: McpServer, appController: AppControllerHandle):
     },
     async (args: McpActionArgs<"create_session">) => {
       const result = await appController.handleMcpAction("create_session", args);
+      return textResult(result);
+    }
+  );
+
+  // ── create_shell_session ───────────────────────────────────────
+  server.tool(
+    "create_shell_session",
+    "Create a plain shell session in a repo",
+    {
+      repoId: z.string().describe("Repo ID to create a shell session in"),
+      title: z.string().max(MAX_SESSION_TITLE_CHARS).optional().describe("Optional session title"),
+    },
+    async (args: McpActionArgs<"create_shell_session">) => {
+      const result = await appController.handleMcpAction("create_shell_session", args);
       return textResult(result);
     }
   );

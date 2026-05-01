@@ -17,6 +17,11 @@ type InboxArgs = {
   limit?: number;
 };
 
+type ControlOverviewArgs = {
+  repoId?: string;
+  limit?: number;
+};
+
 type InboxSessionSummary = Pick<
   SessionRecord,
   | "id"
@@ -62,6 +67,40 @@ function inboxReasons(session: SessionRecord): string[] {
     reasons.push("unread");
   }
   return reasons;
+}
+
+function sessionSummary(appController: AppControllerHandle, session: SessionRecord): InboxSessionSummary {
+  return {
+    id: session.id,
+    title: session.title,
+    repoID: session.repoID,
+    repoName: appController.state.repos.find((repo) => repo.id === session.repoID)?.name ?? null,
+    status: session.status,
+    runtimeState: session.runtimeState,
+    startupAgentId: session.startupAgentId,
+    blocker: session.blocker,
+    unreadCount: session.unreadCount,
+    lastActivityAt: session.lastActivityAt,
+    updatedAt: session.updatedAt,
+    reasons: inboxReasons(session),
+  };
+}
+
+function sortedActionableSessions(sessions: SessionRecord[]): SessionRecord[] {
+  const blocked = sessions.filter(
+    (session) => session.status === "blocked" || session.status === "needs_input" || session.blocker !== null
+  );
+  const unread = sessions.filter((session) => session.unreadCount > 0);
+
+  return Array.from(new Map([...blocked, ...unread].map((session) => [session.id, session])).values())
+    .sort((left, right) => {
+      const leftReasons = inboxReasons(left);
+      const rightReasons = inboxReasons(right);
+      const leftBlocked = leftReasons.includes("blocked");
+      const rightBlocked = rightReasons.includes("blocked");
+      if (leftBlocked !== rightBlocked) return leftBlocked ? -1 : 1;
+      return sessionActivityTimestamp(right).localeCompare(sessionActivityTimestamp(left));
+    });
 }
 
 export function register(server: McpServer, appController: AppControllerHandle): void {
@@ -118,30 +157,8 @@ export function register(server: McpServer, appController: AppControllerHandle):
       );
       const unread = sessions.filter((session) => session.unreadCount > 0);
       const blockedIds = new Set(blocked.map((session) => session.id));
-      const summaryMap = (session: SessionRecord): InboxSessionSummary => ({
-        id: session.id,
-        title: session.title,
-        repoID: session.repoID,
-        repoName: appController.state.repos.find((repo) => repo.id === session.repoID)?.name ?? null,
-        status: session.status,
-        runtimeState: session.runtimeState,
-        startupAgentId: session.startupAgentId,
-        blocker: session.blocker,
-        unreadCount: session.unreadCount,
-        lastActivityAt: session.lastActivityAt,
-        updatedAt: session.updatedAt,
-        reasons: inboxReasons(session),
-      });
-      const actionable = Array.from(new Map([...blocked, ...unread].map((session) => [session.id, session])).values())
-        .sort((left, right) => {
-          const leftReasons = inboxReasons(left);
-          const rightReasons = inboxReasons(right);
-          const leftBlocked = leftReasons.includes("blocked");
-          const rightBlocked = rightReasons.includes("blocked");
-          if (leftBlocked !== rightBlocked) return leftBlocked ? -1 : 1;
-          return sessionActivityTimestamp(right).localeCompare(sessionActivityTimestamp(left));
-        })
-        .slice(0, limit);
+      const summaryMap = (session: SessionRecord): InboxSessionSummary => sessionSummary(appController, session);
+      const actionable = sortedActionableSessions(sessions).slice(0, limit);
 
       return textResult({
         actionable: actionable.map(summaryMap),
@@ -151,6 +168,49 @@ export function register(server: McpServer, appController: AppControllerHandle):
           actionable: blocked.length + unread.filter((session) => !blockedIds.has(session.id)).length,
           blocked: blocked.length,
           unread: unread.length,
+        },
+        limit,
+      });
+    }
+  );
+
+  server.tool(
+    "get_control_overview",
+    "Get a compact control overview with focused, actionable, and session count metadata",
+    {
+      repoId: z.string().optional().describe("Filter sessions by repo ID"),
+      limit: z.number().optional().describe("Maximum actionable sessions to return, capped at 100"),
+    },
+    async (args: ControlOverviewArgs) => {
+      const limit = boundedInboxLimit(args.limit);
+      const sessions = args.repoId
+        ? appController.state.sessions.filter((session) => session.repoID === args.repoId)
+        : appController.state.sessions;
+      const blocked = sessions.filter(
+        (session) => session.status === "blocked" || session.status === "needs_input" || session.blocker !== null
+      );
+      const unread = sessions.filter((session) => session.unreadCount > 0);
+      const live = sessions.filter((session) => session.runtimeState !== "stopped");
+      const focusedSession = appController.focusedSessionId
+        ? appController.state.sessions.find((session) => session.id === appController.focusedSessionId) ?? null
+        : null;
+
+      return textResult({
+        focusedSession: focusedSession ? sessionSummary(appController, focusedSession) : null,
+        actionable: sortedActionableSessions(sessions).slice(0, limit).map((session) =>
+          sessionSummary(appController, session)
+        ),
+        counts: {
+          workspaces: appController.state.workspaces.length,
+          repos: appController.state.repos.length,
+          sessions: sessions.length,
+          live: live.length,
+          stopped: sessions.length - live.length,
+          blocked: blocked.length,
+          unread: unread.length,
+        },
+        filter: {
+          repoId: args.repoId ?? null,
         },
         limit,
       });

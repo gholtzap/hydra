@@ -167,6 +167,10 @@ export class InternalApi {
     return this.ctrl.handleMcpAction("stop_session", { sessionId });
   }
 
+  async stopSessions(repoId?: string): Promise<McpActionResult<"stop_sessions">> {
+    return this.ctrl.handleMcpAction("stop_sessions", { repoId });
+  }
+
   async markSessionRead(sessionId: string): Promise<McpActionResult<"mark_session_read">> {
     return this.ctrl.handleMcpAction("mark_session_read", { sessionId });
   }

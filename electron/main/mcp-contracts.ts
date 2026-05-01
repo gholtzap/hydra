@@ -130,6 +130,9 @@ export const MCP_ACTION_ARGS_SCHEMAS = {
   stop_session: z.object({
     sessionId: z.string()
   }).strict(),
+  stop_sessions: z.object({
+    repoId: z.string().optional()
+  }).strict(),
   mark_session_read: z.object({
     sessionId: z.string()
   }).strict(),
@@ -260,6 +263,7 @@ export type McpActionResultMap = {
   reopen_session: void;
   restart_session: void;
   stop_session: void;
+  stop_sessions: { stoppedSessionIds: string[] };
   mark_session_read: { clearedUnreadCount: number };
   mark_sessions_read: { clearedSessionIds: string[]; clearedUnreadCount: number };
   resize_session: void;

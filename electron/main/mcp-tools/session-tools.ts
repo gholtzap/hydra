@@ -609,6 +609,24 @@ export function register(server: McpServer, appController: AppControllerHandle):
     }
   );
 
+  // ── stop_sessions ──────────────────────────────────────────────
+  server.tool(
+    "stop_sessions",
+    "Stop all live sessions or only live sessions in a repo while keeping history",
+    {
+      repoId: z.string().optional().describe("Optional repo ID to limit stopped sessions"),
+    },
+    async (args: McpActionArgs<"stop_sessions">) => {
+      if (args.repoId) {
+        const repo = appController.state.repos.find((candidate) => candidate.id === args.repoId);
+        if (!repo) return textResult({ ok: false, error: "Repo not found" });
+      }
+
+      const result = await appController.handleMcpAction("stop_sessions", args);
+      return textResult({ ok: true, ...result });
+    }
+  );
+
   // ── mark_session_read ──────────────────────────────────────────
   server.tool(
     "mark_session_read",

@@ -12,6 +12,8 @@ const DEFAULT_MCP_ENDPOINT = "http://127.0.0.1:4141/mcp";
 const DEFAULT_MCP_HEALTH_URL = "http://127.0.0.1:4141/health";
 const EPHEMERAL_FLAG = 1 << 6;
 const INTENT_GUILDS = 1 << 0;
+const MIN_HEARTBEAT_INTERVAL_MS = 1_000;
+const MAX_HEARTBEAT_INTERVAL_MS = 60_000;
 
 const commandDefinitions = [
   {
@@ -399,9 +401,11 @@ async function discordRequest(config, route, init = {}) {
 }
 
 async function registerCommands(config) {
+  const applicationId = safeDiscordPathSegment(config.applicationId, "application ID");
+  const guildId = safeDiscordPathSegment(config.guildId, "guild ID");
   await discordRequest(
     config,
-    `/applications/${config.applicationId}/guilds/${config.guildId}/commands`,
+    `/applications/${applicationId}/guilds/${guildId}/commands`,
     {
       method: "PUT",
       body: JSON.stringify(commandDefinitions),
@@ -438,9 +442,10 @@ async function connectGateway(config) {
     if (packet.s !== null && packet.s !== undefined) sequence = packet.s;
 
     if (packet.op === 10) {
+      const heartbeatIntervalMs = boundedHeartbeatInterval(packet?.d?.heartbeat_interval);
       heartbeatTimer = setInterval(() => {
         socket.send(JSON.stringify({ op: 1, d: sequence }));
-      }, packet.d.heartbeat_interval);
+      }, heartbeatIntervalMs);
       socket.send(JSON.stringify({
         op: 2,
         d: {
@@ -515,7 +520,9 @@ function authorizationError(config, interaction) {
 }
 
 async function respondToInteraction(config, interaction, content, ephemeral) {
-  await discordRequest(config, `/interactions/${interaction.id}/${interaction.token}/callback`, {
+  const interactionId = safeDiscordPathSegment(interaction.id, "interaction ID");
+  const interactionToken = safeDiscordPathSegment(interaction.token, "interaction token");
+  await discordRequest(config, `/interactions/${interactionId}/${interactionToken}/callback`, {
     method: "POST",
     body: JSON.stringify({
       type: 4,
@@ -528,7 +535,9 @@ async function respondToInteraction(config, interaction, content, ephemeral) {
 }
 
 async function deferInteraction(config, interaction) {
-  await discordRequest(config, `/interactions/${interaction.id}/${interaction.token}/callback`, {
+  const interactionId = safeDiscordPathSegment(interaction.id, "interaction ID");
+  const interactionToken = safeDiscordPathSegment(interaction.token, "interaction token");
+  await discordRequest(config, `/interactions/${interactionId}/${interactionToken}/callback`, {
     method: "POST",
     body: JSON.stringify({
       type: 5,
@@ -538,13 +547,35 @@ async function deferInteraction(config, interaction) {
 }
 
 async function editInteractionResponse(config, interaction, content) {
+  const applicationId = safeDiscordPathSegment(config.applicationId, "application ID");
+  const interactionToken = safeDiscordPathSegment(interaction.token, "interaction token");
   await discordRequest(
     config,
-    `/webhooks/${config.applicationId}/${interaction.token}/messages/@original`,
+    `/webhooks/${applicationId}/${interactionToken}/messages/@original`,
     {
       method: "PATCH",
       body: JSON.stringify({ content: limitDiscord(content) }),
     }
+  );
+}
+
+function safeDiscordPathSegment(value, name) {
+  const text = String(value ?? "");
+  if (!text) throw new Error(`Missing Discord ${name}.`);
+  if (/[/?#\\]/u.test(text)) {
+    throw new Error(`Invalid Discord ${name}.`);
+  }
+  return encodeURIComponent(text);
+}
+
+function boundedHeartbeatInterval(value) {
+  const interval = Number(value);
+  if (!Number.isFinite(interval) || interval <= 0) {
+    return MIN_HEARTBEAT_INTERVAL_MS;
+  }
+  return Math.min(
+    Math.max(interval, MIN_HEARTBEAT_INTERVAL_MS),
+    MAX_HEARTBEAT_INTERVAL_MS
   );
 }
 

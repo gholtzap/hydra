@@ -29,6 +29,7 @@ import type {
   RepoAppLaunchConfig,
   RepoParallelWorktreeSettings,
   RepoParallelWorktreeSettingsPatch,
+  SessionCloseRequest,
   SessionOrganizationPatch,
   SessionOutputPayload,
   SessionRestartRequest,
@@ -38,7 +39,11 @@ import type {
   TrackedPortStatus,
   VoiceCallState,
   VoiceConfig,
+  WorktreeCloseAction,
+  WorktreeDeleteRequest,
+  WorktreeRenameRequest,
   WorktreeRevealRequest,
+  WorktreeResumeRequest,
   WikiContext,
   WikiFileContents
 } from "../shared-types";
@@ -266,7 +271,11 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
       invoke<string | null>("session:create", { repoId, launchesClaudeOnStart }),
     reopenSession: (sessionId: string) => invoke<void>("session:reopen", sessionId),
     restartSession: (payload: SessionRestartRequest) => invoke<void>("session:restart", payload),
-    closeSession: (sessionId: string) => invoke<void>("session:close", sessionId),
+    closeSession: (sessionId: string, worktreeAction?: WorktreeCloseAction) =>
+      invoke<void>("session:close", {
+        sessionId,
+        worktreeAction
+      } satisfies SessionCloseRequest),
     renameSession: (sessionId: string, title: string) =>
       invoke<boolean>("session:rename", { sessionId, title }),
     updateSessionOrganization: (sessionId: string, patch: SessionOrganizationPatch) =>
@@ -289,12 +298,19 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
       invoke<RepoAppLaunchConfig | null>("repo:updateAppLaunchConfig", payload),
     updateRepoParallelWorktreeSettings: (payload: RepoParallelWorktreeSettingsRequest) =>
       invoke<RepoParallelWorktreeSettings | null>("repo:updateParallelWorktreeSettings", payload),
+    listRepoBranches: (repoId: string) => invoke<string[]>("repo:listBranches", repoId),
     buildAndRunApp: (repoId: string) => invoke<string | null>("repo:buildAndRunApp", repoId),
     readClipboardText: () => invoke<string>("clipboard:readText"),
     writeClipboardText: (text: string) => invoke<void>("clipboard:writeText", text),
     checkForUpdates: () => invoke<AppUpdateCheckResult>("app:checkForUpdates"),
     revealPath: (payload: ClaudePathRevealRequest) => invoke<void>("path:reveal", payload),
     revealWorktree: (payload: WorktreeRevealRequest) => invoke<void>("worktree:reveal", payload),
+    deleteWorktree: (payload: WorktreeDeleteRequest) =>
+      invoke<boolean>("worktree:delete", payload),
+    resumeWorktree: (payload: WorktreeResumeRequest) =>
+      invoke<string | null>("worktree:resume", payload),
+    renameWorktree: (payload: WorktreeRenameRequest) =>
+      invoke<boolean>("worktree:rename", payload),
     openExternalUrl: (payload: ClaudeExternalUrlRequest) =>
       invoke<void>("path:openExternal", payload),
     nextUnreadSession: () => invoke<string | null>("session:nextUnread"),

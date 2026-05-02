@@ -56,6 +56,14 @@ function runGitSync(args: string[], cwd: string): GitExecResult {
   };
 }
 
+function canonicalPathSync(filePath: string): string {
+  try {
+    return fs.realpathSync.native(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
 function createWorktreeSync(
   repoPath: string,
   worktreePath: string,
@@ -74,6 +82,19 @@ function createWorktreeSync(
   }
 
   return runGitSync(["worktree", "add", "-b", branchName, worktreePath, baseBranch], repoPath);
+}
+
+function listBranchesSync(repoPath: string): string[] {
+  const result = runGitSync(["for-each-ref", "--format=%(refname:short)", "refs/heads"], repoPath);
+  if (!result.ok) {
+    return [];
+  }
+
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => !!line)
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function hasUntrackedFilesSync(repoPath: string): boolean {
@@ -195,20 +216,135 @@ function parseListedWorktrees(output: string): ListedWorktree[] {
 }
 
 async function validateWorktreePath(repoPath: string, candidatePath: string): Promise<boolean> {
-  const resolvedCandidate = path.resolve(candidatePath);
+  const resolvedCandidate = canonicalPathSync(candidatePath);
   const worktrees = await listGitWorktrees(repoPath);
-  return worktrees.some((entry) => path.resolve(entry.path) === resolvedCandidate);
+  return worktrees.some((entry) => canonicalPathSync(entry.path) === resolvedCandidate);
 }
 
 function validateWorktreePathSync(repoPath: string, candidatePath: string): boolean {
-  const resolvedCandidate = path.resolve(candidatePath);
+  const resolvedCandidate = canonicalPathSync(candidatePath);
   const worktrees = listGitWorktreesSync(repoPath);
-  return worktrees.some((entry) => path.resolve(entry.path) === resolvedCandidate);
+  return worktrees.some((entry) => canonicalPathSync(entry.path) === resolvedCandidate);
+}
+
+function deleteWorktreeSync(repoPath: string, worktreePath: string): GitExecResult {
+  const resolvedWorktreePath = canonicalPathSync(worktreePath);
+  const knownWorktree = listGitWorktreesSync(repoPath).some(
+    (entry) => canonicalPathSync(entry.path) === resolvedWorktreePath
+  );
+
+  if (!knownWorktree) {
+    runGitSync(["worktree", "prune"], repoPath);
+    return {
+      ok: true,
+      stdout: "",
+      stderr: "",
+      exitCode: 0
+    };
+  }
+
+  const result = runGitSync(["worktree", "remove", "--force", resolvedWorktreePath], repoPath);
+  if (result.ok) {
+    runGitSync(["worktree", "prune"], repoPath);
+  }
+  return result;
+}
+
+function isWorktreeDirtySync(worktreePath: string): boolean {
+  const result = runGitSync(["status", "--porcelain", "--untracked-files=all"], worktreePath);
+  if (!result.ok) {
+    return true;
+  }
+
+  return result.stdout.trim().length > 0;
+}
+
+function resolveCommitSync(repoPath: string, refName: string): string | null {
+  const result = runGitSync(["rev-parse", "--verify", refName], repoPath);
+  if (!result.ok) {
+    return null;
+  }
+
+  return result.stdout.trim() || null;
+}
+
+function successfulResult(stdout = ""): GitExecResult {
+  return {
+    ok: true,
+    stdout,
+    stderr: "",
+    exitCode: 0
+  };
+}
+
+function failedResult(stderr: string, exitCode = 1): GitExecResult {
+  return {
+    ok: false,
+    stdout: "",
+    stderr,
+    exitCode
+  };
+}
+
+function fastForwardWorktreeToBranchSync(
+  repoPath: string,
+  worktreePath: string,
+  targetBranch: string
+): GitExecResult {
+  const normalizedBranch = typeof targetBranch === "string" ? targetBranch.trim() : "";
+  if (!normalizedBranch || !listBranchesSync(repoPath).includes(normalizedBranch)) {
+    return failedResult("Choose an existing local branch.");
+  }
+
+  if (!validateWorktreePathSync(repoPath, worktreePath)) {
+    return failedResult("Hydra could not find that Git worktree.");
+  }
+
+  if (isWorktreeDirtySync(worktreePath)) {
+    return failedResult("Commit or discard worktree changes before pushing to a branch.");
+  }
+
+  const sourceCommit = resolveCommitSync(worktreePath, "HEAD");
+  const targetCommit = resolveCommitSync(repoPath, `refs/heads/${normalizedBranch}`);
+  if (!sourceCommit || !targetCommit) {
+    return failedResult("Hydra could not resolve the source or target branch.");
+  }
+
+  if (sourceCommit === targetCommit) {
+    return successfulResult("Branch is already up to date.");
+  }
+
+  const ancestorCheck = runGitSync(["merge-base", "--is-ancestor", targetCommit, sourceCommit], worktreePath);
+  if (!ancestorCheck.ok) {
+    return failedResult(`${normalizedBranch} cannot be fast-forwarded to this worktree branch.`);
+  }
+
+  const currentRepoBranch = readCurrentBranchSync(repoPath);
+  if (currentRepoBranch === normalizedBranch) {
+    return runGitSync(["merge", "--ff-only", sourceCommit], repoPath);
+  }
+
+  const resolvedWorktreePath = canonicalPathSync(worktreePath);
+  const resolvedRepoPath = canonicalPathSync(repoPath);
+  const checkedOutElsewhere = listGitWorktreesSync(repoPath).find(
+    (entry) =>
+      entry.branch === normalizedBranch &&
+      canonicalPathSync(entry.path) !== resolvedWorktreePath &&
+      canonicalPathSync(entry.path) !== resolvedRepoPath
+  );
+  if (checkedOutElsewhere) {
+    return failedResult(`${normalizedBranch} is checked out at ${checkedOutElsewhere.path}.`);
+  }
+
+  return runGitSync(["branch", "-f", normalizedBranch, sourceCommit], repoPath);
 }
 
 module.exports = {
   createWorktreeSync,
+  deleteWorktreeSync,
+  fastForwardWorktreeToBranchSync,
   hasUntrackedFilesSync,
+  listBranchesSync,
   listChangedFiles,
   listGitWorktrees,
   listGitWorktreesSync,

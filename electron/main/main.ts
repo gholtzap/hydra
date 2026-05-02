@@ -38,6 +38,7 @@ import type {
   RepoParallelWorktreeSettingsPatch,
   RepoRecord,
   SessionBlocker,
+  SessionCloseRequest,
   SessionOrganizationPatch,
   SessionParallelWorktreeMetadata,
   SessionRestartRequest,
@@ -46,11 +47,15 @@ import type {
   SessionSearchResponse,
   SessionRuntimeState,
   SessionStatus,
- SessionSummary,
+  SessionSummary,
   SessionTagColor,
   StoredAppState,
   TrackedPortStatus,
+  WorktreeCloseAction,
+  WorktreeDeleteRequest,
+  WorktreeRenameRequest,
   WorktreeRevealRequest,
+  WorktreeResumeRequest,
   WikiContext,
   WikiFileContents
 } from "../shared-types";
@@ -252,6 +257,9 @@ const {
 };
 const {
   createWorktreeSync,
+  deleteWorktreeSync,
+  fastForwardWorktreeToBranchSync,
+  listBranchesSync,
   listChangedFiles,
   readCurrentBranch,
   readCurrentBranchSync,
@@ -264,6 +272,16 @@ const {
     branchName: string,
     baseBranch: string
   ) => { ok: boolean; stdout: string; stderr: string; exitCode: number };
+  deleteWorktreeSync: (
+    repoPath: string,
+    worktreePath: string
+  ) => { ok: boolean; stdout: string; stderr: string; exitCode: number };
+  fastForwardWorktreeToBranchSync: (
+    repoPath: string,
+    worktreePath: string,
+    targetBranch: string
+  ) => { ok: boolean; stdout: string; stderr: string; exitCode: number };
+  listBranchesSync: (repoPath: string) => string[];
   listChangedFiles: (repoPath: string, baseBranch: string) => Promise<string[]>;
   readCurrentBranch: (repoPath: string) => Promise<string | null>;
   readCurrentBranchSync: (repoPath: string) => string | null;
@@ -610,6 +628,39 @@ function sanitizeRepoParallelWorktreeSettingsPatch(patch: unknown): Partial<Repo
   }
 
   return nextPatch;
+}
+
+function normalizeWorktreeCloseAction(value: unknown): WorktreeCloseAction {
+  if (!isPlainObject(value)) {
+    return { kind: "keep" };
+  }
+
+  if (value.kind === "delete") {
+    return { kind: "delete" };
+  }
+
+  if (value.kind === "push") {
+    return {
+      kind: "push",
+      branch: normalizeBranchValue(value.branch) || ""
+    };
+  }
+
+  return { kind: "keep" };
+}
+
+function normalizeSessionCloseRequest(value: unknown): SessionCloseRequest {
+  if (isPlainObject(value)) {
+    return {
+      sessionId: typeof value.sessionId === "string" ? value.sessionId : "",
+      worktreeAction: normalizeWorktreeCloseAction(value.worktreeAction)
+    };
+  }
+
+  return {
+    sessionId: typeof value === "string" ? value : "",
+    worktreeAction: { kind: "keep" }
+  };
 }
 
 function normalizeBranchValue(value: unknown): string | null {
@@ -1282,7 +1333,10 @@ class AppController {
     ipcMain.handle("session:restart", (_event, payload: SessionRestartRequest) =>
       this.restartSession(payload.sessionId)
     );
-    ipcMain.handle("session:close", (_event, sessionId) => this.closeSession(sessionId));
+    ipcMain.handle("session:close", (_event, payload) => {
+      const request = normalizeSessionCloseRequest(payload);
+      return this.closeSession(request.sessionId, request.worktreeAction);
+    });
     ipcMain.handle("session:input", (_event, payload) => {
       this.handleSessionInput(payload.sessionId, payload.data);
     });
@@ -1300,6 +1354,7 @@ class AppController {
     ipcMain.handle("repo:updateParallelWorktreeSettings", (_event, payload: RepoParallelWorktreeSettingsPatch) =>
       this.updateRepoParallelWorktreeSettings(payload?.repoId, payload)
     );
+    ipcMain.handle("repo:listBranches", (_event, repoId) => this.listRepoBranches(repoId));
     ipcMain.handle("clipboard:readText", () => clipboard.readText());
     ipcMain.handle("clipboard:writeText", (_event, text) => {
       clipboard.writeText(text || "");
@@ -1308,6 +1363,15 @@ class AppController {
     ipcMain.handle("path:reveal", (_event, payload) => this.revealTrustedPath(payload || {}));
     ipcMain.handle("worktree:reveal", (_event, payload: WorktreeRevealRequest) =>
       this.revealTrackedWorktree(payload)
+    );
+    ipcMain.handle("worktree:delete", (_event, payload: WorktreeDeleteRequest) =>
+      this.deleteTrackedWorktree(payload)
+    );
+    ipcMain.handle("worktree:resume", (_event, payload: WorktreeResumeRequest) =>
+      this.resumeTrackedWorktree(payload)
+    );
+    ipcMain.handle("worktree:rename", (_event, payload: WorktreeRenameRequest) =>
+      this.renameTrackedWorktree(payload)
     );
     ipcMain.handle("path:openExternal", (_event, payload) =>
       this.openTrustedExternalUrl(payload || {})
@@ -2381,6 +2445,50 @@ class AppController {
     }
   }
 
+  removeTrackedWorktreeLedgerEntry(repo: RepoRecord, worktreePath: string): boolean {
+    const resolvedPath = path.resolve(worktreePath);
+    const previousLength = repo.parallelWorktreeLedger.length;
+    repo.parallelWorktreeLedger = repo.parallelWorktreeLedger.filter(
+      (entry) => path.resolve(entry.path) !== resolvedPath
+    );
+    return repo.parallelWorktreeLedger.length !== previousLength;
+  }
+
+  applySessionWorktreeCloseAction(
+    session: SessionRecord,
+    repo: RepoRecord,
+    action: WorktreeCloseAction
+  ): boolean {
+    if (session.parallelWorktree.mode !== "isolated" || !session.parallelWorktree.worktreePath) {
+      return false;
+    }
+
+    const worktreePath = session.parallelWorktree.worktreePath;
+    if (action.kind === "push") {
+      const targetBranch = normalizeBranchValue(action.branch);
+      if (!targetBranch) {
+        throw new Error("Choose a branch before pushing this worktree.");
+      }
+
+      const pushResult = fastForwardWorktreeToBranchSync(repo.path, worktreePath, targetBranch);
+      if (!pushResult.ok) {
+        throw new Error(`Hydra could not push this worktree to ${targetBranch}: ${gitFailureMessage(pushResult)}`);
+      }
+    }
+
+    if (action.kind !== "delete" && action.kind !== "push") {
+      return false;
+    }
+
+    const deleteResult = deleteWorktreeSync(repo.path, worktreePath);
+    if (!deleteResult.ok) {
+      throw new Error(`Hydra could not delete this worktree: ${gitFailureMessage(deleteResult)}`);
+    }
+
+    this.removeTrackedWorktreeLedgerEntry(repo, worktreePath);
+    return true;
+  }
+
   buildParallelWorktreePrompt(context: ParallelWorktreePromptContext): string {
     const lines = [
       "Hydra parallel worktree contract for this session:",
@@ -2800,9 +2908,13 @@ class AppController {
     return { stoppedSessionIds };
   }
 
-  closeSession(sessionId: string): void {
+  closeSession(sessionId: string, worktreeAction: WorktreeCloseAction = { kind: "keep" }): void {
     const session = this.sessionById(sessionId);
     const repo = session ? this.repoById(session.repoID) : null;
+    const removedWorktree =
+      session && repo
+        ? this.applySessionWorktreeCloseAction(session, repo, worktreeAction)
+        : false;
     this.pendingSessionRestarts.delete(sessionId);
     this.pendingSessionStops.delete(sessionId);
     this.cancelPendingAgentLaunch(sessionId);
@@ -2813,7 +2925,7 @@ class AppController {
     this.resetSignalTracking(sessionId);
     this.ptyHost.killSession(sessionId);
     this.focusedSessionId = this.focusedSessionId === sessionId ? null : this.focusedSessionId;
-    if (session && repo) {
+    if (session && repo && !removedWorktree) {
       this.archiveSessionParallelWorktree(session, repo, "cleanup_pending");
     }
     this.state.sessions = this.state.sessions.filter((session) => session.id !== sessionId);
@@ -3142,6 +3254,15 @@ class AppController {
     return structuredClone(nextSettings);
   }
 
+  listRepoBranches(repoId: string): string[] {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      return [];
+    }
+
+    return listBranchesSync(repo.path);
+  }
+
   updateRepoAppLaunchConfig(repoId: string, config: unknown): RepoAppLaunchConfig | null {
     const repo = this.repoById(repoId);
     if (!repo) {
@@ -3206,6 +3327,194 @@ class AppController {
     }
 
     shell.showItemInFolder(worktreePath);
+  }
+
+  deleteTrackedWorktree(payload: WorktreeDeleteRequest): boolean {
+    const repo = this.repoById(payload?.repoId);
+    const worktreePath = typeof payload?.worktreePath === "string" ? payload.worktreePath.trim() : "";
+    if (!repo || !worktreePath) {
+      return false;
+    }
+
+    const activeSession = this.state.sessions.find((session) =>
+      session.repoID === repo.id &&
+      session.parallelWorktree.mode === "isolated" &&
+      session.parallelWorktree.worktreePath === worktreePath &&
+      (!payload.sessionId || payload.sessionId === session.id)
+    );
+    if (activeSession) {
+      this.closeSession(activeSession.id, { kind: "delete" });
+      return true;
+    }
+
+    const matchesLedger = repo.parallelWorktreeLedger.some((entry) => entry.path === worktreePath);
+    if (!matchesLedger) {
+      return false;
+    }
+
+    const deleteResult = deleteWorktreeSync(repo.path, worktreePath);
+    if (!deleteResult.ok) {
+      throw new Error(`Hydra could not delete this worktree: ${gitFailureMessage(deleteResult)}`);
+    }
+
+    this.removeTrackedWorktreeLedgerEntry(repo, worktreePath);
+    repo.updatedAt = now();
+    this.scheduleParallelWorktreeRefresh(repo.id);
+    this.scheduleSave();
+    this.broadcastState();
+    return true;
+  }
+
+  renameTrackedWorktree(payload: WorktreeRenameRequest): boolean {
+    const repo = this.repoById(payload?.repoId);
+    const worktreePath = typeof payload?.worktreePath === "string" ? payload.worktreePath.trim() : "";
+    const title = typeof payload?.title === "string" ? payload.title.trim() : "";
+    if (!repo || !worktreePath || !title) {
+      return false;
+    }
+
+    let changed = false;
+    for (const session of this.state.sessions) {
+      if (
+        session.repoID === repo.id &&
+        session.parallelWorktree.worktreePath === worktreePath &&
+        session.title !== title
+      ) {
+        session.title = title;
+        session.updatedAt = now();
+        this.sendSessionUpdated(session.id);
+        changed = true;
+      }
+    }
+
+    for (const entry of repo.parallelWorktreeLedger) {
+      if (entry.path === worktreePath && entry.sessionTitle !== title) {
+        entry.sessionTitle = title;
+        entry.updatedAt = now();
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      return false;
+    }
+
+    repo.updatedAt = now();
+    this.scheduleSave();
+    this.broadcastState();
+    return true;
+  }
+
+  resumeTrackedWorktree(payload: WorktreeResumeRequest): string | null {
+    const repo = this.repoById(payload?.repoId);
+    const worktreePath = typeof payload?.worktreePath === "string" ? payload.worktreePath.trim() : "";
+    if (!repo || !worktreePath) {
+      return null;
+    }
+
+    const entryIndex = repo.parallelWorktreeLedger.findIndex((entry) => entry.path === worktreePath);
+    const entry = entryIndex >= 0 ? repo.parallelWorktreeLedger[entryIndex] : null;
+    const activeSession = this.state.sessions.find((session) =>
+      session.repoID === repo.id &&
+      session.parallelWorktree.mode === "isolated" &&
+      session.parallelWorktree.worktreePath === worktreePath
+    );
+    if (activeSession) {
+      if (activeSession.runtimeState === "stopped") {
+        this.reopenSession(activeSession.id);
+      }
+      return activeSession.id;
+    }
+
+    if (!entry) {
+      return null;
+    }
+
+    if (!validateWorktreePathSync(repo.path, worktreePath)) {
+      this.removeTrackedWorktreeLedgerEntry(repo, worktreePath);
+      repo.updatedAt = now();
+      this.scheduleSave();
+      this.broadcastState();
+      throw new Error("Hydra could not find that worktree. It was removed from the manager.");
+    }
+
+    const startupAgentId = normalizeAgentId(this.state.preferences.defaultAgentId, null);
+    if (!startupAgentId) {
+      return null;
+    }
+
+    const sessionId = randomUUID();
+    const settings = this.effectiveRepoParallelWorktreeSettings(repo);
+    const baseBranch = entry.baseBranch || settings.baseBranch;
+    const landingBranch = entry.landingBranch || settings.landingBranch;
+    const branch = readCurrentBranchSync(worktreePath) || entry.branch;
+    const session: SessionRecord = {
+      id: sessionId,
+      repoID: repo.id,
+      title: entry.sessionTitle || repo.name,
+      launchProfile: "agent",
+      initialPrompt: "",
+      launchesClaudeOnStart: true,
+      startupAgentId,
+      claudeSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
+      agentSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
+      status: "running",
+      runtimeState: "launching",
+      blocker: null,
+      unreadCount: 0,
+      createdAt: now(),
+      updatedAt: now(),
+      lastActivityAt: null,
+      stoppedAt: null,
+      launchCount: 1,
+      isPinned: false,
+      tagColor: null,
+      sessionIconPath: null,
+      sessionIconUpdatedAt: null,
+      parallelWorktree: normalizeSessionParallelWorktreeMetadata({
+        mode: "isolated",
+        lifecycleState: "active",
+        baseBranch,
+        landingBranch,
+        worktreePath,
+        branch,
+        lastEventAt: now()
+      }),
+      transcript: "",
+      rawTranscript: ""
+    };
+
+    const launchPrompt = this.buildParallelWorktreePrompt({
+      session,
+      repo,
+      mode: "isolated",
+      baseBranch,
+      landingBranch,
+      launchReason: "reopen",
+      previousPath: worktreePath,
+      previousBranch: branch
+    });
+    session.initialPrompt = launchPrompt;
+    session.parallelWorktree.promptInjectedAt = now();
+    this.queueSessionLaunch(session.id, `${launchPrompt}\r`, session.title);
+
+    repo.parallelWorktreeLedger.splice(entryIndex, 1);
+    this.state.sessions.unshift(session);
+    const launchMsg = `Launching ${session.startupAgentId}...\n`;
+    this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(launchMsg));
+    session.transcript = launchMsg;
+    invalidateSessionSearchCache(repo.path);
+    this.broadcastState();
+
+    setImmediate(() => {
+      this.launchRuntime(session, repo);
+      session.runtimeState = "live";
+      this.scheduleParallelWorktreeRefresh(repo.id);
+      this.scheduleSave();
+      this.broadcastState();
+    });
+
+    return session.id;
   }
 
   findReusableAppSession(repoId: string): SessionRecord | null {
@@ -3419,12 +3728,39 @@ class AppController {
       return;
     }
 
+    let changed = false;
+    if (repo.parallelWorktreeLedger.length) {
+      const ledgerValidity = await Promise.all(
+        repo.parallelWorktreeLedger.map(async (entry) => [
+          entry.path,
+          await validateWorktreePath(repo.path, entry.path)
+        ] as const)
+      );
+      const validLedgerPaths = new Set(
+        ledgerValidity
+          .filter(([, valid]) => valid)
+          .map(([worktreePath]) => path.resolve(worktreePath))
+      );
+      const nextLedger = repo.parallelWorktreeLedger.filter((entry) =>
+        validLedgerPaths.has(path.resolve(entry.path))
+      );
+      if (nextLedger.length !== repo.parallelWorktreeLedger.length) {
+        repo.parallelWorktreeLedger = nextLedger;
+        repo.updatedAt = now();
+        changed = true;
+      }
+    }
+
     const candidateSessions = this.state.sessions.filter((session) =>
       session.repoID === repoId &&
       session.launchProfile === "agent" &&
       session.parallelWorktree.mode !== "disabled"
     );
     if (!candidateSessions.length) {
+      if (changed) {
+        this.scheduleSave();
+        this.broadcastState();
+      }
       return;
     }
 
@@ -3442,6 +3778,12 @@ class AppController {
         if (session.parallelWorktree.mode === "isolated") {
           const valid = await validateWorktreePath(repo.path, targetPath);
           if (!valid) {
+            if (session.parallelWorktree.lifecycleState !== "landing_failed") {
+              session.parallelWorktree.lifecycleState = "landing_failed";
+              session.parallelWorktree.lastError = "Hydra could not find this session's isolated worktree.";
+              session.parallelWorktree.lastEventAt = now();
+              changed = true;
+            }
             return [session.id, [] as string[]] as const;
           }
         }
@@ -3452,7 +3794,6 @@ class AppController {
     );
 
     const changedFilesBySessionId = new Map<string, string[]>(changedFilePairs);
-    let changed = false;
 
     for (const session of candidateSessions) {
       const nextChangedFiles = changedFilesBySessionId.get(session.id) || [];

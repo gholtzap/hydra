@@ -156,6 +156,11 @@ export type RepoParallelWorktreeSettingsPatch = {
   landingBranch?: string;
 };
 
+export type WorktreeCloseAction =
+  | { kind: "keep" }
+  | { kind: "delete" }
+  | { kind: "push"; branch: string };
+
 export type ParallelWorktreeSessionMode = "disabled" | "shared" | "isolated";
 
 export type ParallelWorktreeLifecycleState =
@@ -369,10 +374,25 @@ export type SessionRestartRequest = {
   sessionId: string;
 };
 
+export type SessionCloseRequest = {
+  sessionId: string;
+  worktreeAction?: WorktreeCloseAction;
+};
+
 export type WorktreeRevealRequest = {
   repoId: string;
   worktreePath: string;
 };
+
+export type WorktreeDeleteRequest = WorktreeRevealRequest & {
+  sessionId?: string;
+};
+
+export type WorktreeRenameRequest = WorktreeRevealRequest & {
+  title: string;
+};
+
+export type WorktreeResumeRequest = WorktreeRevealRequest;
 
 export type AppCommandPayload = {
   command: string;

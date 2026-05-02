@@ -37,7 +37,11 @@ import type {
   TrackedPortStatus,
   VoiceCallState,
   VoiceConfig,
+  WorktreeCloseAction,
+  WorktreeDeleteRequest,
+  WorktreeRenameRequest,
   WorktreeRevealRequest,
+  WorktreeResumeRequest,
   WikiContext,
   WikiFileContents
 } from "./shared-types";
@@ -52,7 +56,7 @@ interface ClaudeWorkspaceApi {
   createSession: (repoId: string, launchesClaudeOnStart: boolean) => Promise<string | null>;
   reopenSession: (sessionId: string) => Promise<void>;
   restartSession: (payload: SessionRestartRequest) => Promise<void>;
-  closeSession: (sessionId: string) => Promise<void>;
+  closeSession: (sessionId: string, worktreeAction?: WorktreeCloseAction) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<boolean>;
   updateSessionOrganization: (
     sessionId: string,
@@ -76,12 +80,16 @@ interface ClaudeWorkspaceApi {
   updateRepoParallelWorktreeSettings: (
     payload: RepoParallelWorktreeSettingsPatch
   ) => Promise<RepoParallelWorktreeSettings | null>;
+  listRepoBranches: (repoId: string) => Promise<string[]>;
   buildAndRunApp: (repoId: string) => Promise<string | null>;
   readClipboardText: () => Promise<string>;
   writeClipboardText: (text: string) => Promise<void>;
   checkForUpdates: () => Promise<AppUpdateCheckResult>;
   revealPath: (payload: ClaudePathRevealRequest) => Promise<void>;
   revealWorktree: (payload: WorktreeRevealRequest) => Promise<void>;
+  deleteWorktree: (payload: WorktreeDeleteRequest) => Promise<boolean>;
+  resumeWorktree: (payload: WorktreeResumeRequest) => Promise<string | null>;
+  renameWorktree: (payload: WorktreeRenameRequest) => Promise<boolean>;
   openExternalUrl: (payload: ClaudeExternalUrlRequest) => Promise<void>;
   nextUnreadSession: () => Promise<string | null>;
   updatePreferences: (patch: AppPreferencesPatch) => Promise<void>;

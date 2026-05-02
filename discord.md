@@ -39,7 +39,11 @@ DISCORD_CHANNEL_ID=your_hydra_control_channel_id
 DISCORD_ALLOWED_USER_IDS=comma,separated,discord,user,ids
 ```
 
-`DISCORD_ALLOWED_USER_IDS` is strongly recommended. If it is empty, access is still restricted by guild and channel, but any user who can use slash commands in that channel can control Hydra.
+`DISCORD_ALLOWED_USER_IDS` is required by default. If it is empty, the bridge will not start. To intentionally allow every user who can use slash commands in the configured channel to control Hydra, set:
+
+```env
+HYDRA_DISCORD_ALLOW_CHANNEL_MEMBERS=1
+```
 
 Hydra must also have its local MCP server enabled:
 
@@ -53,7 +57,10 @@ By default, the Discord bridge reads Hydra's generated MCP token from the app da
 HYDRA_MCP_AUTH_TOKEN=your_hydra_mcp_token
 HYDRA_MCP_AUTH_TOKEN_FILE=/path/to/mcp-auth-token
 HYDRA_MCP_ENDPOINT=http://127.0.0.1:4141/mcp
+HYDRA_MCP_HEALTH_URL=http://127.0.0.1:4141/health
 ```
+
+`HYDRA_MCP_ENDPOINT` and `HYDRA_MCP_HEALTH_URL` must use `http://` and point to `localhost`, `127.0.0.1`, or `::1`. The bridge refuses non-loopback URLs so it does not send the Hydra MCP bearer token to another host.
 
 ## Running
 
@@ -197,5 +204,7 @@ Supported agent IDs:
 - Regenerate the Discord bot token if it is exposed.
 - Keep the control channel private.
 - Keep `DISCORD_ALLOWED_USER_IDS` set for personal use.
+- Set `HYDRA_DISCORD_ALLOW_CHANNEL_MEMBERS=1` only when every user with access to the configured channel should be able to control Hydra.
 - Do not expose `127.0.0.1:4141` through a tunnel or public proxy.
+- Keep the MCP endpoint and health URL on loopback addresses.
 - Treat approvals from Discord as sensitive because they can allow agents to run tools or modify files.

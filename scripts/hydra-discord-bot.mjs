@@ -14,6 +14,8 @@ const EPHEMERAL_FLAG = 1 << 6;
 const INTENT_GUILDS = 1 << 0;
 const MIN_HEARTBEAT_INTERVAL_MS = 1_000;
 const MAX_HEARTBEAT_INTERVAL_MS = 60_000;
+const ALLOW_CHANNEL_MEMBERS_ENV = "HYDRA_DISCORD_ALLOW_CHANNEL_MEMBERS";
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
 const commandDefinitions = [
   {
@@ -199,16 +201,16 @@ const commandDefinitions = [
 ];
 
 class HydraMcpClient {
-  constructor({ endpoint, token }) {
+  constructor({ endpoint, healthUrl, token }) {
     this.endpoint = endpoint;
+    this.healthUrl = healthUrl;
     this.token = token;
     this.sessionId = null;
     this.nextId = 1;
   }
 
   async health() {
-    const healthUrl = process.env.HYDRA_MCP_HEALTH_URL || DEFAULT_MCP_HEALTH_URL;
-    const response = await fetch(healthUrl, {
+    const response = await fetch(this.healthUrl, {
       headers: { authorization: `Bearer ${this.token}` },
     });
     if (!response.ok) {
@@ -361,9 +363,17 @@ function readConfig({ requireHydra }) {
     guildId,
     channelId,
     allowedUserIds: new Set(splitCsv(process.env.DISCORD_ALLOWED_USER_IDS)),
+    channelMemberAccessAllowed: isEnabledFlag(process.env[ALLOW_CHANNEL_MEMBERS_ENV]),
     hydra: requireHydra
       ? new HydraMcpClient({
-          endpoint: process.env.HYDRA_MCP_ENDPOINT || DEFAULT_MCP_ENDPOINT,
+          endpoint: requireLoopbackHttpUrl(
+            process.env.HYDRA_MCP_ENDPOINT || DEFAULT_MCP_ENDPOINT,
+            "HYDRA_MCP_ENDPOINT"
+          ),
+          healthUrl: requireLoopbackHttpUrl(
+            process.env.HYDRA_MCP_HEALTH_URL || DEFAULT_MCP_HEALTH_URL,
+            "HYDRA_MCP_HEALTH_URL"
+          ),
           token: readMcpToken(),
         })
       : null,
@@ -379,6 +389,32 @@ function requiredEnv(name) {
 function splitCsv(value) {
   if (!value) return [];
   return value.split(",").map((part) => part.trim()).filter(Boolean);
+}
+
+function isEnabledFlag(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function requireLoopbackHttpUrl(value, name) {
+  const text = String(value || "").trim();
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error(`${name} must be a valid URL.`);
+  }
+
+  if (url.protocol !== "http:") {
+    throw new Error(`${name} must use http://.`);
+  }
+  if (url.username || url.password) {
+    throw new Error(`${name} must not include credentials.`);
+  }
+  if (!LOOPBACK_HOSTS.has(url.hostname)) {
+    throw new Error(`${name} must point to localhost, 127.0.0.1, or ::1.`);
+  }
+  return url.toString();
 }
 
 async function discordRequest(config, route, init = {}) {
@@ -415,12 +451,17 @@ async function registerCommands(config) {
 }
 
 async function startBot(config) {
-  if (process.env.HYDRA_DISCORD_SKIP_REGISTER !== "1") {
-    await registerCommands(config);
+  if (config.allowedUserIds.size === 0 && !config.channelMemberAccessAllowed) {
+    throw new Error(
+      `Missing DISCORD_ALLOWED_USER_IDS. Set allowed Discord user IDs, or set ${ALLOW_CHANNEL_MEMBERS_ENV}=1 to allow anyone with access to the configured channel.`
+    );
+  }
+  if (config.channelMemberAccessAllowed) {
+    console.warn(`${ALLOW_CHANNEL_MEMBERS_ENV}=1; access is restricted only by guild and channel.`);
   }
 
-  if (config.allowedUserIds.size === 0) {
-    console.warn("DISCORD_ALLOWED_USER_IDS is empty; access is restricted only by guild and channel.");
+  if (process.env.HYDRA_DISCORD_SKIP_REGISTER !== "1") {
+    await registerCommands(config);
   }
 
   await config.hydra.health();

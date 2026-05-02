@@ -12,8 +12,7 @@ const DEFAULT_MCP_ENDPOINT = "http://127.0.0.1:4141/mcp";
 const DEFAULT_MCP_HEALTH_URL = "http://127.0.0.1:4141/health";
 const EPHEMERAL_FLAG = 1 << 6;
 const INTENT_GUILDS = 1 << 0;
-const MIN_HEARTBEAT_INTERVAL_MS = 1_000;
-const MAX_HEARTBEAT_INTERVAL_MS = 60_000;
+const DISCORD_HEARTBEAT_INTERVAL_MS = 30_000;
 const ALLOW_CHANNEL_MEMBERS_ENV = "HYDRA_DISCORD_ALLOW_CHANNEL_MEMBERS";
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
@@ -483,10 +482,9 @@ async function connectGateway(config) {
     if (packet.s !== null && packet.s !== undefined) sequence = packet.s;
 
     if (packet.op === 10) {
-      const heartbeatIntervalMs = boundedHeartbeatInterval(packet?.d?.heartbeat_interval);
       heartbeatTimer = setInterval(() => {
         socket.send(JSON.stringify({ op: 1, d: sequence }));
-      }, heartbeatIntervalMs);
+      }, DISCORD_HEARTBEAT_INTERVAL_MS);
       socket.send(JSON.stringify({
         op: 2,
         d: {
@@ -607,17 +605,6 @@ function safeDiscordPathSegment(value, name) {
     throw new Error(`Invalid Discord ${name}.`);
   }
   return encodeURIComponent(text);
-}
-
-function boundedHeartbeatInterval(value) {
-  const interval = Number(value);
-  if (!Number.isFinite(interval) || interval <= 0) {
-    return MIN_HEARTBEAT_INTERVAL_MS;
-  }
-  return Math.min(
-    Math.max(interval, MIN_HEARTBEAT_INTERVAL_MS),
-    MAX_HEARTBEAT_INTERVAL_MS
-  );
 }
 
 async function runHydraCommand(config, interaction) {

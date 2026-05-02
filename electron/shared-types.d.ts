@@ -143,14 +143,7 @@ export type SessionOrganizationPatch = {
   repoID?: string;
 };
 
-export type ParallelWorktreeDefaults = {
-  enabled: boolean;
-  baseBranch: string;
-  landingBranch: string;
-};
-
 export type RepoParallelWorktreeSettings = {
-  mode: "global" | "custom";
   enabled: boolean;
   baseBranch: string;
   landingBranch: string;
@@ -158,7 +151,6 @@ export type RepoParallelWorktreeSettings = {
 
 export type RepoParallelWorktreeSettingsPatch = {
   repoId: string;
-  mode?: "global" | "custom";
   enabled?: boolean;
   baseBranch?: string;
   landingBranch?: string;
@@ -285,7 +277,6 @@ export type AppPreferences = {
   themeActiveId: string;
   themeCustomThemes: ThemeDefinition[];
   voiceConfig: VoiceConfig;
-  parallelWorktreeDefaults: ParallelWorktreeDefaults;
 };
 
 export type AppPreferencesPatch = {
@@ -302,7 +293,6 @@ export type AppPreferencesPatch = {
   themeActiveId?: string;
   themeCustomThemes?: ThemeDefinition[];
   voiceConfig?: Partial<VoiceConfig>;
-  parallelWorktreeDefaults?: Partial<ParallelWorktreeDefaults>;
 };
 
 export type StoredAppState = {

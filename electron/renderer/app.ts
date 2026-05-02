@@ -216,12 +216,7 @@ const INITIAL_PREFERENCES: AppPreferences = {
     ttsVoice: "",
     enableSubagents: false,
     apiKeys: {}
-  }, 
-  parallelWorktreeDefaults: {
-    enabled: false,
-    baseBranch: "main",
-    landingBranch: "main"
-  },
+  }
 };
 
 const state: AppStateSnapshot = {
@@ -2010,6 +2005,7 @@ function renderRepoDetail(repo) {
           <button class="primary" data-action="open-launcher" data-repo-id="${repo.id}">New Session</button>
         </div>
       </div>
+      ${renderRepoParallelWorktreeProjectPanel(repo)}
       ${
         sessions.length
           ? `<div class="repo-session-list">
@@ -2023,6 +2019,62 @@ function renderRepoDetail(repo) {
   `;
 
   syncSectionFocusUi();
+}
+
+function renderRepoParallelWorktreeProjectPanel(repo: RepoSnapshot) {
+  const settings = effectiveRepoParallelWorktreeSettings(repo);
+  const entries = repoParallelWorktreeManagerEntries(repo);
+  const activeEntries = entries.filter((entry) => entry.kind === "active");
+  const overlapEntries = activeEntries.filter((entry) => entry.state === "overlap_warning");
+
+  return `
+    <section class="repo-worktree-panel">
+      <div class="repo-worktree-header">
+        <div class="settings-field-copy">
+          <div class="repo-worktree-title-row">
+            <div class="row-title">Isolated Worktrees</div>
+            <span class="settings-chip">${settings.enabled ? "Enabled" : "Off"}</span>
+            ${overlapEntries.length ? `<span class="settings-chip worktree-overlap-chip">${overlapEntries.length} overlap${overlapEntries.length === 1 ? "" : "s"}</span>` : ""}
+          </div>
+          <div class="muted">${settings.enabled ? `Base ${settings.baseBranch || "main"} · land ${settings.landingBranch || "main"}` : "Project opt-in is off. New agent sessions use the shared checkout."}</div>
+        </div>
+        <div class="repo-worktree-actions">
+          <label class="inline-toggle repo-worktree-toggle">
+            <input
+              type="checkbox"
+              data-repo-worktree-enabled="true"
+              data-repo-id="${escapeAttribute(repo.id)}"
+              ${settings.enabled ? "checked" : ""}
+            />
+            <span>Enable</span>
+          </label>
+          <button type="button" data-action="open-settings" data-settings-tab="general">Configure</button>
+        </div>
+      </div>
+      ${
+        entries.length
+          ? `<div class="repo-worktree-list">
+              ${entries.map((entry) => `
+                <div class="repo-worktree-row">
+                  <div class="settings-worktree-copy">
+                    <div class="settings-file-row-top">
+                      <div class="row-title">${escapeHtml(entry.title)}</div>
+                      <span class="settings-chip">${escapeHtml(parallelWorktreeStateLabel(entry.state))}</span>
+                    </div>
+                    <div class="row-subtitle mono">${escapeHtml(entry.path)}</div>
+                    ${renderParallelWorktreeEntryDetails(entry)}
+                  </div>
+                  <div class="settings-worktree-actions">
+                    ${entry.kind === "active" ? `<button type="button" data-action="select-session" data-session-id="${escapeAttribute(entry.sessionId)}">Open</button>` : ""}
+                    <button type="button" data-action="reveal-worktree" data-repo-id="${escapeAttribute(repo.id)}" data-worktree-path="${escapeAttribute(entry.path)}">Reveal</button>
+                  </div>
+                </div>
+              `).join("")}
+            </div>`
+          : ""
+      }
+    </section>
+  `;
 }
 
 function renderWikiDetail(repo) {
@@ -4664,36 +4716,6 @@ function renderThemeColorField(
   `;
 }
 
-function renderParallelWorktreeDefaultsSection() {
-  const defaults = state.preferences.parallelWorktreeDefaults;
-  return `
-    <section class="settings-group-card settings-toggle-card">
-      <div class="settings-group-header">
-        <div class="settings-field-copy">
-          <div class="row-title">Parallel Worktree Defaults</div>
-          <div class="muted">Global defaults for repos that opt into using the shared configuration.</div>
-        </div>
-      </div>
-      <div class="settings-group-body">
-        <div class="value-row">
-          <label class="inline-toggle">
-            <input type="checkbox" id="pref-worktree-default-enabled" ${defaults.enabled ? "checked" : ""} />
-            <span>Enable Prompted Parallel Worktrees By Default</span>
-          </label>
-        </div>
-        <label class="settings-inline-field">
-          <span class="row-title">Default Base Branch</span>
-          <input id="pref-worktree-default-base" value="${escapeAttribute(defaults.baseBranch || "main")}" />
-        </label>
-        <label class="settings-inline-field">
-          <span class="row-title">Default Landing Branch</span>
-          <input id="pref-worktree-default-landing" value="${escapeAttribute(defaults.landingBranch || "main")}" />
-        </label>
-      </div>
-    </section>
-  `;
-}
-
 function renderRepoParallelWorktreeSettingsSection(repo: RepoSnapshot | null) {
   if (!repo) {
     return `
@@ -4708,26 +4730,17 @@ function renderRepoParallelWorktreeSettingsSection(repo: RepoSnapshot | null) {
     `;
   }
 
-  const storedSettings = repo.parallelWorktreeSettings;
   const effectiveSettings = effectiveRepoParallelWorktreeSettings(repo);
-  const usingGlobal = storedSettings.mode === "global";
 
   return `
     <section class="settings-group-card settings-toggle-card">
       <div class="settings-group-header">
         <div class="settings-field-copy">
-          <div class="row-title">Repo Parallel Worktrees</div>
-          <div class="muted">${escapeHtml(repo.name)} can use the global defaults or a custom branch policy.</div>
+          <div class="row-title">Isolated Worktrees</div>
+          <div class="muted">This opt-in is stored on ${escapeHtml(repo.name)} only. New agent sessions launch in managed Git worktrees when enabled.</div>
         </div>
       </div>
       <div class="settings-group-body">
-        <label class="settings-inline-field">
-          <span class="row-title">Configuration Mode</span>
-          <select id="pref-repo-worktree-mode" data-repo-id="${escapeAttribute(repo.id)}">
-            <option value="global" ${usingGlobal ? "selected" : ""}>Use Global Defaults</option>
-            <option value="custom" ${usingGlobal ? "" : "selected"}>Custom For This Repo</option>
-          </select>
-        </label>
         <div class="value-row">
           <label class="inline-toggle">
             <input
@@ -4735,9 +4748,8 @@ function renderRepoParallelWorktreeSettingsSection(repo: RepoSnapshot | null) {
               id="pref-repo-worktree-enabled"
               data-repo-id="${escapeAttribute(repo.id)}"
               ${effectiveSettings.enabled ? "checked" : ""}
-              ${usingGlobal ? "disabled" : ""}
             />
-            <span>Enable Prompted Parallel Worktrees For This Repo</span>
+            <span>Enable Isolated Worktrees For This Project</span>
           </label>
         </div>
         <label class="settings-inline-field">
@@ -4746,7 +4758,6 @@ function renderRepoParallelWorktreeSettingsSection(repo: RepoSnapshot | null) {
             id="pref-repo-worktree-base"
             data-repo-id="${escapeAttribute(repo.id)}"
             value="${escapeAttribute(effectiveSettings.baseBranch || "main")}"
-            ${usingGlobal ? "disabled" : ""}
           />
         </label>
         <label class="settings-inline-field">
@@ -4755,7 +4766,6 @@ function renderRepoParallelWorktreeSettingsSection(repo: RepoSnapshot | null) {
             id="pref-repo-worktree-landing"
             data-repo-id="${escapeAttribute(repo.id)}"
             value="${escapeAttribute(effectiveSettings.landingBranch || "main")}"
-            ${usingGlobal ? "disabled" : ""}
           />
         </label>
       </div>
@@ -4799,18 +4809,48 @@ function renderRepoParallelWorktreeManagerSection(repo: RepoSnapshot | null) {
                 <span class="settings-chip">${escapeHtml(parallelWorktreeStateLabel(entry.state))}</span>
               </div>
               <div class="row-subtitle mono">${escapeHtml(entry.path)}</div>
-              <div class="muted">${escapeHtml(entry.branch ? `branch ${entry.branch}` : "branch pending")}${entry.landingBranch ? ` · lands to ${escapeHtml(entry.landingBranch)}` : ""}${entry.error ? ` · ${escapeHtml(entry.error)}` : ""}</div>
+              ${renderParallelWorktreeEntryDetails(entry)}
             </div>
-            <button
-              type="button"
-              data-action="reveal-worktree"
-              data-repo-id="${escapeAttribute(repo.id)}"
-              data-worktree-path="${escapeAttribute(entry.path)}"
-            >Reveal</button>
+            <div class="settings-worktree-actions">
+              ${entry.kind === "active" ? `
+                <button type="button" data-action="select-session" data-session-id="${escapeAttribute(entry.sessionId)}">Open</button>
+              ` : ""}
+              <button
+                type="button"
+                data-action="reveal-worktree"
+                data-repo-id="${escapeAttribute(repo.id)}"
+                data-worktree-path="${escapeAttribute(entry.path)}"
+              >Reveal</button>
+            </div>
           </div>
         `).join("")}
       </div>
     </section>
+  `;
+}
+
+function renderParallelWorktreeEntryDetails(entry: ParallelWorktreeManagerEntry) {
+  const summary = [
+    entry.branch ? `branch ${entry.branch}` : "branch pending",
+    entry.landingBranch ? `lands to ${entry.landingBranch}` : "",
+    entry.error || ""
+  ].filter(Boolean).join(" · ");
+  const overlapSessions = entry.overlapSessionIds
+    .map((sessionId) => sessionById(sessionId))
+    .filter((session): session is SessionSummary => !!session);
+
+  return `
+    <div class="muted">${escapeHtml(summary)}</div>
+    ${
+      overlapSessions.length
+        ? `<div class="worktree-overlap-line">Overlaps with ${overlapSessions.map((session) => escapeHtml(session.title)).join(", ")}</div>`
+        : ""
+    }
+    ${
+      entry.changedFiles.length
+        ? `<div class="worktree-file-list">${entry.changedFiles.slice(0, 6).map((filePath) => `<span class="mono">${escapeHtml(filePath)}</span>`).join("")}${entry.changedFiles.length > 6 ? `<span class="muted">+${entry.changedFiles.length - 6} more</span>` : ""}</div>`
+        : ""
+    }
   `;
 }
 
@@ -4860,7 +4900,6 @@ function renderGeneralSettingsPane() {
         </div>
       </section>
 
-      ${renderParallelWorktreeDefaultsSection()}
       ${renderRepoParallelWorktreeSettingsSection(currentRepo)}
       ${renderRepoParallelWorktreeManagerSection(currentRepo)}
 
@@ -7794,6 +7833,14 @@ async function handleChange(event) {
     return;
   }
 
+  if (target.dataset.repoWorktreeEnabled === "true" && target.dataset.repoId) {
+    await api.updateRepoParallelWorktreeSettings({
+      repoId: target.dataset.repoId,
+      enabled: (target as HTMLInputElement).checked
+    });
+    return;
+  }
+
   switch (target.id) {
     case "marketplace-install-scope":
       ui.marketplacePreferredScope = target.value === "user" ? "user" : "project";
@@ -7811,38 +7858,6 @@ async function handleChange(event) {
       break;
     case "pref-shell-executable":
       await api.updatePreferences({ shellExecutablePath: target.value });
-      break;
-    case "pref-worktree-default-enabled":
-      await api.updatePreferences({
-        parallelWorktreeDefaults: {
-          ...state.preferences.parallelWorktreeDefaults,
-          enabled: (target as HTMLInputElement).checked
-        }
-      });
-      break;
-    case "pref-worktree-default-base":
-      await api.updatePreferences({
-        parallelWorktreeDefaults: {
-          ...state.preferences.parallelWorktreeDefaults,
-          baseBranch: target.value
-        }
-      });
-      break;
-    case "pref-worktree-default-landing":
-      await api.updatePreferences({
-        parallelWorktreeDefaults: {
-          ...state.preferences.parallelWorktreeDefaults,
-          landingBranch: target.value
-        }
-      });
-      break;
-    case "pref-repo-worktree-mode":
-      if (target.dataset.repoId) {
-        await api.updateRepoParallelWorktreeSettings({
-          repoId: target.dataset.repoId,
-          mode: target.value === "custom" ? "custom" : "global"
-        });
-      }
       break;
     case "pref-repo-worktree-enabled":
       if (target.dataset.repoId) {
@@ -8310,15 +8325,10 @@ function agentCommandValue(agentId: AgentId): string {
 
 function effectiveRepoParallelWorktreeSettings(repo: RepoSnapshot | null | undefined): RepoParallelWorktreeSettings {
   const repoSettings = repo?.parallelWorktreeSettings;
-  if (repoSettings?.mode === "custom") {
-    return repoSettings;
-  }
-
   return {
-    mode: "global",
-    enabled: !!state.preferences.parallelWorktreeDefaults?.enabled,
-    baseBranch: state.preferences.parallelWorktreeDefaults?.baseBranch || "main",
-    landingBranch: state.preferences.parallelWorktreeDefaults?.landingBranch || "main"
+    enabled: !!repoSettings?.enabled,
+    baseBranch: repoSettings?.baseBranch || "main",
+    landingBranch: repoSettings?.landingBranch || "main"
   };
 }
 
@@ -8419,6 +8429,8 @@ type ParallelWorktreeManagerEntry = {
   path: string;
   landingBranch: string | null;
   error: string | null;
+  changedFiles: string[];
+  overlapSessionIds: string[];
 };
 
 function repoParallelWorktreeManagerEntries(repo: RepoSnapshot | null | undefined): ParallelWorktreeManagerEntry[] {
@@ -8437,7 +8449,9 @@ function repoParallelWorktreeManagerEntries(repo: RepoSnapshot | null | undefine
       branch: session.parallelWorktree.branch,
       path: session.parallelWorktree.worktreePath || repo.path,
       landingBranch: session.parallelWorktree.landingBranch,
-      error: session.parallelWorktree.lastError
+      error: session.parallelWorktree.lastError,
+      changedFiles: session.parallelWorktree.changedFiles || [],
+      overlapSessionIds: session.parallelWorktree.overlapSessionIds || []
     }));
 
   const retainedEntries = (repo.parallelWorktreeLedger || []).map((entry: RepoParallelWorktreeLedgerEntry) => ({
@@ -8449,7 +8463,9 @@ function repoParallelWorktreeManagerEntries(repo: RepoSnapshot | null | undefine
     branch: entry.branch,
     path: entry.path,
     landingBranch: entry.landingBranch,
-    error: entry.lastError
+    error: entry.lastError,
+    changedFiles: [],
+    overlapSessionIds: []
   }));
 
   return [...activeEntries, ...retainedEntries];

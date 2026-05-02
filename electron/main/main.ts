@@ -26,7 +26,6 @@ import type {
   MarketplaceInspectResponse,
   MarketplaceInstallResponse,
   MarketplaceSkillDetails,
-  ParallelWorktreeDefaults,
   ParallelWorktreeLifecycleState,
   ParallelWorktreeSessionMode,
   Point,
@@ -252,15 +251,24 @@ const {
   queryProjectSessions: (repoPath: string, query: string) => Promise<SessionSearchResponse>;
 };
 const {
-  hasUntrackedFilesSync,
+  createWorktreeSync,
   listChangedFiles,
   readCurrentBranch,
-  validateWorktreePath
+  readCurrentBranchSync,
+  validateWorktreePath,
+  validateWorktreePathSync
 } = require("./git-worktrees") as {
-  hasUntrackedFilesSync: (repoPath: string) => boolean;
+  createWorktreeSync: (
+    repoPath: string,
+    worktreePath: string,
+    branchName: string,
+    baseBranch: string
+  ) => { ok: boolean; stdout: string; stderr: string; exitCode: number };
   listChangedFiles: (repoPath: string, baseBranch: string) => Promise<string[]>;
   readCurrentBranch: (repoPath: string) => Promise<string | null>;
+  readCurrentBranchSync: (repoPath: string) => string | null;
   validateWorktreePath: (repoPath: string, candidatePath: string) => Promise<boolean>;
+  validateWorktreePathSync: (repoPath: string, candidatePath: string) => boolean;
 };
 const {
   AGENT_DEFINITIONS,
@@ -269,7 +277,6 @@ const {
   emptyState,
   loadState,
   normalizeAgentId,
-  normalizeParallelWorktreeDefaults,
   normalizeRepoAppLaunchConfig,
   normalizeRepoParallelWorktreeSettings,
   normalizeSessionParallelWorktreeMetadata,
@@ -282,7 +289,6 @@ const {
   emptyState: () => StoredAppState;
   loadState: () => Promise<StoredAppState>;
   normalizeAgentId: (value: unknown, fallback?: AgentId | null) => AgentId | null;
-  normalizeParallelWorktreeDefaults: (value: unknown) => ParallelWorktreeDefaults;
   normalizeRepoAppLaunchConfig: (value: unknown) => RepoAppLaunchConfig | null;
   normalizeRepoParallelWorktreeSettings: (value: unknown) => RepoParallelWorktreeSettings;
   normalizeSessionParallelWorktreeMetadata: (value: unknown) => SessionParallelWorktreeMetadata;
@@ -583,17 +589,8 @@ function sanitizePreferencesPatch(patch: unknown): AppPreferencesPatch {
     nextPatch.voiceConfig = patch.voiceConfig as AppPreferencesPatch["voiceConfig"];
   }
 
-  if (
-    Object.prototype.hasOwnProperty.call(patch, "parallelWorktreeDefaults") &&
-    isPlainObject(patch.parallelWorktreeDefaults)
-  ) {
-    nextPatch.parallelWorktreeDefaults =
-      patch.parallelWorktreeDefaults as AppPreferencesPatch["parallelWorktreeDefaults"];
-  }
-
   return nextPatch;
 }
-  
 
 function sanitizeRepoParallelWorktreeSettingsPatch(patch: unknown): Partial<RepoParallelWorktreeSettings> {
   if (!isPlainObject(patch)) {
@@ -602,9 +599,6 @@ function sanitizeRepoParallelWorktreeSettingsPatch(patch: unknown): Partial<Repo
 
   const nextPatch: Partial<RepoParallelWorktreeSettings> = {};
 
-  if (patch.mode === "global" || patch.mode === "custom") {
-    nextPatch.mode = patch.mode;
-  }
   if (typeof patch.enabled === "boolean") {
     nextPatch.enabled = patch.enabled;
   }
@@ -618,9 +612,6 @@ function sanitizeRepoParallelWorktreeSettingsPatch(patch: unknown): Partial<Repo
   return nextPatch;
 }
 
-
-
-
 function normalizeBranchValue(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -632,6 +623,60 @@ function normalizeBranchValue(value: unknown): string | null {
 
 function emptyParallelWorktreeMetadata(): SessionParallelWorktreeMetadata {
   return normalizeSessionParallelWorktreeMetadata({});
+}
+
+function safeWorktreePathSegment(value: string, fallback: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return normalized || fallback;
+}
+
+function safeGitRefSegment(value: string, fallback: string): string {
+  const normalized = safeWorktreePathSegment(value, fallback)
+    .replace(/\.+/g, ".")
+    .replace(/^\.+|\.+$/g, "");
+  if (!normalized || normalized.endsWith(".lock")) {
+    return fallback;
+  }
+  return normalized;
+}
+
+function parallelWorktreeRootPath(): string {
+  return path.join(app.getPath("userData"), "parallel-worktrees");
+}
+
+function buildSessionWorktreePath(repo: RepoRecord, session: SessionRecord): string {
+  const repoSegment = safeWorktreePathSegment(repo.name || repo.id, "repo");
+  const repoIdSegment = safeWorktreePathSegment(repo.id, "repo").slice(0, 8);
+  const sessionSegment = safeWorktreePathSegment(session.id, "session").slice(0, 8);
+  const suffix = randomBytes(3).toString("hex");
+  return path.join(
+    parallelWorktreeRootPath(),
+    `${repoSegment}-${repoIdSegment}`,
+    `${sessionSegment}-${suffix}`
+  );
+}
+
+function buildSessionWorktreeBranch(repo: RepoRecord, session: SessionRecord): string {
+  const repoSegment = safeGitRefSegment(repo.name || repo.id, "repo");
+  const sessionSegment = safeGitRefSegment(session.id, "session").slice(0, 8);
+  const suffix = randomBytes(3).toString("hex");
+  return `hydra/${repoSegment}/${sessionSegment}-${suffix}`;
+}
+
+function gitFailureMessage(result: { stderr: string; stdout: string; exitCode: number }): string {
+  const detail = (result.stderr || result.stdout || "").trim();
+  return detail || `git exited with status ${result.exitCode}`;
+}
+
+function sessionWorkingDirectory(session: SessionRecord, repo: RepoRecord): string {
+  return session.parallelWorktree.mode === "isolated" && session.parallelWorktree.worktreePath
+    ? session.parallelWorktree.worktreePath
+    : repo.path;
 }
 
 function parallelWorktreeDisplayState(
@@ -2198,18 +2243,7 @@ class AppController {
   }
 
   effectiveRepoParallelWorktreeSettings(repo: RepoRecord): RepoParallelWorktreeSettings {
-    const storedSettings = normalizeRepoParallelWorktreeSettings(repo.parallelWorktreeSettings);
-    if (storedSettings.mode === "custom") {
-      return storedSettings;
-    }
-
-    const defaults = normalizeParallelWorktreeDefaults(this.state.preferences.parallelWorktreeDefaults);
-    return {
-      mode: "global",
-      enabled: defaults.enabled,
-      baseBranch: defaults.baseBranch,
-      landingBranch: defaults.landingBranch
-    };
+    return normalizeRepoParallelWorktreeSettings(repo.parallelWorktreeSettings);
   }
 
   liveAgentSessionsForRepo(repoId: string, excludeSessionId: string | null = null): SessionRecord[] {
@@ -2230,7 +2264,7 @@ class AppController {
       return "disabled";
     }
 
-    return this.liveAgentSessionsForRepo(repo.id, excludeSessionId).length > 0 ? "isolated" : "shared";
+    return "isolated";
   }
 
   buildParallelWorktreeMetadata(
@@ -2258,16 +2292,58 @@ class AppController {
     });
   }
 
-  assertParallelWorktreeLaunchAllowed(repo: RepoRecord, mode: ParallelWorktreeSessionMode): void {
-    if (mode !== "isolated") {
+  prepareManagedParallelWorktree(
+    session: SessionRecord,
+    repo: RepoRecord,
+    launchReason: ParallelWorktreeLaunchReason,
+    previousPath: string | null,
+    previousBranch: string | null
+  ): void {
+    if (session.parallelWorktree.mode !== "isolated") {
       return;
     }
 
-    if (hasUntrackedFilesSync(repo.path)) {
-      throw new Error(
-        "Hydra blocked this isolated session because the shared checkout has untracked files. Clean or commit those files before starting another live agent session."
-      );
+    if (launchReason === "reopen") {
+      if (previousPath && validateWorktreePathSync(repo.path, previousPath)) {
+        session.parallelWorktree.worktreePath = previousPath;
+        session.parallelWorktree.branch =
+          previousBranch || readCurrentBranchSync(previousPath) || session.parallelWorktree.branch;
+        session.parallelWorktree.lifecycleState = "active";
+        session.parallelWorktree.lastEventAt = now();
+        session.parallelWorktree.lastError = null;
+        return;
+      }
+
+      const message = previousPath
+        ? `Hydra could not find the previous isolated worktree at ${previousPath}.`
+        : "Hydra could not find the previous isolated worktree for this session.";
+      session.parallelWorktree.lifecycleState = "landing_failed";
+      session.parallelWorktree.lastEventAt = now();
+      session.parallelWorktree.lastError = message;
+      throw new Error(message);
     }
+
+    const baseBranch =
+      session.parallelWorktree.baseBranch || this.effectiveRepoParallelWorktreeSettings(repo).baseBranch;
+    const worktreePath = buildSessionWorktreePath(repo, session);
+    const branchName = buildSessionWorktreeBranch(repo, session);
+    const result = createWorktreeSync(repo.path, worktreePath, branchName, baseBranch);
+
+    if (!result.ok) {
+      const message = `Hydra could not create an isolated worktree from ${baseBranch}: ${gitFailureMessage(result)}`;
+      session.parallelWorktree.lifecycleState = "landing_failed";
+      session.parallelWorktree.worktreePath = null;
+      session.parallelWorktree.branch = null;
+      session.parallelWorktree.lastEventAt = now();
+      session.parallelWorktree.lastError = message;
+      throw new Error(message);
+    }
+
+    session.parallelWorktree.lifecycleState = "active";
+    session.parallelWorktree.worktreePath = worktreePath;
+    session.parallelWorktree.branch = branchName;
+    session.parallelWorktree.lastEventAt = now();
+    session.parallelWorktree.lastError = null;
   }
 
   archiveSessionParallelWorktree(
@@ -2313,6 +2389,8 @@ class AppController {
       `- Mode: ${context.mode === "isolated" ? "isolated worktree" : "shared checkout"}`,
       `- Base branch: ${context.baseBranch}`,
       `- Landing branch: ${context.landingBranch}`,
+      `- Worktree path: ${context.session.parallelWorktree.worktreePath || context.repo.path}`,
+      `- Session branch: ${context.session.parallelWorktree.branch || "shared checkout"}`,
       "- Emit machine-readable status markers as plain single lines.",
       `- Marker prefix: ${PARALLEL_WORKTREE_MARKER_PREFIX}{json}`,
       "- Required marker fields: state, mode, path, branch, baseBranch, landingBranch, error when present.",
@@ -2326,14 +2404,10 @@ class AppController {
         if (context.previousBranch) {
           lines.push(`- Resume the existing branch ${context.previousBranch}.`);
         }
-        lines.push("- Do not create a fresh worktree unless the previous one is missing. If it is missing, emit landing_failed with the reason and stop.");
       } else {
-        lines.push("- Create a dedicated git worktree for this Hydra conversation before editing code.");
-        lines.push("- Use one worktree per conversation and keep the original checkout untouched.");
-        if (context.launchReason === "restart") {
-          lines.push("- This is a terminal restart. Create a fresh worktree for this conversation instead of reusing the previous one.");
-        }
+        lines.push("- Hydra has already created the dedicated git worktree for this conversation.");
       }
+      lines.push("- Do not create another worktree and do not edit the shared checkout unless the user explicitly asks.");
     } else if (context.mode === "shared") {
       lines.push("- Stay in the shared checkout for this session.");
       lines.push("- Do not create a worktree unless the user explicitly asks.");
@@ -2352,6 +2426,8 @@ class AppController {
     repo: RepoRecord,
     launchReason: ParallelWorktreeLaunchReason
   ): void {
+    const requestedPrompt = typeof session.initialPrompt === "string" ? session.initialPrompt.trim() : "";
+
     if (session.launchProfile !== "agent" || !session.startupAgentId) {
       session.parallelWorktree = emptyParallelWorktreeMetadata();
       session.initialPrompt = "";
@@ -2368,7 +2444,6 @@ class AppController {
     let mode: ParallelWorktreeSessionMode;
     if (launchReason === "create" || launchReason === "resume") {
       mode = this.initialParallelWorktreeModeForNewSession(repo, session.id);
-      this.assertParallelWorktreeLaunchAllowed(repo, mode);
       session.parallelWorktree = this.buildParallelWorktreeMetadata(repo, mode);
     } else {
       const existingMode = session.parallelWorktree?.mode || "disabled";
@@ -2376,7 +2451,6 @@ class AppController {
         existingMode === "disabled"
           ? this.initialParallelWorktreeModeForNewSession(repo, session.id)
           : existingMode;
-      this.assertParallelWorktreeLaunchAllowed(repo, mode);
       const nextMetadata = this.buildParallelWorktreeMetadata(repo, mode);
       if (launchReason === "reopen" && session.parallelWorktree.mode === "isolated") {
         nextMetadata.worktreePath = previousPath;
@@ -2392,6 +2466,14 @@ class AppController {
       return;
     }
 
+    this.prepareManagedParallelWorktree(
+      session,
+      repo,
+      launchReason,
+      previousPath,
+      previousBranch
+    );
+
     const prompt = this.buildParallelWorktreePrompt({
       session,
       repo,
@@ -2403,12 +2485,13 @@ class AppController {
       previousBranch: launchReason === "reopen" ? previousBranch : null
     });
 
-    session.initialPrompt = prompt;
+    const launchPrompt = requestedPrompt ? `${prompt}\n${requestedPrompt}` : prompt;
+    session.initialPrompt = launchPrompt;
     session.parallelWorktree.baseBranch = settings.baseBranch;
     session.parallelWorktree.landingBranch = settings.landingBranch;
     session.parallelWorktree.promptInjectedAt = now();
     session.parallelWorktree.lastError = null;
-    this.queueSessionLaunch(session.id, prompt, session.title);
+    this.queueSessionLaunch(session.id, `${launchPrompt}\r`, session.title);
   }
 
   createSession(
@@ -2471,7 +2554,7 @@ class AppController {
     session.transcript = launchMsg;
     this.broadcastState();
 
-    if (initialPrompt) {
+    if (initialPrompt && session.parallelWorktree.mode === "disabled") {
       this.queueSessionLaunch(session.id, `${initialPrompt}\r`);
     }
 
@@ -3026,21 +3109,6 @@ class AppController {
       this.setupMenu();
     }
 
-    if (sanitizedPatch.parallelWorktreeDefaults) {
-      for (const repo of this.state.repos) {
-        if (repo.parallelWorktreeSettings.mode === "global") {
-          const effectiveSettings = this.effectiveRepoParallelWorktreeSettings(repo);
-          for (const session of this.state.sessions) {
-            if (session.repoID === repo.id && session.parallelWorktree.mode !== "disabled") {
-              session.parallelWorktree.baseBranch = effectiveSettings.baseBranch;
-              session.parallelWorktree.landingBranch = effectiveSettings.landingBranch;
-            }
-          }
-          this.scheduleParallelWorktreeRefresh(repo.id);
-        }
-      }
-    }
-
     this.scheduleSave();
     this.broadcastState();
   }
@@ -3210,7 +3278,7 @@ class AppController {
     if (agentLaunchCommand) {
       this.ptyHost.createSession({
         sessionId: session.id,
-        cwd: repo.path,
+        cwd: sessionWorkingDirectory(session, repo),
         command: agentLaunchCommand.command,
         env: agentLaunchCommand.env
       });
@@ -3219,7 +3287,7 @@ class AppController {
 
     this.ptyHost.createSession({
       sessionId: session.id,
-      cwd: repo.path,
+      cwd: sessionWorkingDirectory(session, repo),
       shellPath: resolvedShellPath(this.state.preferences)
     });
   }
@@ -3652,7 +3720,7 @@ class AppController {
 
     this.ptyHost.createSession({
       sessionId: session.id,
-      cwd: repo.path,
+      cwd: sessionWorkingDirectory(session, repo),
       shellPath: resolvedShellPath(this.state.preferences)
     });
 

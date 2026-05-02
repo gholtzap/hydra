@@ -1,4 +1,5 @@
 const { execFile, spawnSync } = require("node:child_process") as typeof import("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 
 type GitExecResult = {
@@ -55,6 +56,26 @@ function runGitSync(args: string[], cwd: string): GitExecResult {
   };
 }
 
+function createWorktreeSync(
+  repoPath: string,
+  worktreePath: string,
+  branchName: string,
+  baseBranch: string
+): GitExecResult {
+  try {
+    fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+  } catch (error) {
+    return {
+      ok: false,
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error || ""),
+      exitCode: 1
+    };
+  }
+
+  return runGitSync(["worktree", "add", "-b", branchName, worktreePath, baseBranch], repoPath);
+}
+
 function hasUntrackedFilesSync(repoPath: string): boolean {
   const result = runGitSync(["status", "--porcelain", "--untracked-files=all"], repoPath);
   if (!result.ok) {
@@ -107,16 +128,39 @@ async function readCurrentBranch(repoPath: string): Promise<string | null> {
   return normalized && normalized !== "HEAD" ? normalized : null;
 }
 
+function readCurrentBranchSync(repoPath: string): string | null {
+  const result = runGitSync(["rev-parse", "--abbrev-ref", "HEAD"], repoPath);
+  if (!result.ok) {
+    return null;
+  }
+
+  const normalized = result.stdout.trim();
+  return normalized && normalized !== "HEAD" ? normalized : null;
+}
+
 async function listGitWorktrees(repoPath: string): Promise<ListedWorktree[]> {
   const result = await runGit(["worktree", "list", "--porcelain"], repoPath);
   if (!result.ok) {
     return [];
   }
 
+  return parseListedWorktrees(result.stdout);
+}
+
+function listGitWorktreesSync(repoPath: string): ListedWorktree[] {
+  const result = runGitSync(["worktree", "list", "--porcelain"], repoPath);
+  if (!result.ok) {
+    return [];
+  }
+
+  return parseListedWorktrees(result.stdout);
+}
+
+function parseListedWorktrees(output: string): ListedWorktree[] {
   const entries: ListedWorktree[] = [];
   let current: ListedWorktree | null = null;
 
-  for (const rawLine of result.stdout.split(/\r?\n/)) {
+  for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) {
       if (current?.path) {
@@ -156,10 +200,20 @@ async function validateWorktreePath(repoPath: string, candidatePath: string): Pr
   return worktrees.some((entry) => path.resolve(entry.path) === resolvedCandidate);
 }
 
+function validateWorktreePathSync(repoPath: string, candidatePath: string): boolean {
+  const resolvedCandidate = path.resolve(candidatePath);
+  const worktrees = listGitWorktreesSync(repoPath);
+  return worktrees.some((entry) => path.resolve(entry.path) === resolvedCandidate);
+}
+
 module.exports = {
+  createWorktreeSync,
   hasUntrackedFilesSync,
   listChangedFiles,
   listGitWorktrees,
+  listGitWorktreesSync,
   readCurrentBranch,
-  validateWorktreePath
+  readCurrentBranchSync,
+  validateWorktreePath,
+  validateWorktreePathSync
 };

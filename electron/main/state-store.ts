@@ -2,7 +2,6 @@ import type {
   AgentDefinition,
   AgentId,
   AppPreferences,
-  ParallelWorktreeDefaults,
   RepoAppLaunchConfig,
   RepoParallelWorktreeLedgerEntry,
   RepoParallelWorktreeSettings,
@@ -74,12 +73,7 @@ const DEFAULT_PREFERENCES: AppPreferences = {
     ttsVoice: "",
     enableSubagents: false,
     apiKeys: {}
-  },
-  parallelWorktreeDefaults: {
-    enabled: false,
-    baseBranch: "main",
-    landingBranch: "main"
-  },
+  }
 };
 async function loadState(): Promise<StoredAppState> {
   const statePath = getStatePath();
@@ -108,8 +102,7 @@ function emptyState(): StoredAppState {
     sessions: [],
     preferences: {
       ...DEFAULT_PREFERENCES,
-      agentCommandOverrides: { ...DEFAULT_PREFERENCES.agentCommandOverrides },
-      parallelWorktreeDefaults: { ...DEFAULT_PREFERENCES.parallelWorktreeDefaults }
+      agentCommandOverrides: { ...DEFAULT_PREFERENCES.agentCommandOverrides }
     }
   };
 }
@@ -210,7 +203,6 @@ function normalizePreferences(preferences: Record<string, unknown>): AppPreferen
     ? preferences.themeCustomThemes as AppPreferences["themeCustomThemes"]
     : DEFAULT_PREFERENCES.themeCustomThemes;
   const voiceConfig = normalizeVoiceConfig(preferences.voiceConfig);
-  const parallelWorktreeDefaults = normalizeParallelWorktreeDefaults(preferences.parallelWorktreeDefaults);
   return {
     defaultAgentId: defaultAgentId || DEFAULT_AGENT_ID,
     agentCommandOverrides: nextAgentCommands,
@@ -224,8 +216,7 @@ function normalizePreferences(preferences: Record<string, unknown>): AppPreferen
     themeAppearance,
     themeActiveId,
     themeCustomThemes,
-    voiceConfig, 
-    parallelWorktreeDefaults
+    voiceConfig
   };
 }
 
@@ -303,9 +294,9 @@ function normalizeRepos(repos: unknown): RepoRecord[] {
     const safeRepo = isPlainObject(repo) ? repo : {};
     return {
       wikiEnabled: false,
+      ...safeRepo,
       parallelWorktreeSettings: normalizeRepoParallelWorktreeSettings(safeRepo.parallelWorktreeSettings),
       parallelWorktreeLedger: normalizeRepoParallelWorktreeLedger(safeRepo.parallelWorktreeLedger),
-      ...safeRepo,
       appLaunchConfig: normalizeRepoAppLaunchConfig(safeRepo.appLaunchConfig)
     };
   }) as RepoRecord[];
@@ -368,24 +359,13 @@ function normalizeSessionParallelWorktreeMetadata(value: unknown): SessionParall
   };
 }
 
-function normalizeParallelWorktreeDefaults(value: unknown): ParallelWorktreeDefaults {
-  const safeValue = isPlainObject(value) ? value : {};
-  return {
-    enabled: !!safeValue.enabled,
-    baseBranch: normalizeBranchName(safeValue.baseBranch) || DEFAULT_PREFERENCES.parallelWorktreeDefaults.baseBranch,
-    landingBranch:
-      normalizeBranchName(safeValue.landingBranch) || DEFAULT_PREFERENCES.parallelWorktreeDefaults.landingBranch
-  };
-}
-
 function normalizeRepoParallelWorktreeSettings(value: unknown): RepoParallelWorktreeSettings {
   const safeValue = isPlainObject(value) ? value : {};
   return {
-    mode: safeValue.mode === "custom" ? "custom" : "global",
     enabled: typeof safeValue.enabled === "boolean" ? safeValue.enabled : false,
-    baseBranch: normalizeBranchName(safeValue.baseBranch) || DEFAULT_PREFERENCES.parallelWorktreeDefaults.baseBranch,
+    baseBranch: normalizeBranchName(safeValue.baseBranch) || "main",
     landingBranch:
-      normalizeBranchName(safeValue.landingBranch) || DEFAULT_PREFERENCES.parallelWorktreeDefaults.landingBranch
+      normalizeBranchName(safeValue.landingBranch) || "main"
   };
 }
 
@@ -511,7 +491,6 @@ module.exports = {
   emptyState,
   loadState,
   normalizeAgentId,
-  normalizeParallelWorktreeDefaults,
   normalizeRepoAppLaunchConfig,
   normalizeRepoParallelWorktreeSettings,
   normalizeSessionParallelWorktreeMetadata,

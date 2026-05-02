@@ -62,6 +62,8 @@ type SessionTailArgs = {
   includeRawTranscript?: boolean;
 };
 
+type FocusedSessionTailArgs = Omit<SessionTailArgs, "sessionId">;
+
 type SessionTailText = {
   text: string;
   totalChars: number;
@@ -526,6 +528,44 @@ export function register(server: McpServer, appController: AppControllerHandle):
     async (args: SessionTailArgs) => {
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ error: "Session not found" });
+
+      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
+      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
+      const result = {
+        sessionId: session.id,
+        repoID: session.repoID,
+        title: session.title,
+        status: session.status,
+        runtimeState: session.runtimeState,
+        unreadCount: session.unreadCount,
+        blocker: session.blocker,
+        lastActivityAt: session.lastActivityAt,
+        updatedAt: session.updatedAt,
+        transcript: transcriptTail(session.transcript, lineLimit, charLimit),
+        rawTranscript: args.includeRawTranscript
+          ? transcriptTail(session.rawTranscript, lineLimit, charLimit)
+          : undefined,
+      };
+
+      return textResult(result);
+    }
+  );
+
+  // ── get_focused_session_tail ───────────────────────────────────
+  server.tool(
+    "get_focused_session_tail",
+    "Get bounded recent transcript output for the focused session",
+    {
+      lines: z.number().optional().describe("Number of recent lines, capped at 500"),
+      maxChars: z.number().optional().describe("Maximum returned characters, capped at 50000"),
+      includeRawTranscript: z.boolean().optional().describe("Include raw ANSI transcript tail"),
+    },
+    async (args: FocusedSessionTailArgs) => {
+      const sessionId = appController.focusedSessionId;
+      if (!sessionId) return textResult({ ok: false, error: "No focused session" });
+
+      const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
+      if (!session) return textResult({ ok: false, error: "Focused session not found", sessionId });
 
       const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
       const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);

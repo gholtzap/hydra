@@ -205,6 +205,7 @@ const DEFAULT_AGENT_COMMANDS = Object.fromEntries(
 
 const INITIAL_PREFERENCES: AppPreferences = {
   defaultAgentId: DEFAULT_AGENT_ID,
+  handoffAgentId: "codex",
   agentCommandOverrides: { ...DEFAULT_AGENT_COMMANDS },
   claudeExecutablePath: DEFAULT_AGENT_COMMANDS.claude,
   shellExecutablePath: navigator.platform.startsWith("Win") ? "cmd.exe" : "/bin/sh",
@@ -4933,6 +4934,7 @@ function renderParallelWorktreeEntryDetails(entry: ParallelWorktreeManagerEntry)
 
 function renderGeneralSettingsPane() {
   const selectedAgentId = defaultSessionAgentId();
+  const selectedHandoffAgentId = handoffSessionAgentId();
   const selectedAgent = agentOption(selectedAgentId) || AGENT_OPTIONS[0];
   const currentRepo = repoById(currentRepoId());
   const updateResult = ui.settingsUpdateCheckResult;
@@ -4963,8 +4965,17 @@ function renderGeneralSettingsPane() {
               value="${escapeAttribute(agentCommandValue(selectedAgent.id))}"
             />
           </label>
+          <label>
+            <div class="row-title">Continue Handoff Agent</div>
+            <select id="pref-handoff-agent">
+              ${AGENT_OPTIONS.map(
+                (agent) =>
+                  `<option value="${escapeAttribute(agent.id)}" ${selectedHandoffAgentId === agent.id ? "selected" : ""}>${escapeHtml(agent.label)}</option>`
+              ).join("")}
+            </select>
+          </label>
         </div>
-        <div class="muted">Every new session launches the selected agent. If you choose ${escapeHtml(selectedAgent.label)}, this command is what gets typed into the terminal on session start.</div>
+        <div class="muted">Every new session launches the selected agent. The handoff agent is used when a terminal session continues after an agent exits.</div>
       </section>
 
       <section class="settings-field-card">
@@ -7949,6 +7960,14 @@ async function handleChange(event) {
         }
       }
       break;
+    case "pref-handoff-agent":
+      {
+        const nextAgentId = normalizeAgentId(target.value, null);
+        if (nextAgentId) {
+          await api.updatePreferences({ handoffAgentId: nextAgentId });
+        }
+      }
+      break;
     case "pref-shell-executable":
       await api.updatePreferences({ shellExecutablePath: target.value });
       break;
@@ -8395,6 +8414,10 @@ function normalizeAgentId(
 
 function defaultSessionAgentId(): AgentId {
   return normalizeAgentId(state.preferences.defaultAgentId) || DEFAULT_AGENT_ID;
+}
+
+function handoffSessionAgentId(): AgentId {
+  return normalizeAgentId(state.preferences.handoffAgentId, null) || "codex";
 }
 
 function sessionAgentId(session: SessionSummary | null | undefined): AgentId | null {
@@ -14658,6 +14681,8 @@ function blockerLabel(kind) {
       return "Git Conflict";
     case "crashed":
       return "Crashed";
+    case "usageLimit":
+      return "Usage Limit";
     case "stuck":
       return "Possibly Stuck";
     default:

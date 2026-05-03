@@ -55,6 +55,7 @@ const DEFAULT_AGENT_COMMANDS: Record<AgentId, string> = Object.fromEntries(
 
 const DEFAULT_PREFERENCES: AppPreferences = {
   defaultAgentId: DEFAULT_AGENT_ID,
+  handoffAgentId: "codex",
   agentCommandOverrides: { ...DEFAULT_AGENT_COMMANDS },
   claudeExecutablePath: DEFAULT_AGENT_COMMANDS.claude,
   shellExecutablePath: process.platform === "win32" ? (process.env.COMSPEC || "cmd.exe") : (process.env.SHELL || "/bin/sh"),
@@ -148,6 +149,7 @@ function migrateSnapshot(snapshot: unknown): StoredAppState {
 
 function normalizePreferences(preferences: Record<string, unknown>): AppPreferences {
   const defaultAgentId = normalizeAgentId(preferences.defaultAgentId);
+  const handoffAgentId = normalizeAgentId(preferences.handoffAgentId, null);
   const nextAgentCommands: Record<AgentId, string> = { ...DEFAULT_AGENT_COMMANDS };
   const savedOverrides: Record<string, unknown> =
     preferences && typeof preferences.agentCommandOverrides === "object"
@@ -205,6 +207,7 @@ function normalizePreferences(preferences: Record<string, unknown>): AppPreferen
   const voiceConfig = normalizeVoiceConfig(preferences.voiceConfig);
   return {
     defaultAgentId: defaultAgentId || DEFAULT_AGENT_ID,
+    handoffAgentId: handoffAgentId || DEFAULT_PREFERENCES.handoffAgentId,
     agentCommandOverrides: nextAgentCommands,
     claudeExecutablePath: nextAgentCommands.claude,
     shellExecutablePath,

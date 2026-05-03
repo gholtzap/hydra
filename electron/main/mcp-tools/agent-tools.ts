@@ -36,9 +36,24 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const agents = AGENT_DEFINITIONS.map((a) => ({
         ...a,
         isDefault: a.id === prefs.defaultAgentId,
+        isHandoffDefault: a.id === prefs.handoffAgentId,
         command: prefs.agentCommandOverrides?.[a.id] ?? a.defaultCommand,
       }));
       return textResult(agents);
+    }
+  );
+
+  server.tool(
+    "set_handoff_agent",
+    "Set the default agent used when a terminal session continues after another agent exits",
+    {
+      agentId: z.string().describe("Agent ID to use for continue handoffs"),
+    },
+    async (args: { agentId: string }) => {
+      const result = await appController.handleMcpAction("update_preferences", {
+        patch: { handoffAgentId: args.agentId },
+      });
+      return textResult(result ?? { ok: true });
     }
   );
 

@@ -316,11 +316,42 @@ def handle_input(message):
         return
 
     data = (message.get("data") or "").encode("utf-8", errors="replace")
-    if data:
+    if not data:
+        return
+
+    master_fd = session["master_fd"]
+    # For small writes (normal keystrokes), write directly.
+    # For large writes (e.g. handoff prompts), use a background thread to
+    # avoid blocking the main event loop on full PTY buffers.
+    if len(data) <= 4096:
         try:
-            os.write(session["master_fd"], data)
+            os.write(master_fd, data)
         except OSError:
             pass
+    else:
+        session_id = message["sessionId"]
+        version = session.get("version")
+        threading.Thread(
+            target=_write_large_input,
+            args=(session_id, version, master_fd, data),
+            daemon=True
+        ).start()
+
+
+def _write_large_input(session_id, expected_version, master_fd, data):
+    """Write large input in chunks on a background thread to avoid blocking."""
+    CHUNK_SIZE = 2048
+    offset = 0
+    while offset < len(data):
+        # Bail if the session was replaced or killed.
+        if not current_session(session_id, expected_version):
+            return
+        chunk = data[offset:offset + CHUNK_SIZE]
+        try:
+            written = os.write(master_fd, chunk)
+            offset += written
+        except OSError:
+            return
 
 
 def handle_resize(message):

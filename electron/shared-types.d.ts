@@ -118,6 +118,7 @@ export type SessionBlockerKind =
   | "gitConflict"
   | "question"
   | "crashed"
+  | "usageLimit"
   | "planMode";
 
 export type SessionBlocker = {
@@ -270,6 +271,7 @@ export type SessionSummary = Omit<SessionRecord, "sessionIconPath"> & {
 
 export type AppPreferences = {
   defaultAgentId: AgentId;
+  handoffAgentId: AgentId;
   agentCommandOverrides: Record<AgentId, string>;
   claudeExecutablePath: string;
   shellExecutablePath: string;
@@ -286,6 +288,7 @@ export type AppPreferences = {
 
 export type AppPreferencesPatch = {
   defaultAgentId?: AgentId;
+  handoffAgentId?: AgentId;
   agentCommandOverrides?: Partial<Record<AgentId, string>>;
   claudeExecutablePath?: string;
   shellExecutablePath?: string;

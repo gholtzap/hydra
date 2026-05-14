@@ -14,6 +14,25 @@ function detectSignal(chunk: string): { status: SessionStatus; blocker: SessionB
   }
 
   if (
+    lowered.includes("usage limit reached") ||
+    lowered.includes("you've hit your usage limit") ||
+    lowered.includes("you have hit your usage limit") ||
+    lowered.includes("you've hit your session limit") ||
+    lowered.includes("you have hit your session limit") ||
+    lowered.includes("you've hit your weekly limit") ||
+    lowered.includes("you have hit your weekly limit") ||
+    lowered.includes("5-hour limit reached") ||
+    (lowered.includes("session limit") && lowered.includes("resets")) ||
+    (lowered.includes("weekly limit") && lowered.includes("resets")) ||
+    (lowered.includes("rate limit") && lowered.includes("try again"))
+  ) {
+    return {
+      status: "blocked",
+      blocker: blocker("usageLimit", "The agent hit a usage limit.")
+    };
+  }
+
+  if (
     lowered.includes("allow once") ||
     lowered.includes("allow always") ||
     lowered.includes("permission prompt") ||

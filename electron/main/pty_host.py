@@ -1,11 +1,11 @@
 import codecs
+import errno
 import fcntl
 import json
 import os
 import pty
 import selectors
 import signal
-import subprocess
 import sys
 import termios
 import threading
@@ -30,6 +30,43 @@ pending = ""
 stdin_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
 
+class LaunchError(Exception):
+    def __init__(self, message, exit_code):
+        super().__init__(message)
+        self.exit_code = exit_code
+
+
+class PtyProcess:
+    def __init__(self, pid):
+        self.pid = pid
+        self.returncode = None
+        self.wait_lock = threading.Lock()
+
+    def wait(self):
+        with self.wait_lock:
+            if self.returncode is None:
+                _, status = os.waitpid(self.pid, 0)
+                self.returncode = os.waitstatus_to_exitcode(status)
+            return self.returncode
+
+    def poll(self):
+        with self.wait_lock:
+            if self.returncode is not None:
+                return self.returncode
+
+            try:
+                result_pid, status = os.waitpid(self.pid, os.WNOHANG)
+            except ChildProcessError:
+                self.returncode = 0
+                return self.returncode
+
+            if result_pid == 0:
+                return None
+
+            self.returncode = os.waitstatus_to_exitcode(status)
+            return self.returncode
+
+
 def send(payload):
     with send_lock:
         sys.stdout.write(json.dumps(payload) + "\n")
@@ -48,6 +85,127 @@ def set_window_size(fd, cols, rows):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, winsz)
 
 
+def close_fd(fd):
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def set_close_on_exec(fd):
+    flags = fcntl.fcntl(fd, fcntl.F_GETFD)
+    fcntl.fcntl(fd, fcntl.F_SETFD, flags | fcntl.FD_CLOEXEC)
+
+
+def encode_child_launch_error(error):
+    if isinstance(error, FileNotFoundError):
+        exit_code = 127
+    else:
+        exit_code = 1
+
+    return f"{exit_code}\n{error}".encode("utf-8", errors="replace")
+
+
+def decode_child_launch_error(payload):
+    decoded = payload.decode("utf-8", errors="replace")
+    exit_code_text, _, message = decoded.partition("\n")
+    try:
+        exit_code = int(exit_code_text)
+    except ValueError:
+        exit_code = 1
+
+    return LaunchError(message or "Unknown launch error.", exit_code)
+
+
+def resolve_executable(command, environment):
+    if os.path.dirname(command):
+        return command
+
+    path_value = environment.get("PATH") or os.defpath
+    permission_denied = None
+    for directory in path_value.split(os.pathsep):
+        if not directory:
+            directory = os.curdir
+        candidate = os.path.join(directory, command)
+        if os.access(candidate, os.X_OK) and not os.path.isdir(candidate):
+            return candidate
+        if os.path.exists(candidate) and permission_denied is None:
+            permission_denied = PermissionError(errno.EACCES, os.strerror(errno.EACCES), command)
+
+    if permission_denied is not None:
+        raise permission_denied
+    raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), command)
+
+
+def spawn_pty_process(argv, cwd, environment, cols, rows):
+    # Avoid subprocess preexec_fn here: this host has wait threads, and
+    # running Python hooks after fork can deadlock before exec.
+    master_fd = None
+    slave_fd = None
+    error_read_fd = None
+    error_write_fd = None
+    executable = resolve_executable(argv[0], environment)
+
+    try:
+        master_fd, slave_fd = pty.openpty()
+        set_window_size(slave_fd, cols, rows)
+        error_read_fd, error_write_fd = os.pipe()
+        set_close_on_exec(error_write_fd)
+
+        pid = os.fork()
+    except Exception:
+        for fd in (master_fd, slave_fd, error_read_fd, error_write_fd):
+            if fd is not None:
+                close_fd(fd)
+        raise
+
+    if pid == 0:
+        try:
+            if error_read_fd is not None:
+                close_fd(error_read_fd)
+            if master_fd is not None:
+                close_fd(master_fd)
+
+            os.setsid()
+            fcntl.ioctl(slave_fd, TIOCSCTTY, 0)
+
+            os.dup2(slave_fd, 0)
+            os.dup2(slave_fd, 1)
+            os.dup2(slave_fd, 2)
+            if slave_fd > 2:
+                close_fd(slave_fd)
+
+            os.chdir(cwd)
+            os.execve(executable, argv, environment)
+        except BaseException as error:
+            try:
+                os.write(error_write_fd, encode_child_launch_error(error))
+            except OSError:
+                pass
+            os._exit(127 if isinstance(error, FileNotFoundError) else 1)
+
+    close_fd(slave_fd)
+    slave_fd = None
+    close_fd(error_write_fd)
+    error_write_fd = None
+
+    try:
+        child_error = os.read(error_read_fd, 4096)
+    finally:
+        close_fd(error_read_fd)
+        error_read_fd = None
+
+    if child_error:
+        close_fd(master_fd)
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+        raise decode_child_launch_error(child_error)
+
+    return PtyProcess(pid), master_fd
+
+
 def create_session(message):
     session_id = message["sessionId"]
     shell_path = message.get("shellPath") or os.environ.get("SHELL") or "/bin/zsh"
@@ -56,12 +214,8 @@ def create_session(message):
     rows = int(message.get("rows") or 42)
     command = message.get("command")
     master_fd = None
-    slave_fd = None
 
     try:
-        master_fd, slave_fd = pty.openpty()
-        set_window_size(slave_fd, cols, rows)
-
         environment = dict(os.environ)
         environment["TERM"] = "xterm-256color"
         provided_environment = message.get("env")
@@ -71,36 +225,15 @@ def create_session(message):
                     environment[key] = value
 
         argv = command if command else [shell_path, "-il"]
-
-        def set_ctty():
-            fcntl.ioctl(slave_fd, TIOCSCTTY, 0)
-
-        proc = subprocess.Popen(
-            argv,
-            cwd=cwd,
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            env=environment,
-            close_fds=True,
-            start_new_session=True,
-            preexec_fn=set_ctty
-        )
+        proc, master_fd = spawn_pty_process(argv, cwd, environment, cols, rows)
     except Exception as error:
-        if slave_fd is not None:
-            try:
-                os.close(slave_fd)
-            except OSError:
-                pass
-
         if master_fd is not None:
-            try:
-                os.close(master_fd)
-            except OSError:
-                pass
+            close_fd(master_fd)
 
         failed_command = command[0] if isinstance(command, list) and len(command) > 0 else shell_path
-        if isinstance(error, FileNotFoundError):
+        if isinstance(error, FileNotFoundError) or (
+            isinstance(error, LaunchError) and error.exit_code == 127
+        ):
             send({
                 "type": "data",
                 "sessionId": session_id,
@@ -116,7 +249,7 @@ def create_session(message):
                 "sessionId": session_id,
                 "data": f"Hydra failed to launch the session: {error}\r\n"
             })
-            exit_code = 1
+            exit_code = getattr(error, "exit_code", 1)
 
         send({
             "type": "exit",
@@ -125,8 +258,6 @@ def create_session(message):
             "signal": None
         })
         return
-
-    os.close(slave_fd)
 
     session = {
         "proc": proc,
@@ -226,10 +357,7 @@ def close_session_resources(session):
     except Exception:
         pass
 
-    try:
-        os.close(master_fd)
-    except OSError:
-        pass
+    close_fd(master_fd)
 
 
 def cleanup_session(session_id, send_exit, expected_version=None):

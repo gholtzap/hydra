@@ -16,6 +16,8 @@ import type {
   KeybindingLabels,
   KeybindingMap,
   RepoAppLaunchConfig,
+  RepoParallelWorktreeLedgerEntry,
+  RepoParallelWorktreeSettings,
   RepoSnapshot,
   SessionSearchSource,
   SessionSearchResult as SharedSessionSearchResult,
@@ -24,6 +26,7 @@ import type {
   TrackedPortStatus,
   VoiceCallState,
   VoiceConfig,
+  WorktreeCloseAction,
   WikiContext,
   WikiTreeNode as SharedWikiTreeNode,
   WorkspaceRecord
@@ -140,6 +143,12 @@ type SessionSearchResult = SharedSessionSearchResult & {
 type SettingsTab = "general" | "account" | "themes" | "keybindings" | "claude";
 
 type SessionSearchFilter = "all" | SessionSearchSource;
+type WorktreeManagerFilter = "all" | "active" | "inactive";
+
+type RepoBranchCacheEntry = {
+  branches: string[];
+  loadedAt: number;
+};
 
 type SessionSearchIndexedResult = {
   result: SessionSearchResult;
@@ -320,6 +329,9 @@ type UiState = {
   portStatusLoading: boolean;
   portStatusShowAll: boolean;
   portStatusPollTimer: number | null;
+  worktreeManagerFilter: WorktreeManagerFilter;
+  repoBranchCache: Map<string, RepoBranchCacheEntry>;
+  repoBranchLoading: Set<string>;
   wikiContextRepoId: string | null;
   wikiContext: WikiContext | null;
   wikiSelectedPath: string | null;
@@ -428,6 +440,9 @@ const ui: UiState = {
   portStatusLoading: false,
   portStatusShowAll: false,
   portStatusPollTimer: null as number | null,
+  worktreeManagerFilter: "all" as WorktreeManagerFilter,
+  repoBranchCache: new Map<string, RepoBranchCacheEntry>(),
+  repoBranchLoading: new Set<string>(),
   wikiContextRepoId: null as string | null,
   wikiContext: null,
   wikiSelectedPath: null as string | null,
@@ -495,6 +510,7 @@ const sessionSearchDialog = document.getElementById("session-search-dialog") as 
 const commandPaletteDialog = document.getElementById("command-palette-dialog") as HTMLDialogElement;
 const appLaunchDialog = document.getElementById("app-launch-dialog") as HTMLDialogElement;
 const planReviewDialog = document.getElementById("plan-review-dialog") as HTMLDialogElement;
+const worktreeCloseDialog = document.getElementById("worktree-close-dialog") as HTMLDialogElement;
 const tokscaleDialog = document.getElementById("tokscale-dialog") as HTMLDialogElement;
 const lazygitDialog = document.getElementById("lazygit-dialog") as HTMLDialogElement;
 const voiceDialog = document.getElementById("voice-dialog") as HTMLDialogElement;
@@ -1275,7 +1291,7 @@ api.onSessionOutput((payload) => {
       `[data-session-id="${CSS.escape(payload.sessionId)}"] .row-meta`
     );
     if (metaEl) {
-      metaEl.textContent = session.blocker?.summary || previewTranscript(session.transcript);
+      metaEl.textContent = parallelWorktreeSummary(session) || session.blocker?.summary || previewTranscript(session.transcript);
     }
   }
 });
@@ -2003,6 +2019,7 @@ function renderRepoDetail(repo) {
           <button class="primary" data-action="open-launcher" data-repo-id="${repo.id}">New Session</button>
         </div>
       </div>
+      ${renderRepoParallelWorktreeProjectPanel(repo)}
       ${
         sessions.length
           ? `<div class="repo-session-list">
@@ -2016,6 +2033,97 @@ function renderRepoDetail(repo) {
   `;
 
   syncSectionFocusUi();
+}
+
+function filteredWorktreeManagerEntries(entries: ParallelWorktreeManagerEntry[]): ParallelWorktreeManagerEntry[] {
+  if (ui.worktreeManagerFilter === "active") {
+    return entries.filter((entry) => entry.kind === "active");
+  }
+  if (ui.worktreeManagerFilter === "inactive") {
+    return entries.filter((entry) => entry.kind !== "active");
+  }
+  return entries;
+}
+
+function renderWorktreeManagerFilterControls() {
+  const filters: Array<{ value: WorktreeManagerFilter; label: string }> = [
+    { value: "all", label: "All" },
+    { value: "active", label: "Active" },
+    { value: "inactive", label: "Non-active" }
+  ];
+
+  return `
+    <div class="worktree-filter-controls" role="group" aria-label="Worktree filter">
+      ${filters.map((filter) => `
+        <button
+          type="button"
+          class="worktree-filter-button ${ui.worktreeManagerFilter === filter.value ? "active" : ""}"
+          data-action="worktree-filter"
+          data-filter-value="${escapeAttribute(filter.value)}"
+        >${escapeHtml(filter.label)}</button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderRepoParallelWorktreeProjectPanel(repo: RepoSnapshot) {
+  const settings = effectiveRepoParallelWorktreeSettings(repo);
+  const allEntries = repoParallelWorktreeManagerEntries(repo);
+  const entries = filteredWorktreeManagerEntries(allEntries);
+  const activeEntries = allEntries.filter((entry) => entry.kind === "active");
+  const overlapEntries = activeEntries.filter((entry) => entry.state === "overlap_warning");
+
+  return `
+    <section class="repo-worktree-panel">
+      <div class="repo-worktree-header">
+        <div class="settings-field-copy">
+          <div class="repo-worktree-title-row">
+            <div class="row-title">Isolated Worktrees</div>
+            <span class="settings-chip">${settings.enabled ? "Enabled" : "Off"}</span>
+            ${overlapEntries.length ? `<span class="settings-chip worktree-overlap-chip">${overlapEntries.length} overlap${overlapEntries.length === 1 ? "" : "s"}</span>` : ""}
+          </div>
+          <div class="muted">${settings.enabled ? `Base ${settings.baseBranch || "main"} · land ${settings.landingBranch || "main"}` : "Project opt-in is off. New agent sessions use the shared checkout."}</div>
+        </div>
+        <div class="repo-worktree-actions">
+          ${renderWorktreeManagerFilterControls()}
+          <label class="inline-toggle repo-worktree-toggle">
+            <input
+              type="checkbox"
+              data-repo-worktree-enabled="true"
+              data-repo-id="${escapeAttribute(repo.id)}"
+              ${settings.enabled ? "checked" : ""}
+            />
+            <span>Enable</span>
+          </label>
+          <button type="button" data-action="open-settings" data-settings-tab="general">Configure</button>
+        </div>
+      </div>
+      ${
+        entries.length
+          ? `<div class="repo-worktree-list">
+              ${entries.map((entry) => `
+                <div class="repo-worktree-row">
+                  <div class="settings-worktree-copy">
+                    <div class="settings-file-row-top">
+                      <div class="row-title">${escapeHtml(entry.title)}</div>
+                      <span class="settings-chip">${escapeHtml(parallelWorktreeStateLabel(entry.state))}</span>
+                    </div>
+                    <div class="row-subtitle mono">${escapeHtml(entry.path)}</div>
+                    ${renderParallelWorktreeEntryDetails(entry)}
+                  </div>
+                  <div class="settings-worktree-actions">
+                    ${entry.kind === "active" ? `<button type="button" data-action="select-session" data-session-id="${escapeAttribute(entry.sessionId)}">Open</button>` : `<button type="button" data-action="resume-worktree" data-repo-id="${escapeAttribute(repo.id)}" data-worktree-path="${escapeAttribute(entry.path)}">Resume</button>`}
+                    <button type="button" data-action="rename-worktree" data-repo-id="${escapeAttribute(repo.id)}" data-worktree-path="${escapeAttribute(entry.path)}" data-worktree-title="${escapeAttribute(entry.title)}">Rename</button>
+                    <button type="button" data-action="delete-worktree" data-repo-id="${escapeAttribute(repo.id)}" data-worktree-path="${escapeAttribute(entry.path)}" data-session-id="${escapeAttribute(entry.sessionId)}" data-worktree-kind="${escapeAttribute(entry.kind)}">Delete</button>
+                    <button type="button" data-action="reveal-worktree" data-repo-id="${escapeAttribute(repo.id)}" data-worktree-path="${escapeAttribute(entry.path)}">Reveal</button>
+                  </div>
+                </div>
+              `).join("")}
+            </div>`
+          : ""
+      }
+    </section>
+  `;
 }
 
 function renderWikiDetail(repo) {
@@ -2864,8 +2972,10 @@ function updateSessionWorkspaceToolbar() {
 
   const repo = repoById(session.repoID);
   const visibleSessionCount = workspaceVisibleSessionIds().length;
+  const worktreeStateId = sessionParallelWorktreeDisplayState(session);
+  const worktreeSummaryText = parallelWorktreeSummary(session);
 
-  const sig = `${session.id}|${session.title}|${session.runtimeState}|${visibleSessionCount}|${repo?.id}|${session.isPinned}|${session.tagColor || ""}|${session.sessionIconUrl || ""}|${session.sessionIconUpdatedAt || ""}`;
+  const sig = `${session.id}|${session.title}|${session.runtimeState}|${visibleSessionCount}|${repo?.id}|${session.isPinned}|${session.tagColor || ""}|${session.sessionIconUrl || ""}|${session.sessionIconUpdatedAt || ""}|${worktreeStateId || ""}|${worktreeSummaryText}`;
   if (toolbar.dataset.sig === sig) {
     return;
   }
@@ -2893,7 +3003,13 @@ function updateSessionWorkspaceToolbar() {
               "span",
               { className: "ws-toolbar-meta" },
               `${visibleSessionCount} ${pluralize(visibleSessionCount, "pane", "panes")}`
-            )
+            ),
+            worktreeStateId
+              ? dom("span", { className: "ws-toolbar-worktree-state" }, parallelWorktreeStateLabel(worktreeStateId))
+              : null,
+            worktreeSummaryText
+              ? dom("span", { className: "ws-toolbar-worktree-copy" }, worktreeSummaryText)
+              : null
           )
         )
       ),
@@ -3181,6 +3297,8 @@ function updateSessionPane(session) {
 
 function renderSessionPaneHeader(session, isRenaming: boolean) {
   const planReview = planReviewForSession(session.id);
+  const worktreeStateId = sessionParallelWorktreeDisplayState(session);
+  const worktreeSummaryText = parallelWorktreeSummary(session);
   const paneBar = dom(
     "div",
     {
@@ -3210,13 +3328,24 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
               })
             : dom("span", { className: "pane-title", attrs: { title: session.title } }, session.title),
           dom(
-            "span",
-            { className: classNames("pane-status-chip", `pane-status-${session.status}`) },
-            dom("span", { className: "pane-status-dot", attrs: { "aria-hidden": "true" } }),
-            dom("span", { className: "pane-status-label" }, statusLabel(session.status))
+            "div",
+            { className: "pane-title-chips" },
+            dom(
+              "span",
+              { className: classNames("pane-status-chip", `pane-status-${session.status}`) },
+              dom("span", { className: "pane-status-dot", attrs: { "aria-hidden": "true" } }),
+              dom("span", { className: "pane-status-label" }, statusLabel(session.status))
+            ),
+            worktreeStateId
+              ? dom(
+                  "span",
+                  { className: classNames("pane-status-chip", "pane-status-worktree", `pane-status-${worktreeStateId}`) },
+                  dom("span", { className: "pane-status-label" }, parallelWorktreeStateLabel(worktreeStateId))
+                )
+              : null
           )
         ),
-        session.isPinned || planReview
+        session.isPinned || planReview || worktreeSummaryText
           ? dom(
               "div",
               { className: "pane-meta-row" },
@@ -3238,6 +3367,9 @@ function renderSessionPaneHeader(session, isRenaming: boolean) {
                     },
                     "Plan"
                   )
+                : null,
+              worktreeSummaryText
+                ? dom("span", { className: "pane-meta-copy" }, worktreeSummaryText)
                 : null
             )
           : null
@@ -3704,6 +3836,7 @@ function activeTerminalMount() {
 
 function renderInboxCard(session) {
   const repo = repoById(session.repoID);
+  const worktreeSummary = parallelWorktreeSummary(session);
   return `
     <button class="inbox-card ${session.isPinned ? "session-card-pinned" : ""} ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
       <div class="row-title">
@@ -3715,10 +3848,11 @@ function renderInboxCard(session) {
           ${renderSessionRestartInline(session)}
           ${session.isPinned ? renderSessionPinIndicator("Pin") : ""}
           <span class="status-badge status-${escapeHtml(session.status)}">${escapeHtml(statusLabel(session.status))}</span>
+          ${renderParallelWorktreeBadge(session)}
         </span>
       </div>
       <div class="row-subtitle">${escapeHtml(repo?.name || "Unknown Repo")}</div>
-      <div class="row-meta">${escapeHtml(session.blocker?.summary || previewTranscript(session.transcript))}</div>
+      <div class="row-meta">${escapeHtml(worktreeSummary || session.blocker?.summary || previewTranscript(session.transcript))}</div>
     </button>
   `;
 }
@@ -3735,6 +3869,7 @@ function projectSessionStateLabel(session) {
 
 function renderRepoSession(session) {
   const multiSelected = ui.selectedSessionIds.has(session.id);
+  const worktreeSummary = parallelWorktreeSummary(session);
   return `
     <button class="session-row ${session.isPinned ? "session-row-pinned" : ""} ${selectionMatches("session", session.id) ? "active" : ""} ${mainListSelectionMatches(session.id) ? "keyboard-active" : ""} ${multiSelected ? "session-row-selected" : ""}" data-action="select-session" data-session-id="${session.id}" ${renderSessionDragAttributes(session.id, "list")}>
       <div class="row-title">
@@ -3746,8 +3881,10 @@ function renderRepoSession(session) {
           ${renderSessionRestartInline(session)}
           ${session.isPinned ? renderSessionPinIndicator("Pin") : ""}
           <span class="status-badge ${session.runtimeState === "live" ? "status-running" : "status-idle"}">${projectSessionStateLabel(session)}</span>
+          ${renderParallelWorktreeBadge(session)}
         </span>
       </div>
+      <div class="row-meta">${escapeHtml(worktreeSummary || previewTranscript(session.transcript))}</div>
     </button>
   `;
 }
@@ -4271,6 +4408,9 @@ async function renderSettingsDialog() {
   if (!ui.settingsContext) {
     ui.settingsContext = await api.getClaudeSettingsContext(repoId);
   }
+  if (ui.settingsTab === "general" && repoId) {
+    await ensureRepoBranches(repoId);
+  }
 
   await ensureSettingsSelection();
 
@@ -4628,9 +4768,173 @@ function renderThemeColorField(
   `;
 }
 
+function renderRepoParallelWorktreeSettingsSection(repo: RepoSnapshot | null) {
+  if (!repo) {
+    return `
+      <section class="settings-group-card settings-toggle-card">
+        <div class="settings-group-header">
+          <div class="settings-field-copy">
+            <div class="row-title">Repo Parallel Worktrees</div>
+            <div class="muted">Select a project in the sidebar to configure per-repo worktree behavior.</div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  const effectiveSettings = effectiveRepoParallelWorktreeSettings(repo);
+
+  return `
+    <section class="settings-group-card settings-toggle-card">
+      <div class="settings-group-header">
+        <div class="settings-field-copy">
+          <div class="row-title">Isolated Worktrees</div>
+          <div class="muted">This opt-in is stored on ${escapeHtml(repo.name)} only. New agent sessions launch in managed Git worktrees when enabled.</div>
+        </div>
+      </div>
+      <div class="settings-group-body">
+        <div class="value-row">
+          <label class="inline-toggle">
+            <input
+              type="checkbox"
+              id="pref-repo-worktree-enabled"
+              data-repo-id="${escapeAttribute(repo.id)}"
+              ${effectiveSettings.enabled ? "checked" : ""}
+            />
+            <span>Enable Isolated Worktrees For This Project</span>
+          </label>
+        </div>
+        <label class="settings-inline-field">
+          <span class="row-title">Base Branch</span>
+          <select
+            id="pref-repo-worktree-base"
+            data-repo-id="${escapeAttribute(repo.id)}"
+          >
+            ${renderBranchSelectOptions(repo, effectiveSettings.baseBranch || "main", [effectiveSettings.landingBranch])}
+          </select>
+        </label>
+        <label class="settings-inline-field">
+          <span class="row-title">Push to Branch</span>
+          <select
+            id="pref-repo-worktree-landing"
+            data-repo-id="${escapeAttribute(repo.id)}"
+          >
+            ${renderBranchSelectOptions(repo, effectiveSettings.landingBranch || "main", [effectiveSettings.baseBranch])}
+          </select>
+        </label>
+      </div>
+    </section>
+  `;
+}
+
+function renderRepoParallelWorktreeManagerSection(repo: RepoSnapshot | null) {
+  if (!repo) {
+    return "";
+  }
+
+  const allEntries = repoParallelWorktreeManagerEntries(repo);
+  const entries = filteredWorktreeManagerEntries(allEntries);
+  if (!allEntries.length) {
+    return `
+      <section class="settings-group-card settings-toggle-card">
+        <div class="settings-group-header">
+          <div class="settings-field-copy">
+            <div class="row-title">Worktree Manager</div>
+            <div class="muted">Hydra will list active and retained worktrees for ${escapeHtml(repo.name)} here.</div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="settings-group-card settings-toggle-card">
+      <div class="settings-group-header">
+        <div class="settings-field-copy">
+          <div class="row-title">Worktree Manager</div>
+          <div class="muted">Reveal active and retained worktree paths for ${escapeHtml(repo.name)}.</div>
+        </div>
+        ${renderWorktreeManagerFilterControls()}
+      </div>
+      <div class="settings-group-body">
+        ${
+          entries.length
+            ? entries.map((entry) => `
+          <div class="settings-worktree-row">
+            <div class="settings-worktree-copy">
+              <div class="settings-file-row-top">
+                <div class="row-title">${escapeHtml(entry.title)}</div>
+                <span class="settings-chip">${escapeHtml(parallelWorktreeStateLabel(entry.state))}</span>
+              </div>
+              <div class="row-subtitle mono">${escapeHtml(entry.path)}</div>
+              ${renderParallelWorktreeEntryDetails(entry)}
+            </div>
+            <div class="settings-worktree-actions">
+              ${entry.kind === "active" ? `
+                <button type="button" data-action="select-session" data-session-id="${escapeAttribute(entry.sessionId)}">Open</button>
+              ` : `
+                <button type="button" data-action="resume-worktree" data-repo-id="${escapeAttribute(repo.id)}" data-worktree-path="${escapeAttribute(entry.path)}">Resume</button>
+              `}
+              <button
+                type="button"
+                data-action="rename-worktree"
+                data-repo-id="${escapeAttribute(repo.id)}"
+                data-worktree-path="${escapeAttribute(entry.path)}"
+                data-worktree-title="${escapeAttribute(entry.title)}"
+              >Rename</button>
+              <button
+                type="button"
+                data-action="delete-worktree"
+                data-repo-id="${escapeAttribute(repo.id)}"
+                data-worktree-path="${escapeAttribute(entry.path)}"
+                data-session-id="${escapeAttribute(entry.sessionId)}"
+                data-worktree-kind="${escapeAttribute(entry.kind)}"
+              >Delete</button>
+              <button
+                type="button"
+                data-action="reveal-worktree"
+                data-repo-id="${escapeAttribute(repo.id)}"
+                data-worktree-path="${escapeAttribute(entry.path)}"
+              >Reveal</button>
+            </div>
+          </div>
+        `).join("")
+            : `<div class="empty-state">No ${ui.worktreeManagerFilter === "active" ? "active" : "non-active"} worktrees match this filter.</div>`
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderParallelWorktreeEntryDetails(entry: ParallelWorktreeManagerEntry) {
+  const summary = [
+    entry.branch ? `branch ${entry.branch}` : "branch pending",
+    entry.landingBranch ? `lands to ${entry.landingBranch}` : "",
+    entry.error || ""
+  ].filter(Boolean).join(" · ");
+  const overlapSessions = entry.overlapSessionIds
+    .map((sessionId) => sessionById(sessionId))
+    .filter((session): session is SessionSummary => !!session);
+
+  return `
+    <div class="muted">${escapeHtml(summary)}</div>
+    ${
+      overlapSessions.length
+        ? `<div class="worktree-overlap-line">Overlaps with ${overlapSessions.map((session) => escapeHtml(session.title)).join(", ")}</div>`
+        : ""
+    }
+    ${
+      entry.changedFiles.length
+        ? `<div class="worktree-file-list">${entry.changedFiles.slice(0, 6).map((filePath) => `<span class="mono">${escapeHtml(filePath)}</span>`).join("")}${entry.changedFiles.length > 6 ? `<span class="muted">+${entry.changedFiles.length - 6} more</span>` : ""}</div>`
+        : ""
+    }
+  `;
+}
+
 function renderGeneralSettingsPane() {
   const selectedAgentId = defaultSessionAgentId();
   const selectedAgent = agentOption(selectedAgentId) || AGENT_OPTIONS[0];
+  const currentRepo = repoById(currentRepoId());
   const updateResult = ui.settingsUpdateCheckResult;
   const updateStatusClass = updateResult
     ? ` settings-update-status-${escapeAttribute(updateResult.status)}`
@@ -4672,6 +4976,9 @@ function renderGeneralSettingsPane() {
           <input id="pref-shell-executable" value="${escapeAttribute(state.preferences.shellExecutablePath || "")}" />
         </div>
       </section>
+
+      ${renderRepoParallelWorktreeSettingsSection(currentRepo)}
+      ${renderRepoParallelWorktreeManagerSection(currentRepo)}
 
       <section class="settings-group-card settings-toggle-card">
         <div class="settings-group-header">
@@ -6495,6 +6802,30 @@ async function handleClick(event) {
       }
       await renderSettingsDialog();
       break;
+    case "worktree-filter":
+      ui.worktreeManagerFilter = normalizeWorktreeManagerFilter(target.dataset.filterValue);
+      renderDetail();
+      if (settingsDialog.open) {
+        await renderSettingsDialog();
+      }
+      break;
+    case "reveal-worktree":
+      if (target.dataset.repoId && target.dataset.worktreePath) {
+        await api.revealWorktree({
+          repoId: target.dataset.repoId,
+          worktreePath: target.dataset.worktreePath
+        });
+      }
+      break;
+    case "delete-worktree":
+      await deleteWorktreeFromManager(target);
+      break;
+    case "resume-worktree":
+      await resumeWorktreeFromManager(target);
+      break;
+    case "rename-worktree":
+      await renameWorktreeFromManager(target);
+      break;
     case "settings-auth-refresh":
       await refreshAuthSession();
       break;
@@ -7595,6 +7926,14 @@ async function handleChange(event) {
     return;
   }
 
+  if (target.dataset.repoWorktreeEnabled === "true" && target.dataset.repoId) {
+    await api.updateRepoParallelWorktreeSettings({
+      repoId: target.dataset.repoId,
+      enabled: (target as HTMLInputElement).checked
+    });
+    return;
+  }
+
   switch (target.id) {
     case "marketplace-install-scope":
       ui.marketplacePreferredScope = target.value === "user" ? "user" : "project";
@@ -7612,6 +7951,30 @@ async function handleChange(event) {
       break;
     case "pref-shell-executable":
       await api.updatePreferences({ shellExecutablePath: target.value });
+      break;
+    case "pref-repo-worktree-enabled":
+      if (target.dataset.repoId) {
+        await api.updateRepoParallelWorktreeSettings({
+          repoId: target.dataset.repoId,
+          enabled: (target as HTMLInputElement).checked
+        });
+      }
+      break;
+    case "pref-repo-worktree-base":
+      if (target.dataset.repoId) {
+        await api.updateRepoParallelWorktreeSettings({
+          repoId: target.dataset.repoId,
+          baseBranch: target.value
+        });
+      }
+      break;
+    case "pref-repo-worktree-landing":
+      if (target.dataset.repoId) {
+        await api.updateRepoParallelWorktreeSettings({
+          repoId: target.dataset.repoId,
+          landingBranch: target.value
+        });
+      }
       break;
     case "pref-native-notifications":
       await api.updatePreferences({ showNativeNotifications: (target as HTMLInputElement).checked });
@@ -8053,6 +8416,227 @@ function agentCommandValue(agentId: AgentId): string {
   return normalized || DEFAULT_AGENT_COMMANDS[agentId] || "";
 }
 
+function effectiveRepoParallelWorktreeSettings(repo: RepoSnapshot | null | undefined): RepoParallelWorktreeSettings {
+  const repoSettings = repo?.parallelWorktreeSettings;
+  return {
+    enabled: !!repoSettings?.enabled,
+    baseBranch: repoSettings?.baseBranch || "main",
+    landingBranch: repoSettings?.landingBranch || "main"
+  };
+}
+
+async function ensureRepoBranches(repoId: string | null | undefined): Promise<string[]> {
+  if (!repoId) {
+    return [];
+  }
+
+  const cached = ui.repoBranchCache.get(repoId);
+  if (cached) {
+    return cached.branches;
+  }
+
+  if (ui.repoBranchLoading.has(repoId)) {
+    return [];
+  }
+
+  ui.repoBranchLoading.add(repoId);
+  try {
+    const branches = await api.listRepoBranches(repoId);
+    const normalizedBranches = branches
+      .map((branch) => branch.trim())
+      .filter((branch) => !!branch)
+      .sort((left, right) => left.localeCompare(right));
+    ui.repoBranchCache.set(repoId, {
+      branches: normalizedBranches,
+      loadedAt: Date.now()
+    });
+    return normalizedBranches;
+  } catch {
+    ui.repoBranchCache.set(repoId, {
+      branches: [],
+      loadedAt: Date.now()
+    });
+    return [];
+  } finally {
+    ui.repoBranchLoading.delete(repoId);
+  }
+}
+
+function repoBranchOptions(repo: RepoSnapshot, extraBranches: Array<string | null | undefined> = []): string[] {
+  const branches = new Set<string>();
+  for (const branch of ui.repoBranchCache.get(repo.id)?.branches || []) {
+    if (branch) {
+      branches.add(branch);
+    }
+  }
+
+  for (const branch of extraBranches) {
+    const normalized = typeof branch === "string" ? branch.trim() : "";
+    if (normalized) {
+      branches.add(normalized);
+    }
+  }
+
+  return [...branches].sort((left, right) => left.localeCompare(right));
+}
+
+function renderBranchSelectOptions(
+  repo: RepoSnapshot,
+  selectedBranch: string | null | undefined,
+  extraBranches: Array<string | null | undefined> = []
+): string {
+  const selected = selectedBranch || "";
+  const branches = repoBranchOptions(repo, [selected, ...extraBranches]);
+  if (!branches.length) {
+    return `<option value="${escapeAttribute(selected || "main")}">${escapeHtml(selected || "main")}</option>`;
+  }
+
+  return branches
+    .map((branch) => `
+      <option value="${escapeAttribute(branch)}" ${branch === selected ? "selected" : ""}>${escapeHtml(branch)}</option>
+    `)
+    .join("");
+}
+
+function sessionParallelWorktreeDisplayState(session: SessionSummary | null | undefined) {
+  const metadata = session?.parallelWorktree;
+  if (!metadata || metadata.mode === "disabled") {
+    return null;
+  }
+
+  if (
+    metadata.overlapSessionIds?.length &&
+    (
+      metadata.lifecycleState === "shared_checkout" ||
+      metadata.lifecycleState === "awaiting_agent" ||
+      metadata.lifecycleState === "active" ||
+      metadata.lifecycleState === "ready_to_finish"
+    )
+  ) {
+    return "overlap_warning";
+  }
+
+  return metadata.lifecycleState;
+}
+
+function parallelWorktreeStateLabel(stateId: string | null | undefined) {
+  switch (stateId) {
+    case "shared_checkout":
+      return "Shared Checkout";
+    case "awaiting_agent":
+      return "Awaiting Worktree";
+    case "active":
+      return "Worktree Active";
+    case "ready_to_finish":
+      return "Ready To Finish";
+    case "landing_in_progress":
+      return "Landing";
+    case "landing_failed":
+      return "Landing Failed";
+    case "landed":
+      return "Landed";
+    case "cleanup_pending":
+      return "Cleanup Pending";
+    case "overlap_warning":
+      return "Overlap Warning";
+    default:
+      return "";
+  }
+}
+
+function renderParallelWorktreeBadge(session: SessionSummary | null | undefined, extraClass = "") {
+  const stateId = sessionParallelWorktreeDisplayState(session);
+  if (!stateId) {
+    return "";
+  }
+
+  const className = extraClass ? ` ${extraClass}` : "";
+  return `<span class="status-badge parallel-worktree-badge parallel-worktree-${escapeAttribute(stateId)}${className}">${escapeHtml(parallelWorktreeStateLabel(stateId))}</span>`;
+}
+
+function parallelWorktreeSummary(session: SessionSummary | null | undefined) {
+  const metadata = session?.parallelWorktree;
+  const stateId = sessionParallelWorktreeDisplayState(session);
+  if (!metadata || metadata.mode === "disabled" || !stateId) {
+    return "";
+  }
+
+  if (stateId === "overlap_warning") {
+    const overlapCount = metadata.overlapSessionIds?.length || 0;
+    return `Overlapping changed files with ${overlapCount} session${overlapCount === 1 ? "" : "s"}.`;
+  }
+  if (stateId === "shared_checkout") {
+    return `Shared checkout · land ${metadata.landingBranch || "main"}`;
+  }
+  if (stateId === "awaiting_agent") {
+    return `Isolated worktree requested · base ${metadata.baseBranch || "main"} · land ${metadata.landingBranch || "main"}`;
+  }
+  if (stateId === "landing_failed") {
+    return metadata.lastError || "Landing failed and needs attention.";
+  }
+  if (stateId === "landed") {
+    return `Landed to ${metadata.landingBranch || "main"}`;
+  }
+  if (stateId === "landing_in_progress") {
+    return `Landing to ${metadata.landingBranch || "main"} in progress`;
+  }
+
+  const branch = metadata.branch ? `branch ${metadata.branch}` : "branch pending";
+  return `${metadata.mode === "shared" ? "Shared checkout" : "Isolated"} · ${branch}`;
+}
+
+type ParallelWorktreeManagerEntry = {
+  id: string;
+  kind: "active" | "retained";
+  sessionId: string;
+  title: string;
+  state: string;
+  branch: string | null;
+  path: string;
+  landingBranch: string | null;
+  error: string | null;
+  changedFiles: string[];
+  overlapSessionIds: string[];
+};
+
+function repoParallelWorktreeManagerEntries(repo: RepoSnapshot | null | undefined): ParallelWorktreeManagerEntry[] {
+  if (!repo) {
+    return [];
+  }
+
+  const activeEntries = state.sessions
+    .filter((session) => session.repoID === repo.id && session.parallelWorktree?.mode !== "disabled")
+    .map((session) => ({
+      id: `active:${session.id}`,
+      kind: "active" as const,
+      sessionId: session.id,
+      title: session.title,
+      state: sessionParallelWorktreeDisplayState(session) || "inactive",
+      branch: session.parallelWorktree.branch,
+      path: session.parallelWorktree.worktreePath || repo.path,
+      landingBranch: session.parallelWorktree.landingBranch,
+      error: session.parallelWorktree.lastError,
+      changedFiles: session.parallelWorktree.changedFiles || [],
+      overlapSessionIds: session.parallelWorktree.overlapSessionIds || []
+    }));
+
+  const retainedEntries = (repo.parallelWorktreeLedger || []).map((entry: RepoParallelWorktreeLedgerEntry) => ({
+    id: entry.id,
+    kind: "retained" as const,
+    sessionId: entry.sessionId,
+    title: entry.sessionTitle,
+    state: entry.state,
+    branch: entry.branch,
+    path: entry.path,
+    landingBranch: entry.landingBranch,
+    error: entry.lastError,
+    changedFiles: [],
+    overlapSessionIds: []
+  }));
+
+  return [...activeEntries, ...retainedEntries];
+}
+
 function defaultSessionRepoId(explicitRepoId: string | null = null): string | null {
   return (
     explicitRepoId ||
@@ -8074,13 +8658,104 @@ async function startDefaultAgentSession(explicitRepoId: string | null = null): P
   return startSessionForRepo(repoId, true, "terminal");
 }
 
+function normalizeWorktreeManagerFilter(value: string | null | undefined): WorktreeManagerFilter {
+  return value === "active" || value === "inactive" ? value : "all";
+}
+
+function sessionNeedsWorktreeClosePrompt(session: SessionSummary | null | undefined): boolean {
+  return session?.parallelWorktree?.mode === "isolated" && !!session.parallelWorktree.worktreePath;
+}
+
+async function promptWorktreeCloseAction(session: SessionSummary): Promise<WorktreeCloseAction | null> {
+  const repo = repoById(session.repoID);
+  const worktreePath = session.parallelWorktree.worktreePath;
+  if (!repo || !worktreePath) {
+    return { kind: "keep" };
+  }
+
+  ui.repoBranchCache.delete(repo.id);
+  await ensureRepoBranches(repo.id);
+  const selectedBranch =
+    session.parallelWorktree.landingBranch ||
+    effectiveRepoParallelWorktreeSettings(repo).landingBranch ||
+    "main";
+
+  worktreeCloseDialog.innerHTML = `
+    <form method="dialog" class="dialog-body">
+      <div class="dialog-header">
+        <div>
+          <div class="eyebrow">Worktree</div>
+          <h2 class="dialog-title">Delete worktree?</h2>
+          <div class="muted">${escapeHtml(session.title)} · ${escapeHtml(abbreviateHome(worktreePath))}</div>
+        </div>
+      </div>
+      <label class="settings-inline-field">
+        <span class="row-title">Push to Branch</span>
+        <select id="worktree-close-branch">
+          ${renderBranchSelectOptions(repo, selectedBranch, [session.parallelWorktree.branch])}
+        </select>
+      </label>
+      <div class="dialog-actions">
+        <button value="keep">No</button>
+        <button value="delete">Yes, Delete</button>
+        <button class="primary" value="push">Push to Branch</button>
+      </div>
+    </form>
+  `;
+
+  return new Promise((resolve) => {
+    const handleClose = () => {
+      const returnValue = worktreeCloseDialog.returnValue;
+      const branchSelect = worktreeCloseDialog.querySelector<HTMLSelectElement>("#worktree-close-branch");
+      worktreeCloseDialog.removeEventListener("close", handleClose);
+
+      if (returnValue === "delete") {
+        resolve({ kind: "delete" });
+        return;
+      }
+
+      if (returnValue === "push") {
+        resolve({
+          kind: "push",
+          branch: branchSelect?.value || selectedBranch
+        });
+        return;
+      }
+
+      if (returnValue === "keep") {
+        resolve({ kind: "keep" });
+        return;
+      }
+
+      resolve(null);
+    };
+
+    worktreeCloseDialog.returnValue = "";
+    worktreeCloseDialog.addEventListener("close", handleClose);
+    worktreeCloseDialog.showModal();
+  });
+}
+
 async function closeSessionById(sessionId) {
+  const session = sessionById(sessionId);
+  const worktreeAction = sessionNeedsWorktreeClosePrompt(session)
+    ? await promptWorktreeCloseAction(session as SessionSummary)
+    : undefined;
+  if (worktreeAction === null) {
+    return;
+  }
+
   const fallbackSessionId =
     ui.selection.type === "session" && ui.selection.id === sessionId
       ? nextVisibleSessionIdAfterRemoving(sessionId)
       : null;
 
-  await api.closeSession(sessionId);
+  try {
+    await api.closeSession(sessionId, worktreeAction);
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Failed to close session.");
+    return;
+  }
 
   if (ui.selection.type === "session" && ui.selection.id === sessionId) {
     if (fallbackSessionId && sessionById(fallbackSessionId)) {
@@ -8088,6 +8763,81 @@ async function closeSessionById(sessionId) {
     } else {
       await selectInbox();
     }
+  }
+}
+
+async function deleteWorktreeFromManager(target: HTMLElement) {
+  const repoId = target.dataset.repoId;
+  const worktreePath = target.dataset.worktreePath;
+  if (!repoId || !worktreePath) {
+    return;
+  }
+
+  const isActive = target.dataset.worktreeKind === "active";
+  const message = isActive
+    ? "Delete this worktree and close its active session?"
+    : "Delete this retained worktree?";
+  if (!window.confirm(message)) {
+    return;
+  }
+
+  try {
+    await api.deleteWorktree({
+      repoId,
+      worktreePath,
+      sessionId: target.dataset.sessionId || undefined
+    });
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Failed to delete worktree.");
+  }
+}
+
+async function resumeWorktreeFromManager(target: HTMLElement) {
+  const repoId = target.dataset.repoId;
+  const worktreePath = target.dataset.worktreePath;
+  if (!repoId || !worktreePath) {
+    return;
+  }
+
+  try {
+    const sessionId = await api.resumeWorktree({ repoId, worktreePath });
+    if (sessionId) {
+      if (settingsDialog.open) {
+        settingsDialog.close();
+      }
+      await selectSession(sessionId, "terminal");
+    }
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Failed to resume worktree.");
+  }
+}
+
+async function renameWorktreeFromManager(target: HTMLElement) {
+  const repoId = target.dataset.repoId;
+  const worktreePath = target.dataset.worktreePath;
+  if (!repoId || !worktreePath) {
+    return;
+  }
+
+  const currentTitle = target.dataset.worktreeTitle || "";
+  const nextTitle = window.prompt("Rename worktree", currentTitle);
+  if (nextTitle === null) {
+    return;
+  }
+
+  const normalizedTitle = nextTitle.trim();
+  if (!normalizedTitle || normalizedTitle === currentTitle) {
+    return;
+  }
+
+  try {
+    await api.renameWorktree({
+      repoId,
+      worktreePath,
+      title: normalizedTitle
+    });
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Failed to rename worktree.");
   }
 }
 
@@ -8171,6 +8921,10 @@ async function openSettings(
   ui.settingsJsonError = "";
   ui.settingsShowRawJson = false;
   ui.settingsAuthError = "";
+  const repoId = currentRepoId();
+  if (repoId) {
+    ui.repoBranchCache.delete(repoId);
+  }
   if (initialTab === "account" || !ui.authSessionLoaded) {
     await refreshAuthSession();
   }
@@ -10022,7 +10776,13 @@ async function startSessionForRepo(
     return null;
   }
 
-  const sessionId = await api.createSession(repoId, launchesClaudeOnStart);
+  let sessionId: string | null = null;
+  try {
+    sessionId = await api.createSession(repoId, launchesClaudeOnStart);
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Failed to start session.");
+    return null;
+  }
   if (sessionId) {
     // Flush state before selecting: the invoke response and the broadcastState
     // "state:changed" event travel on separate IPC channels with no ordering

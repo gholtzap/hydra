@@ -19,6 +19,16 @@ I use Hydra for almost everything I code. It's an easy way for me to control man
 
 Hydra has a built-in memory system. Every directory will automatically create a .wiki/ with important information.
 
+## CLI
+
+Hydra includes a small CLI wrapper for the MCP `create_session` tool. Keep the desktop app running with the MCP server enabled, then launch the default coding agent in a repo with a prompt:
+
+```sh
+hydra create-session --repo-id <repo-id> --prompt "Implement the requested change"
+```
+
+Omit `--agent-id` to use the configured default agent. The CLI reads the MCP token from `HYDRA_MCP_AUTH_TOKEN`, `--auth-token`, or Hydra's local `mcp-auth-token` file.
+
 Cool features coming soon:
 - Voice control: Get on call with your hydra agents!
 - Skills marketplace

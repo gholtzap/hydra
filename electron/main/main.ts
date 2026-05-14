@@ -26,14 +26,21 @@ import type {
   MarketplaceInspectResponse,
   MarketplaceInstallResponse,
   MarketplaceSkillDetails,
+  ParallelWorktreeLifecycleState,
+  ParallelWorktreeSessionMode,
   Point,
   PtyCreateSessionPayload,
   PtyHostMessage,
   ReadFileResult,
   RepoAppLaunchConfig,
+  RepoParallelWorktreeLedgerEntry,
+  RepoParallelWorktreeSettings,
+  RepoParallelWorktreeSettingsPatch,
   RepoRecord,
   SessionBlocker,
+  SessionCloseRequest,
   SessionOrganizationPatch,
+  SessionParallelWorktreeMetadata,
   SessionRestartRequest,
   SessionRecord,
   SessionSearchSource,
@@ -44,6 +51,11 @@ import type {
   SessionTagColor,
   StoredAppState,
   TrackedPortStatus,
+  WorktreeCloseAction,
+  WorktreeDeleteRequest,
+  WorktreeRenameRequest,
+  WorktreeRevealRequest,
+  WorktreeResumeRequest,
   WikiContext,
   WikiFileContents
 } from "../shared-types";
@@ -159,6 +171,26 @@ type PackagedSmokeTestResult = {
   status: SessionStatus | null;
   transcriptPreview: string;
 };
+type ParallelWorktreeLaunchReason = "create" | "reopen" | "restart" | "resume";
+type ParallelWorktreePromptContext = {
+  session: SessionRecord;
+  repo: RepoRecord;
+  mode: ParallelWorktreeSessionMode;
+  baseBranch: string;
+  landingBranch: string;
+  launchReason: ParallelWorktreeLaunchReason;
+  previousPath: string | null;
+  previousBranch: string | null;
+};
+type ParallelWorktreeMarkerPayload = {
+  state: ParallelWorktreeLifecycleState;
+  mode?: ParallelWorktreeSessionMode;
+  path?: string;
+  branch?: string;
+  baseBranch?: string;
+  landingBranch?: string;
+  error?: string;
+};
 
 const { scanWorkspace } = require("./workspace-scanner") as {
   scanWorkspace: (rootPath: string, workspaceId: string) => Promise<RepoRecord[]>;
@@ -224,6 +256,39 @@ const {
   queryProjectSessions: (repoPath: string, query: string) => Promise<SessionSearchResponse>;
 };
 const {
+  createWorktreeSync,
+  deleteWorktreeSync,
+  fastForwardWorktreeToBranchSync,
+  listBranchesSync,
+  listChangedFiles,
+  readCurrentBranch,
+  readCurrentBranchSync,
+  validateWorktreePath,
+  validateWorktreePathSync
+} = require("./git-worktrees") as {
+  createWorktreeSync: (
+    repoPath: string,
+    worktreePath: string,
+    branchName: string,
+    baseBranch: string
+  ) => { ok: boolean; stdout: string; stderr: string; exitCode: number };
+  deleteWorktreeSync: (
+    repoPath: string,
+    worktreePath: string
+  ) => { ok: boolean; stdout: string; stderr: string; exitCode: number };
+  fastForwardWorktreeToBranchSync: (
+    repoPath: string,
+    worktreePath: string,
+    targetBranch: string
+  ) => { ok: boolean; stdout: string; stderr: string; exitCode: number };
+  listBranchesSync: (repoPath: string) => string[];
+  listChangedFiles: (repoPath: string, baseBranch: string) => Promise<string[]>;
+  readCurrentBranch: (repoPath: string) => Promise<string | null>;
+  readCurrentBranchSync: (repoPath: string) => string | null;
+  validateWorktreePath: (repoPath: string, candidatePath: string) => Promise<boolean>;
+  validateWorktreePathSync: (repoPath: string, candidatePath: string) => boolean;
+};
+const {
   AGENT_DEFINITIONS,
   DEFAULT_AGENT_COMMANDS,
   DEFAULT_AGENT_ID,
@@ -231,6 +296,8 @@ const {
   loadState,
   normalizeAgentId,
   normalizeRepoAppLaunchConfig,
+  normalizeRepoParallelWorktreeSettings,
+  normalizeSessionParallelWorktreeMetadata,
   normalizePreferences,
   saveState
 } = require("./state-store") as {
@@ -241,6 +308,8 @@ const {
   loadState: () => Promise<StoredAppState>;
   normalizeAgentId: (value: unknown, fallback?: AgentId | null) => AgentId | null;
   normalizeRepoAppLaunchConfig: (value: unknown) => RepoAppLaunchConfig | null;
+  normalizeRepoParallelWorktreeSettings: (value: unknown) => RepoParallelWorktreeSettings;
+  normalizeSessionParallelWorktreeMetadata: (value: unknown) => SessionParallelWorktreeMetadata;
   normalizePreferences: (preferences: Record<string, unknown>) => AppPreferences;
   saveState: (state: StoredAppState) => Promise<void>;
 };
@@ -332,6 +401,7 @@ const SESSION_ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg"
 const DEFAULT_AUTH_SERVER_URL = "https://hydra-auth.omavashia1233.workers.dev";
 const TRUSTED_RENDERER_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "renderer", "index.html"));
 const TRUSTED_AUTH_ENTRY_PATH = path.resolve(path.join(__dirname, "..", "renderer", "auth.html"));
+const PARALLEL_WORKTREE_MARKER_PREFIX = "HYDRA_PARALLEL_WORKTREE ";
 const AGENT_LABELS: Record<AgentId, string> = Object.fromEntries(
   AGENT_DEFINITIONS.map((agent) => [agent.id, agent.label])
 ) as Record<AgentId, string>;
@@ -540,6 +610,148 @@ function sanitizePreferencesPatch(patch: unknown): AppPreferencesPatch {
   return nextPatch;
 }
 
+function sanitizeRepoParallelWorktreeSettingsPatch(patch: unknown): Partial<RepoParallelWorktreeSettings> {
+  if (!isPlainObject(patch)) {
+    return {};
+  }
+
+  const nextPatch: Partial<RepoParallelWorktreeSettings> = {};
+
+  if (typeof patch.enabled === "boolean") {
+    nextPatch.enabled = patch.enabled;
+  }
+  if (typeof patch.baseBranch === "string") {
+    nextPatch.baseBranch = normalizeBranchValue(patch.baseBranch) || "main";
+  }
+  if (typeof patch.landingBranch === "string") {
+    nextPatch.landingBranch = normalizeBranchValue(patch.landingBranch) || "main";
+  }
+
+  return nextPatch;
+}
+
+function normalizeWorktreeCloseAction(value: unknown): WorktreeCloseAction {
+  if (!isPlainObject(value)) {
+    return { kind: "keep" };
+  }
+
+  if (value.kind === "delete") {
+    return { kind: "delete" };
+  }
+
+  if (value.kind === "push") {
+    return {
+      kind: "push",
+      branch: normalizeBranchValue(value.branch) || ""
+    };
+  }
+
+  return { kind: "keep" };
+}
+
+function normalizeSessionCloseRequest(value: unknown): SessionCloseRequest {
+  if (isPlainObject(value)) {
+    return {
+      sessionId: typeof value.sessionId === "string" ? value.sessionId : "",
+      worktreeAction: normalizeWorktreeCloseAction(value.worktreeAction)
+    };
+  }
+
+  return {
+    sessionId: typeof value === "string" ? value : "",
+    worktreeAction: { kind: "keep" }
+  };
+}
+
+function normalizeBranchValue(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function emptyParallelWorktreeMetadata(): SessionParallelWorktreeMetadata {
+  return normalizeSessionParallelWorktreeMetadata({});
+}
+
+function safeWorktreePathSegment(value: string, fallback: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return normalized || fallback;
+}
+
+function safeGitRefSegment(value: string, fallback: string): string {
+  const normalized = safeWorktreePathSegment(value, fallback)
+    .replace(/\.+/g, ".")
+    .replace(/^\.+|\.+$/g, "");
+  if (!normalized || normalized.endsWith(".lock")) {
+    return fallback;
+  }
+  return normalized;
+}
+
+function parallelWorktreeRootPath(): string {
+  return path.join(app.getPath("userData"), "parallel-worktrees");
+}
+
+function buildSessionWorktreePath(repo: RepoRecord, session: SessionRecord): string {
+  const repoSegment = safeWorktreePathSegment(repo.name || repo.id, "repo");
+  const repoIdSegment = safeWorktreePathSegment(repo.id, "repo").slice(0, 8);
+  const sessionSegment = safeWorktreePathSegment(session.id, "session").slice(0, 8);
+  const suffix = randomBytes(3).toString("hex");
+  return path.join(
+    parallelWorktreeRootPath(),
+    `${repoSegment}-${repoIdSegment}`,
+    `${sessionSegment}-${suffix}`
+  );
+}
+
+function buildSessionWorktreeBranch(repo: RepoRecord, session: SessionRecord): string {
+  const repoSegment = safeGitRefSegment(repo.name || repo.id, "repo");
+  const sessionSegment = safeGitRefSegment(session.id, "session").slice(0, 8);
+  const suffix = randomBytes(3).toString("hex");
+  return `hydra/${repoSegment}/${sessionSegment}-${suffix}`;
+}
+
+function gitFailureMessage(result: { stderr: string; stdout: string; exitCode: number }): string {
+  const detail = (result.stderr || result.stdout || "").trim();
+  return detail || `git exited with status ${result.exitCode}`;
+}
+
+function sessionWorkingDirectory(session: SessionRecord, repo: RepoRecord): string {
+  return session.parallelWorktree.mode === "isolated" && session.parallelWorktree.worktreePath
+    ? session.parallelWorktree.worktreePath
+    : repo.path;
+}
+
+function parallelWorktreeDisplayState(
+  metadata: SessionParallelWorktreeMetadata | null | undefined
+): ParallelWorktreeLifecycleState | "overlap_warning" {
+  if (!metadata) {
+    return "inactive";
+  }
+
+  if (
+    metadata.overlapSessionIds.length > 0 &&
+    (
+      metadata.lifecycleState === "shared_checkout" ||
+      metadata.lifecycleState === "awaiting_agent" ||
+      metadata.lifecycleState === "active" ||
+      metadata.lifecycleState === "ready_to_finish"
+    )
+  ) {
+    return "overlap_warning";
+  }
+
+  return metadata.lifecycleState;
+}
+
 function tokscaleBinaryPackageName(): string | null {
   const arch = process.arch;
 
@@ -645,6 +857,8 @@ class AppController {
   signalBuffers: Map<string, string>;
   blockerClearStreaks: Map<string, number>;
   queuedSessionLaunches: Map<string, QueuedSessionLaunch>;
+  parallelWorktreeLineBuffers: Map<string, string>;
+  repoParallelWorktreeRefreshTimers: Map<string, NodeJS.Timeout>;
   ptyHost: PtyHostClientInstance;
   ephemeralSessions: Map<string, EphemeralSessionRecord>;
   lazygitPath: string | null;
@@ -679,6 +893,8 @@ class AppController {
     this.signalBuffers = new Map();
     this.blockerClearStreaks = new Map();
     this.queuedSessionLaunches = new Map();
+    this.parallelWorktreeLineBuffers = new Map();
+    this.repoParallelWorktreeRefreshTimers = new Map();
     this.ephemeralSessions = new Map();
     this.lazygitPath = null;
     this.tokscalePath = null;
@@ -1117,7 +1333,10 @@ class AppController {
     ipcMain.handle("session:restart", (_event, payload: SessionRestartRequest) =>
       this.restartSession(payload.sessionId)
     );
-    ipcMain.handle("session:close", (_event, sessionId) => this.closeSession(sessionId));
+    ipcMain.handle("session:close", (_event, payload) => {
+      const request = normalizeSessionCloseRequest(payload);
+      return this.closeSession(request.sessionId, request.worktreeAction);
+    });
     ipcMain.handle("session:input", (_event, payload) => {
       this.handleSessionInput(payload.sessionId, payload.data);
     });
@@ -1132,12 +1351,28 @@ class AppController {
     ipcMain.handle("repo:contextMenu", (_event, payload) =>
       this.showRepoContextMenu(payload.repoId, payload.position)
     );
+    ipcMain.handle("repo:updateParallelWorktreeSettings", (_event, payload: RepoParallelWorktreeSettingsPatch) =>
+      this.updateRepoParallelWorktreeSettings(payload?.repoId, payload)
+    );
+    ipcMain.handle("repo:listBranches", (_event, repoId) => this.listRepoBranches(repoId));
     ipcMain.handle("clipboard:readText", () => clipboard.readText());
     ipcMain.handle("clipboard:writeText", (_event, text) => {
       clipboard.writeText(text || "");
       return true;
     });
     ipcMain.handle("path:reveal", (_event, payload) => this.revealTrustedPath(payload || {}));
+    ipcMain.handle("worktree:reveal", (_event, payload: WorktreeRevealRequest) =>
+      this.revealTrackedWorktree(payload)
+    );
+    ipcMain.handle("worktree:delete", (_event, payload: WorktreeDeleteRequest) =>
+      this.deleteTrackedWorktree(payload)
+    );
+    ipcMain.handle("worktree:resume", (_event, payload: WorktreeResumeRequest) =>
+      this.resumeTrackedWorktree(payload)
+    );
+    ipcMain.handle("worktree:rename", (_event, payload: WorktreeRenameRequest) =>
+      this.renameTrackedWorktree(payload)
+    );
     ipcMain.handle("path:openExternal", (_event, payload) =>
       this.openTrustedExternalUrl(payload || {})
     );
@@ -2071,6 +2306,302 @@ class AppController {
     this.broadcastState();
   }
 
+  effectiveRepoParallelWorktreeSettings(repo: RepoRecord): RepoParallelWorktreeSettings {
+    return normalizeRepoParallelWorktreeSettings(repo.parallelWorktreeSettings);
+  }
+
+  liveAgentSessionsForRepo(repoId: string, excludeSessionId: string | null = null): SessionRecord[] {
+    return this.state.sessions.filter((session) =>
+      session.repoID === repoId &&
+      session.launchProfile === "agent" &&
+      session.runtimeState !== "stopped" &&
+      session.id !== excludeSessionId
+    );
+  }
+
+  initialParallelWorktreeModeForNewSession(
+    repo: RepoRecord,
+    excludeSessionId: string | null = null
+  ): ParallelWorktreeSessionMode {
+    const settings = this.effectiveRepoParallelWorktreeSettings(repo);
+    if (!settings.enabled) {
+      return "disabled";
+    }
+
+    return "isolated";
+  }
+
+  buildParallelWorktreeMetadata(
+    repo: RepoRecord,
+    mode: ParallelWorktreeSessionMode
+  ): SessionParallelWorktreeMetadata {
+    const settings = this.effectiveRepoParallelWorktreeSettings(repo);
+    return normalizeSessionParallelWorktreeMetadata({
+      mode,
+      lifecycleState:
+        mode === "shared"
+          ? "shared_checkout"
+          : mode === "isolated"
+            ? "awaiting_agent"
+            : "inactive",
+      baseBranch: settings.enabled ? settings.baseBranch : null,
+      landingBranch: settings.enabled ? settings.landingBranch : null,
+      worktreePath: mode === "shared" ? repo.path : null,
+      branch: null,
+      changedFiles: [],
+      overlapSessionIds: [],
+      promptInjectedAt: null,
+      lastEventAt: null,
+      lastError: null
+    });
+  }
+
+  prepareManagedParallelWorktree(
+    session: SessionRecord,
+    repo: RepoRecord,
+    launchReason: ParallelWorktreeLaunchReason,
+    previousPath: string | null,
+    previousBranch: string | null
+  ): void {
+    if (session.parallelWorktree.mode !== "isolated") {
+      return;
+    }
+
+    if (launchReason === "reopen") {
+      if (previousPath && validateWorktreePathSync(repo.path, previousPath)) {
+        session.parallelWorktree.worktreePath = previousPath;
+        session.parallelWorktree.branch =
+          previousBranch || readCurrentBranchSync(previousPath) || session.parallelWorktree.branch;
+        session.parallelWorktree.lifecycleState = "active";
+        session.parallelWorktree.lastEventAt = now();
+        session.parallelWorktree.lastError = null;
+        return;
+      }
+
+      const message = previousPath
+        ? `Hydra could not find the previous isolated worktree at ${previousPath}.`
+        : "Hydra could not find the previous isolated worktree for this session.";
+      session.parallelWorktree.lifecycleState = "landing_failed";
+      session.parallelWorktree.lastEventAt = now();
+      session.parallelWorktree.lastError = message;
+      throw new Error(message);
+    }
+
+    const baseBranch =
+      session.parallelWorktree.baseBranch || this.effectiveRepoParallelWorktreeSettings(repo).baseBranch;
+    const worktreePath = buildSessionWorktreePath(repo, session);
+    const branchName = buildSessionWorktreeBranch(repo, session);
+    const result = createWorktreeSync(repo.path, worktreePath, branchName, baseBranch);
+
+    if (!result.ok) {
+      const message = `Hydra could not create an isolated worktree from ${baseBranch}: ${gitFailureMessage(result)}`;
+      session.parallelWorktree.lifecycleState = "landing_failed";
+      session.parallelWorktree.worktreePath = null;
+      session.parallelWorktree.branch = null;
+      session.parallelWorktree.lastEventAt = now();
+      session.parallelWorktree.lastError = message;
+      throw new Error(message);
+    }
+
+    session.parallelWorktree.lifecycleState = "active";
+    session.parallelWorktree.worktreePath = worktreePath;
+    session.parallelWorktree.branch = branchName;
+    session.parallelWorktree.lastEventAt = now();
+    session.parallelWorktree.lastError = null;
+  }
+
+  archiveSessionParallelWorktree(
+    session: SessionRecord,
+    repo: RepoRecord,
+    state: RepoParallelWorktreeLedgerEntry["state"] = "cleanup_pending"
+  ): void {
+    if (session.parallelWorktree.mode !== "isolated" || !session.parallelWorktree.worktreePath) {
+      return;
+    }
+
+    const worktreePath = session.parallelWorktree.worktreePath;
+    const existingIndex = repo.parallelWorktreeLedger.findIndex((entry) => entry.path === worktreePath);
+    const timestamp = now();
+    const nextEntry: RepoParallelWorktreeLedgerEntry = {
+      id:
+        repo.parallelWorktreeLedger[existingIndex]?.id ||
+        `${session.id}:${Buffer.from(worktreePath).toString("base64").slice(0, 12)}`,
+      sessionId: session.id,
+      sessionTitle: session.title,
+      path: worktreePath,
+      branch: session.parallelWorktree.branch,
+      state,
+      baseBranch: session.parallelWorktree.baseBranch,
+      landingBranch: session.parallelWorktree.landingBranch,
+      createdAt: repo.parallelWorktreeLedger[existingIndex]?.createdAt || timestamp,
+      updatedAt: timestamp,
+      lastError: session.parallelWorktree.lastError
+    };
+
+    if (existingIndex >= 0) {
+      repo.parallelWorktreeLedger.splice(existingIndex, 1, nextEntry);
+    } else {
+      repo.parallelWorktreeLedger.unshift(nextEntry);
+    }
+  }
+
+  removeTrackedWorktreeLedgerEntry(repo: RepoRecord, worktreePath: string): boolean {
+    const resolvedPath = path.resolve(worktreePath);
+    const previousLength = repo.parallelWorktreeLedger.length;
+    repo.parallelWorktreeLedger = repo.parallelWorktreeLedger.filter(
+      (entry) => path.resolve(entry.path) !== resolvedPath
+    );
+    return repo.parallelWorktreeLedger.length !== previousLength;
+  }
+
+  applySessionWorktreeCloseAction(
+    session: SessionRecord,
+    repo: RepoRecord,
+    action: WorktreeCloseAction
+  ): boolean {
+    if (session.parallelWorktree.mode !== "isolated" || !session.parallelWorktree.worktreePath) {
+      return false;
+    }
+
+    const worktreePath = session.parallelWorktree.worktreePath;
+    if (action.kind === "push") {
+      const targetBranch = normalizeBranchValue(action.branch);
+      if (!targetBranch) {
+        throw new Error("Choose a branch before pushing this worktree.");
+      }
+
+      const pushResult = fastForwardWorktreeToBranchSync(repo.path, worktreePath, targetBranch);
+      if (!pushResult.ok) {
+        throw new Error(`Hydra could not push this worktree to ${targetBranch}: ${gitFailureMessage(pushResult)}`);
+      }
+    }
+
+    if (action.kind !== "delete" && action.kind !== "push") {
+      return false;
+    }
+
+    const deleteResult = deleteWorktreeSync(repo.path, worktreePath);
+    if (!deleteResult.ok) {
+      throw new Error(`Hydra could not delete this worktree: ${gitFailureMessage(deleteResult)}`);
+    }
+
+    this.removeTrackedWorktreeLedgerEntry(repo, worktreePath);
+    return true;
+  }
+
+  buildParallelWorktreePrompt(context: ParallelWorktreePromptContext): string {
+    const lines = [
+      "Hydra parallel worktree contract for this session:",
+      `- Session id: ${context.session.id}`,
+      `- Repo path: ${context.repo.path}`,
+      `- Mode: ${context.mode === "isolated" ? "isolated worktree" : "shared checkout"}`,
+      `- Base branch: ${context.baseBranch}`,
+      `- Landing branch: ${context.landingBranch}`,
+      `- Worktree path: ${context.session.parallelWorktree.worktreePath || context.repo.path}`,
+      `- Session branch: ${context.session.parallelWorktree.branch || "shared checkout"}`,
+      "- Emit machine-readable status markers as plain single lines.",
+      `- Marker prefix: ${PARALLEL_WORKTREE_MARKER_PREFIX}{json}`,
+      "- Required marker fields: state, mode, path, branch, baseBranch, landingBranch, error when present.",
+      '- Example marker: HYDRA_PARALLEL_WORKTREE {"state":"active","mode":"isolated","path":"/tmp/repo-wt","branch":"hydra/task","baseBranch":"main","landingBranch":"dev"}',
+      "- Required lifecycle markers: shared_checkout or active at startup, ready_to_finish before final git work, landing_in_progress when landing starts, landed on success, landing_failed with an error when landing fails."
+    ];
+
+    if (context.mode === "isolated") {
+      if (context.launchReason === "reopen" && context.previousPath) {
+        lines.push(`- Resume the existing worktree at ${context.previousPath}.`);
+        if (context.previousBranch) {
+          lines.push(`- Resume the existing branch ${context.previousBranch}.`);
+        }
+      } else {
+        lines.push("- Hydra has already created the dedicated git worktree for this conversation.");
+      }
+      lines.push("- Do not create another worktree and do not edit the shared checkout unless the user explicitly asks.");
+    } else if (context.mode === "shared") {
+      lines.push("- Stay in the shared checkout for this session.");
+      lines.push("- Do not create a worktree unless the user explicitly asks.");
+    }
+
+    lines.push("- When the task is complete, you own the merge/push work. Land the changes onto the configured landing branch.");
+    lines.push("- Prefer a squash-style landing so one conversation becomes one clean landing commit unless the user says otherwise.");
+    lines.push("- Use the same session for landing. Do not hand landing off to another session.");
+    lines.push("- If landing fails, emit landing_failed and stop so the user can intervene.");
+
+    return `${lines.join("\n")}\n`;
+  }
+
+  configureParallelWorktreeLaunch(
+    session: SessionRecord,
+    repo: RepoRecord,
+    launchReason: ParallelWorktreeLaunchReason
+  ): void {
+    const requestedPrompt = typeof session.initialPrompt === "string" ? session.initialPrompt.trim() : "";
+
+    if (session.launchProfile !== "agent" || !session.startupAgentId) {
+      session.parallelWorktree = emptyParallelWorktreeMetadata();
+      session.initialPrompt = "";
+      return;
+    }
+
+    if (launchReason === "restart") {
+      this.archiveSessionParallelWorktree(session, repo, "cleanup_pending");
+    }
+
+    const previousPath = session.parallelWorktree.worktreePath;
+    const previousBranch = session.parallelWorktree.branch;
+
+    let mode: ParallelWorktreeSessionMode;
+    if (launchReason === "create" || launchReason === "resume") {
+      mode = this.initialParallelWorktreeModeForNewSession(repo, session.id);
+      session.parallelWorktree = this.buildParallelWorktreeMetadata(repo, mode);
+    } else {
+      const existingMode = session.parallelWorktree?.mode || "disabled";
+      mode =
+        existingMode === "disabled"
+          ? this.initialParallelWorktreeModeForNewSession(repo, session.id)
+          : existingMode;
+      const nextMetadata = this.buildParallelWorktreeMetadata(repo, mode);
+      if (launchReason === "reopen" && session.parallelWorktree.mode === "isolated") {
+        nextMetadata.worktreePath = previousPath;
+        nextMetadata.branch = previousBranch;
+      }
+      session.parallelWorktree = nextMetadata;
+    }
+
+    const settings = this.effectiveRepoParallelWorktreeSettings(repo);
+    if (!settings.enabled || mode === "disabled") {
+      session.parallelWorktree = emptyParallelWorktreeMetadata();
+      session.initialPrompt = "";
+      return;
+    }
+
+    this.prepareManagedParallelWorktree(
+      session,
+      repo,
+      launchReason,
+      previousPath,
+      previousBranch
+    );
+
+    const prompt = this.buildParallelWorktreePrompt({
+      session,
+      repo,
+      mode,
+      baseBranch: settings.baseBranch,
+      landingBranch: settings.landingBranch,
+      launchReason,
+      previousPath: launchReason === "reopen" ? previousPath : null,
+      previousBranch: launchReason === "reopen" ? previousBranch : null
+    });
+
+    const launchPrompt = requestedPrompt ? `${prompt}\n${requestedPrompt}` : prompt;
+    session.initialPrompt = launchPrompt;
+    session.parallelWorktree.baseBranch = settings.baseBranch;
+    session.parallelWorktree.landingBranch = settings.landingBranch;
+    session.parallelWorktree.promptInjectedAt = now();
+    session.parallelWorktree.lastError = null;
+    this.queueSessionLaunch(session.id, `${launchPrompt}\r`, session.title);
+  }
+
   createSession(
     repoId: string,
     launchesClaudeOnStart?: boolean,
@@ -2115,9 +2646,15 @@ class AppController {
       tagColor: null,
       sessionIconPath: null,
       sessionIconUpdatedAt: null,
+      parallelWorktree: this.buildParallelWorktreeMetadata(
+        repo,
+        startupAgentId ? this.initialParallelWorktreeModeForNewSession(repo, sessionId) : "disabled"
+      ),
       transcript: "",
       rawTranscript: ""
     };
+
+    this.configureParallelWorktreeLaunch(session, repo, "create");
 
     this.state.sessions.unshift(session);
     const launchMsg = `Launching ${session.startupAgentId}...\n`;
@@ -2125,7 +2662,7 @@ class AppController {
     session.transcript = launchMsg;
     this.broadcastState();
 
-    if (initialPrompt) {
+    if (initialPrompt && session.parallelWorktree.mode === "disabled") {
       this.queueSessionLaunch(session.id, `${initialPrompt}\r`);
     }
 
@@ -2145,6 +2682,7 @@ class AppController {
 
   renameSession(sessionId: string, title: string): boolean {
     const session = this.sessionById(sessionId);
+    const repo = session ? this.repoById(session.repoID) : null;
     if (!session) {
       return false;
     }
@@ -2156,6 +2694,14 @@ class AppController {
 
     session.title = nextTitle;
     session.updatedAt = now();
+    if (repo) {
+      for (const entry of repo.parallelWorktreeLedger) {
+        if (entry.sessionId === sessionId) {
+          entry.sessionTitle = nextTitle;
+          entry.updatedAt = now();
+        }
+      }
+    }
     this.scheduleSave();
     this.broadcastState();
     return true;
@@ -2283,6 +2829,8 @@ class AppController {
     session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${bannerChunk}`);
     session.transcript = trimTranscript(this.terminalBuffer(session.id, session.transcript).consume(bannerChunk));
     this.resetSignalTracking(session.id);
+    this.parallelWorktreeLineBuffers.delete(session.id);
+    this.configureParallelWorktreeLaunch(session, repo, "reopen");
 
     this.launchRuntime(session, repo);
     this.scheduleSave();
@@ -2360,20 +2908,32 @@ class AppController {
     return { stoppedSessionIds };
   }
 
-  closeSession(sessionId: string): void {
+  closeSession(sessionId: string, worktreeAction: WorktreeCloseAction = { kind: "keep" }): void {
     const session = this.sessionById(sessionId);
+    const repo = session ? this.repoById(session.repoID) : null;
+    const removedWorktree =
+      session && repo
+        ? this.applySessionWorktreeCloseAction(session, repo, worktreeAction)
+        : false;
     this.pendingSessionRestarts.delete(sessionId);
     this.pendingSessionStops.delete(sessionId);
     this.cancelPendingAgentLaunch(sessionId);
     this.queuedSessionLaunches.delete(sessionId);
     this.sessionSizes.delete(sessionId);
     this.terminalBuffers.delete(sessionId);
+    this.parallelWorktreeLineBuffers.delete(sessionId);
     this.resetSignalTracking(sessionId);
     this.ptyHost.killSession(sessionId);
     this.focusedSessionId = this.focusedSessionId === sessionId ? null : this.focusedSessionId;
+    if (session && repo && !removedWorktree) {
+      this.archiveSessionParallelWorktree(session, repo, "cleanup_pending");
+    }
     this.state.sessions = this.state.sessions.filter((session) => session.id !== sessionId);
     if (session?.sessionIconPath) {
       removeStoredSessionIconFiles(session.id, null);
+    }
+    if (repo) {
+      this.scheduleParallelWorktreeRefresh(repo.id);
     }
     this.scheduleSave();
     this.broadcastState();
@@ -2567,10 +3127,15 @@ class AppController {
       tagColor: null,
       sessionIconPath: null,
       sessionIconUpdatedAt: null,
+      parallelWorktree: this.buildParallelWorktreeMetadata(
+        repo,
+        this.initialParallelWorktreeModeForNewSession(repo, sessionId)
+      ),
       transcript: "",
       rawTranscript: ""
     };
 
+    this.configureParallelWorktreeLaunch(session, repo, "resume");
     this.state.sessions.unshift(session);
     this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(session.transcript));
     this.launchRuntime(session, repo);
@@ -2609,6 +3174,8 @@ class AppController {
           path: path.resolve(workspace.rootPath),
           wikiEnabled: false,
           appLaunchConfig: null,
+          parallelWorktreeSettings: normalizeRepoParallelWorktreeSettings({}),
+          parallelWorktreeLedger: [],
           discoveredAt: now()
         };
 
@@ -2658,6 +3225,44 @@ class AppController {
     this.broadcastState();
   }
 
+  updateRepoParallelWorktreeSettings(
+    repoId: string,
+    patch: unknown
+  ): RepoParallelWorktreeSettings | null {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      throw new Error("Project not found.");
+    }
+
+    const sanitizedPatch = sanitizeRepoParallelWorktreeSettingsPatch(patch);
+    const nextSettings = normalizeRepoParallelWorktreeSettings({
+      ...repo.parallelWorktreeSettings,
+      ...sanitizedPatch
+    });
+    repo.parallelWorktreeSettings = nextSettings;
+    repo.updatedAt = now();
+    const effectiveSettings = this.effectiveRepoParallelWorktreeSettings(repo);
+    for (const session of this.state.sessions) {
+      if (session.repoID === repo.id && session.parallelWorktree.mode !== "disabled") {
+        session.parallelWorktree.baseBranch = effectiveSettings.baseBranch;
+        session.parallelWorktree.landingBranch = effectiveSettings.landingBranch;
+      }
+    }
+    this.scheduleParallelWorktreeRefresh(repo.id);
+    this.scheduleSave();
+    this.broadcastState();
+    return structuredClone(nextSettings);
+  }
+
+  listRepoBranches(repoId: string): string[] {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      return [];
+    }
+
+    return listBranchesSync(repo.path);
+  }
+
   updateRepoAppLaunchConfig(repoId: string, config: unknown): RepoAppLaunchConfig | null {
     const repo = this.repoById(repoId);
     if (!repo) {
@@ -2704,6 +3309,212 @@ class AppController {
     }
 
     return sessionId;
+  }
+
+  revealTrackedWorktree(payload: WorktreeRevealRequest): void {
+    const repo = this.repoById(payload?.repoId);
+    const worktreePath = typeof payload?.worktreePath === "string" ? payload.worktreePath.trim() : "";
+    if (!repo || !worktreePath) {
+      return;
+    }
+
+    const matchesLiveSession = this.state.sessions.some((session) =>
+      session.repoID === repo.id && session.parallelWorktree.worktreePath === worktreePath
+    );
+    const matchesLedger = repo.parallelWorktreeLedger.some((entry) => entry.path === worktreePath);
+    if (!matchesLiveSession && !matchesLedger) {
+      return;
+    }
+
+    shell.showItemInFolder(worktreePath);
+  }
+
+  deleteTrackedWorktree(payload: WorktreeDeleteRequest): boolean {
+    const repo = this.repoById(payload?.repoId);
+    const worktreePath = typeof payload?.worktreePath === "string" ? payload.worktreePath.trim() : "";
+    if (!repo || !worktreePath) {
+      return false;
+    }
+
+    const activeSession = this.state.sessions.find((session) =>
+      session.repoID === repo.id &&
+      session.parallelWorktree.mode === "isolated" &&
+      session.parallelWorktree.worktreePath === worktreePath &&
+      (!payload.sessionId || payload.sessionId === session.id)
+    );
+    if (activeSession) {
+      this.closeSession(activeSession.id, { kind: "delete" });
+      return true;
+    }
+
+    const matchesLedger = repo.parallelWorktreeLedger.some((entry) => entry.path === worktreePath);
+    if (!matchesLedger) {
+      return false;
+    }
+
+    const deleteResult = deleteWorktreeSync(repo.path, worktreePath);
+    if (!deleteResult.ok) {
+      throw new Error(`Hydra could not delete this worktree: ${gitFailureMessage(deleteResult)}`);
+    }
+
+    this.removeTrackedWorktreeLedgerEntry(repo, worktreePath);
+    repo.updatedAt = now();
+    this.scheduleParallelWorktreeRefresh(repo.id);
+    this.scheduleSave();
+    this.broadcastState();
+    return true;
+  }
+
+  renameTrackedWorktree(payload: WorktreeRenameRequest): boolean {
+    const repo = this.repoById(payload?.repoId);
+    const worktreePath = typeof payload?.worktreePath === "string" ? payload.worktreePath.trim() : "";
+    const title = typeof payload?.title === "string" ? payload.title.trim() : "";
+    if (!repo || !worktreePath || !title) {
+      return false;
+    }
+
+    let changed = false;
+    for (const session of this.state.sessions) {
+      if (
+        session.repoID === repo.id &&
+        session.parallelWorktree.worktreePath === worktreePath &&
+        session.title !== title
+      ) {
+        session.title = title;
+        session.updatedAt = now();
+        this.sendSessionUpdated(session.id);
+        changed = true;
+      }
+    }
+
+    for (const entry of repo.parallelWorktreeLedger) {
+      if (entry.path === worktreePath && entry.sessionTitle !== title) {
+        entry.sessionTitle = title;
+        entry.updatedAt = now();
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      return false;
+    }
+
+    repo.updatedAt = now();
+    this.scheduleSave();
+    this.broadcastState();
+    return true;
+  }
+
+  resumeTrackedWorktree(payload: WorktreeResumeRequest): string | null {
+    const repo = this.repoById(payload?.repoId);
+    const worktreePath = typeof payload?.worktreePath === "string" ? payload.worktreePath.trim() : "";
+    if (!repo || !worktreePath) {
+      return null;
+    }
+
+    const entryIndex = repo.parallelWorktreeLedger.findIndex((entry) => entry.path === worktreePath);
+    const entry = entryIndex >= 0 ? repo.parallelWorktreeLedger[entryIndex] : null;
+    const activeSession = this.state.sessions.find((session) =>
+      session.repoID === repo.id &&
+      session.parallelWorktree.mode === "isolated" &&
+      session.parallelWorktree.worktreePath === worktreePath
+    );
+    if (activeSession) {
+      if (activeSession.runtimeState === "stopped") {
+        this.reopenSession(activeSession.id);
+      }
+      return activeSession.id;
+    }
+
+    if (!entry) {
+      return null;
+    }
+
+    if (!validateWorktreePathSync(repo.path, worktreePath)) {
+      this.removeTrackedWorktreeLedgerEntry(repo, worktreePath);
+      repo.updatedAt = now();
+      this.scheduleSave();
+      this.broadcastState();
+      throw new Error("Hydra could not find that worktree. It was removed from the manager.");
+    }
+
+    const startupAgentId = normalizeAgentId(this.state.preferences.defaultAgentId, null);
+    if (!startupAgentId) {
+      return null;
+    }
+
+    const sessionId = randomUUID();
+    const settings = this.effectiveRepoParallelWorktreeSettings(repo);
+    const baseBranch = entry.baseBranch || settings.baseBranch;
+    const landingBranch = entry.landingBranch || settings.landingBranch;
+    const branch = readCurrentBranchSync(worktreePath) || entry.branch;
+    const session: SessionRecord = {
+      id: sessionId,
+      repoID: repo.id,
+      title: entry.sessionTitle || repo.name,
+      launchProfile: "agent",
+      initialPrompt: "",
+      launchesClaudeOnStart: true,
+      startupAgentId,
+      claudeSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
+      agentSessionId: startupAgentId === DEFAULT_AGENT_ID ? sessionId : null,
+      status: "running",
+      runtimeState: "launching",
+      blocker: null,
+      unreadCount: 0,
+      createdAt: now(),
+      updatedAt: now(),
+      lastActivityAt: null,
+      stoppedAt: null,
+      launchCount: 1,
+      isPinned: false,
+      tagColor: null,
+      sessionIconPath: null,
+      sessionIconUpdatedAt: null,
+      parallelWorktree: normalizeSessionParallelWorktreeMetadata({
+        mode: "isolated",
+        lifecycleState: "active",
+        baseBranch,
+        landingBranch,
+        worktreePath,
+        branch,
+        lastEventAt: now()
+      }),
+      transcript: "",
+      rawTranscript: ""
+    };
+
+    const launchPrompt = this.buildParallelWorktreePrompt({
+      session,
+      repo,
+      mode: "isolated",
+      baseBranch,
+      landingBranch,
+      launchReason: "reopen",
+      previousPath: worktreePath,
+      previousBranch: branch
+    });
+    session.initialPrompt = launchPrompt;
+    session.parallelWorktree.promptInjectedAt = now();
+    this.queueSessionLaunch(session.id, `${launchPrompt}\r`, session.title);
+
+    repo.parallelWorktreeLedger.splice(entryIndex, 1);
+    this.state.sessions.unshift(session);
+    const launchMsg = `Launching ${session.startupAgentId}...\n`;
+    this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(launchMsg));
+    session.transcript = launchMsg;
+    invalidateSessionSearchCache(repo.path);
+    this.broadcastState();
+
+    setImmediate(() => {
+      this.launchRuntime(session, repo);
+      session.runtimeState = "live";
+      this.scheduleParallelWorktreeRefresh(repo.id);
+      this.scheduleSave();
+      this.broadcastState();
+    });
+
+    return session.id;
   }
 
   findReusableAppSession(repoId: string): SessionRecord | null {
@@ -2776,7 +3587,7 @@ class AppController {
     if (agentLaunchCommand) {
       this.ptyHost.createSession({
         sessionId: session.id,
-        cwd: repo.path,
+        cwd: sessionWorkingDirectory(session, repo),
         command: agentLaunchCommand.command,
         env: agentLaunchCommand.env
       });
@@ -2785,7 +3596,7 @@ class AppController {
 
     this.ptyHost.createSession({
       sessionId: session.id,
-      cwd: repo.path,
+      cwd: sessionWorkingDirectory(session, repo),
       shellPath: resolvedShellPath(this.state.preferences)
     });
   }
@@ -2893,6 +3704,210 @@ class AppController {
     }
 
     this.flushQueuedSessionLaunch(sessionId);
+    if (session.launchProfile === "agent") {
+      this.scheduleParallelWorktreeRefresh(session.repoID);
+    }
+  }
+
+  scheduleParallelWorktreeRefresh(repoId: string): void {
+    const existingTimer = this.repoParallelWorktreeRefreshTimers.get(repoId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const timer = setTimeout(() => {
+      this.repoParallelWorktreeRefreshTimers.delete(repoId);
+      void this.refreshRepoParallelWorktreeState(repoId);
+    }, 800);
+    this.repoParallelWorktreeRefreshTimers.set(repoId, timer);
+  }
+
+  async refreshRepoParallelWorktreeState(repoId: string): Promise<void> {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      return;
+    }
+
+    let changed = false;
+    if (repo.parallelWorktreeLedger.length) {
+      const ledgerValidity = await Promise.all(
+        repo.parallelWorktreeLedger.map(async (entry) => [
+          entry.path,
+          await validateWorktreePath(repo.path, entry.path)
+        ] as const)
+      );
+      const validLedgerPaths = new Set(
+        ledgerValidity
+          .filter(([, valid]) => valid)
+          .map(([worktreePath]) => path.resolve(worktreePath))
+      );
+      const nextLedger = repo.parallelWorktreeLedger.filter((entry) =>
+        validLedgerPaths.has(path.resolve(entry.path))
+      );
+      if (nextLedger.length !== repo.parallelWorktreeLedger.length) {
+        repo.parallelWorktreeLedger = nextLedger;
+        repo.updatedAt = now();
+        changed = true;
+      }
+    }
+
+    const candidateSessions = this.state.sessions.filter((session) =>
+      session.repoID === repoId &&
+      session.launchProfile === "agent" &&
+      session.parallelWorktree.mode !== "disabled"
+    );
+    if (!candidateSessions.length) {
+      if (changed) {
+        this.scheduleSave();
+        this.broadcastState();
+      }
+      return;
+    }
+
+    const changedFilePairs = await Promise.all(
+      candidateSessions.map(async (session) => {
+        const targetPath =
+          session.parallelWorktree.mode === "shared"
+            ? repo.path
+            : session.parallelWorktree.worktreePath;
+        const baseBranch = session.parallelWorktree.baseBranch || this.effectiveRepoParallelWorktreeSettings(repo).baseBranch;
+        if (!targetPath || !baseBranch) {
+          return [session.id, [] as string[]] as const;
+        }
+
+        if (session.parallelWorktree.mode === "isolated") {
+          const valid = await validateWorktreePath(repo.path, targetPath);
+          if (!valid) {
+            if (session.parallelWorktree.lifecycleState !== "landing_failed") {
+              session.parallelWorktree.lifecycleState = "landing_failed";
+              session.parallelWorktree.lastError = "Hydra could not find this session's isolated worktree.";
+              session.parallelWorktree.lastEventAt = now();
+              changed = true;
+            }
+            return [session.id, [] as string[]] as const;
+          }
+        }
+
+        const nextChangedFiles = await listChangedFiles(targetPath, baseBranch);
+        return [session.id, nextChangedFiles] as const;
+      })
+    );
+
+    const changedFilesBySessionId = new Map<string, string[]>(changedFilePairs);
+
+    for (const session of candidateSessions) {
+      const nextChangedFiles = changedFilesBySessionId.get(session.id) || [];
+      if (!sameStringList(session.parallelWorktree.changedFiles, nextChangedFiles)) {
+        session.parallelWorktree.changedFiles = nextChangedFiles;
+        changed = true;
+      }
+    }
+
+    for (const session of candidateSessions) {
+      const currentFiles = new Set(changedFilesBySessionId.get(session.id) || []);
+      const overlappingSessionIds = candidateSessions
+        .filter((candidate) => candidate.id !== session.id)
+        .filter((candidate) =>
+          (changedFilesBySessionId.get(candidate.id) || []).some((filePath) => currentFiles.has(filePath))
+        )
+        .map((candidate) => candidate.id)
+        .sort((left, right) => left.localeCompare(right));
+
+      if (!sameStringList(session.parallelWorktree.overlapSessionIds, overlappingSessionIds)) {
+        session.parallelWorktree.overlapSessionIds = overlappingSessionIds;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.scheduleSave();
+      this.broadcastState();
+    }
+  }
+
+  processParallelWorktreeMarkers(sessionId: string, visibleChunk: string): void {
+    const session = this.sessionById(sessionId);
+    const repo = session ? this.repoById(session.repoID) : null;
+    if (!session || !repo || session.parallelWorktree.mode === "disabled") {
+      return;
+    }
+
+    const buffered = `${this.parallelWorktreeLineBuffers.get(sessionId) || ""}${visibleChunk}`;
+    const parts = buffered.split(/\r?\n/);
+    const remainder = parts.pop() || "";
+    this.parallelWorktreeLineBuffers.set(sessionId, remainder.slice(-2000));
+
+    for (const rawLine of parts) {
+      const line = rawLine.trim();
+      if (!line.startsWith(PARALLEL_WORKTREE_MARKER_PREFIX)) {
+        continue;
+      }
+
+      const payloadText = line.slice(PARALLEL_WORKTREE_MARKER_PREFIX.length).trim();
+      const payload = parseParallelWorktreeMarkerPayload(payloadText);
+      if (!payload) {
+        continue;
+      }
+
+      void this.applyParallelWorktreeMarker(session, repo, payload);
+    }
+  }
+
+  async applyParallelWorktreeMarker(
+    session: SessionRecord,
+    repo: RepoRecord,
+    payload: ParallelWorktreeMarkerPayload
+  ): Promise<void> {
+    const nextMode = payload.mode || session.parallelWorktree.mode;
+    const previousPath = session.parallelWorktree.worktreePath;
+    const reportedPath =
+      typeof payload.path === "string" && payload.path.trim()
+        ? path.resolve(repo.path, payload.path)
+        : null;
+    if (nextMode === "isolated" && reportedPath) {
+      const validWorktree = await validateWorktreePath(repo.path, reportedPath);
+      if (!validWorktree) {
+        session.parallelWorktree.lastError =
+          `Hydra could not validate the reported worktree path: ${payload.path}`;
+        session.parallelWorktree.lifecycleState = "landing_failed";
+        session.parallelWorktree.lastEventAt = now();
+        this.scheduleSave();
+        this.broadcastState();
+        return;
+      }
+    }
+
+    if (
+      previousPath &&
+      nextMode === "isolated" &&
+      !!reportedPath &&
+      path.resolve(previousPath) !== path.resolve(reportedPath)
+    ) {
+      this.archiveSessionParallelWorktree(session, repo, "cleanup_pending");
+    }
+
+    session.parallelWorktree.mode = nextMode;
+    session.parallelWorktree.lifecycleState = payload.state;
+    session.parallelWorktree.worktreePath =
+      nextMode === "shared"
+        ? repo.path
+        : reportedPath
+          ? reportedPath
+          : session.parallelWorktree.worktreePath;
+    session.parallelWorktree.branch =
+      normalizeBranchValue(payload.branch) || session.parallelWorktree.branch || await readCurrentBranch(
+        session.parallelWorktree.worktreePath || repo.path
+      );
+    session.parallelWorktree.baseBranch =
+      normalizeBranchValue(payload.baseBranch) || session.parallelWorktree.baseBranch;
+    session.parallelWorktree.landingBranch =
+      normalizeBranchValue(payload.landingBranch) || session.parallelWorktree.landingBranch;
+    session.parallelWorktree.lastError = typeof payload.error === "string" && payload.error ? payload.error : null;
+    session.parallelWorktree.lastEventAt = now();
+
+    this.scheduleParallelWorktreeRefresh(repo.id);
+    this.scheduleSave();
+    this.broadcastState();
   }
 
   handleHostData(sessionId: string, rawChunk: string): void {
@@ -2916,6 +3931,7 @@ class AppController {
 
     const signal = detectSignal(signalContext);
     const previousBlockerKey = blockerKey(session.blocker);
+    this.processParallelWorktreeMarkers(sessionId, visibleChunk);
 
     if (signal) {
       session.status = signal.status;
@@ -2948,6 +3964,7 @@ class AppController {
       this.notifyBlocker(session);
     }
 
+    this.scheduleParallelWorktreeRefresh(session.repoID);
     this.scheduleSave();
     this.sendSessionOutput(session, rawChunk);
   }
@@ -2969,6 +3986,7 @@ class AppController {
 
     this.cancelPendingAgentLaunch(sessionId);
     this.queuedSessionLaunches.delete(sessionId);
+    this.parallelWorktreeLineBuffers.delete(sessionId);
     this.resetSignalTracking(sessionId);
     this.sessionSizes.delete(sessionId);
 
@@ -3002,6 +4020,7 @@ class AppController {
       session.unreadCount += 1;
     }
 
+    this.scheduleParallelWorktreeRefresh(session.repoID);
     this.scheduleSave();
     this.sendSessionUpdated(sessionId);
   }
@@ -3042,7 +4061,7 @@ class AppController {
 
     this.ptyHost.createSession({
       sessionId: session.id,
-      cwd: repo.path,
+      cwd: sessionWorkingDirectory(session, repo),
       shellPath: resolvedShellPath(this.state.preferences)
     });
 
@@ -3083,6 +4102,8 @@ class AppController {
     session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${bannerChunk}`);
     session.transcript = trimTranscript(this.terminalBuffer(session.id, session.transcript).consume(bannerChunk));
     this.resetSignalTracking(session.id);
+    this.parallelWorktreeLineBuffers.delete(session.id);
+    this.configureParallelWorktreeLaunch(session, repo, "restart");
 
     this.launchRuntime(session, repo);
     this.scheduleSave();
@@ -3130,6 +4151,7 @@ class AppController {
       tagColor: null,
       sessionIconPath: null,
       sessionIconUpdatedAt: null,
+      parallelWorktree: emptyParallelWorktreeMetadata(),
       transcript: "",
       rawTranscript: ""
     };
@@ -3175,6 +4197,7 @@ class AppController {
       tagColor: null,
       sessionIconPath: null,
       sessionIconUpdatedAt: null,
+      parallelWorktree: emptyParallelWorktreeMetadata(),
       transcript: "",
       rawTranscript: ""
     };
@@ -3491,6 +4514,10 @@ class AppController {
       await this.voiceManager.dispose();
       this.voiceManager = null;
     }
+    for (const timer of this.repoParallelWorktreeRefreshTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.repoParallelWorktreeRefreshTimers.clear();
 
     for (const session of this.state.sessions) {
       if (session.runtimeState === "live") {
@@ -3531,6 +4558,58 @@ class AppController {
   }
 }
 
+function parseParallelWorktreeMarkerPayload(input: string): ParallelWorktreeMarkerPayload | null {
+  if (!input) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input);
+  } catch {
+    return null;
+  }
+
+  if (!isPlainObject(parsed)) {
+    return null;
+  }
+
+  const state = parsed.state;
+  if (
+    state !== "inactive" &&
+    state !== "shared_checkout" &&
+    state !== "awaiting_agent" &&
+    state !== "active" &&
+    state !== "ready_to_finish" &&
+    state !== "landing_in_progress" &&
+    state !== "landing_failed" &&
+    state !== "landed"
+  ) {
+    return null;
+  }
+
+  return {
+    state,
+    mode:
+      parsed.mode === "disabled" || parsed.mode === "shared" || parsed.mode === "isolated"
+        ? parsed.mode
+        : undefined,
+    path: typeof parsed.path === "string" && parsed.path.trim() ? parsed.path.trim() : undefined,
+    branch: normalizeBranchValue(parsed.branch) || undefined,
+    baseBranch: normalizeBranchValue(parsed.baseBranch) || undefined,
+    landingBranch: normalizeBranchValue(parsed.landingBranch) || undefined,
+    error: typeof parsed.error === "string" && parsed.error.trim() ? parsed.error.trim() : undefined
+  };
+}
+
+function sameStringList(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((value, index) => value === right[index]);
+}
+
 function summarizeSession(session: SessionRecord): SessionSummary {
   return {
     id: session.id,
@@ -3550,6 +4629,7 @@ function summarizeSession(session: SessionRecord): SessionSummary {
     tagColor: normalizeSessionTagColor(session.tagColor),
     sessionIconUrl: sessionIconUrl(session),
     sessionIconUpdatedAt: session.sessionIconUpdatedAt || null,
+    parallelWorktree: session.parallelWorktree,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     lastActivityAt: session.lastActivityAt,

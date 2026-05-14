@@ -1564,6 +1564,20 @@ textarea {
   font-family: var(--font-mono);
 }
 
+.ws-toolbar-worktree-state,
+.ws-toolbar-worktree-copy {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.ws-toolbar-worktree-state {
+  font-weight: 600;
+}
+
 .ws-toolbar-actions {
   display: flex;
   align-items: center;
@@ -2077,6 +2091,18 @@ textarea {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  flex-wrap: wrap;
+}
+
+.pane-meta-copy {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.pane-title-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -2642,6 +2668,23 @@ textarea {
 
 .status-done,
 .status-idle {
+  background: var(--status-muted-bg);
+  color: var(--status-muted-fg);
+}
+
+.parallel-worktree-badge.parallel-worktree-overlap_warning,
+.parallel-worktree-badge.parallel-worktree-landing_failed {
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
+}
+
+.parallel-worktree-badge.parallel-worktree-shared_checkout,
+.parallel-worktree-badge.parallel-worktree-awaiting_agent,
+.parallel-worktree-badge.parallel-worktree-active,
+.parallel-worktree-badge.parallel-worktree-ready_to_finish,
+.parallel-worktree-badge.parallel-worktree-landing_in_progress,
+.parallel-worktree-badge.parallel-worktree-landed,
+.parallel-worktree-badge.parallel-worktree-cleanup_pending {
   background: var(--status-muted-bg);
   color: var(--status-muted-fg);
 }
@@ -4056,6 +4099,13 @@ textarea {
   flex-direction: column;
   gap: 12px;
   padding: 16px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .settings-dialog-body {
@@ -5546,6 +5596,17 @@ textarea {
   max-width: 480px;
 }
 
+.settings-inline-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-inline-field input,
+.settings-inline-field select {
+  max-width: 360px;
+}
+
 .settings-field-remove {
   align-self: flex-start;
 }
@@ -5599,6 +5660,119 @@ textarea {
   flex: none;
 }
 
+.repo-worktree-panel,
+.settings-worktree-row,
+.repo-worktree-row {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.repo-worktree-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.repo-worktree-header,
+.settings-worktree-row,
+.repo-worktree-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.repo-worktree-title-row,
+.repo-worktree-actions,
+.settings-worktree-actions,
+.worktree-filter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.repo-worktree-actions,
+.settings-worktree-actions {
+  justify-content: flex-end;
+  flex: none;
+}
+
+.repo-worktree-toggle {
+  padding: 7px 9px;
+}
+
+.worktree-filter-controls {
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.worktree-filter-button {
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.worktree-filter-button.active,
+.worktree-filter-button:hover,
+.worktree-filter-button:focus-visible {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.repo-worktree-list,
+.settings-worktree-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.repo-worktree-row,
+.settings-worktree-row {
+  padding: 10px;
+}
+
+.worktree-overlap-chip,
+.worktree-overlap-line {
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
+}
+
+.worktree-overlap-line {
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.worktree-file-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.worktree-file-list .mono {
+  max-width: 260px;
+  padding: 3px 6px;
+  border-radius: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .settings-meta-pill {
   padding: 6px 10px;
   border-radius: 999px;
@@ -5619,6 +5793,26 @@ textarea {
   align-items: center;
   gap: 10px;
   min-height: 40px;
+}
+
+.settings-worktree-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.settings-worktree-row:first-child {
+  border-top: 0;
+}
+
+.settings-worktree-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
 .inline-toggle input[type="checkbox"],

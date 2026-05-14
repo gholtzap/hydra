@@ -3911,6 +3911,12 @@ class AppController {
   }
 
   requestAgentHandoff(sessionId: string, requestedAgentId: string | null): void {
+    // Idempotency: if a handoff is already pending for this session, ignore
+    // subsequent triggers (avoids duplicate banners from buffered PTY data).
+    if (this.pendingAgentHandoffs.has(sessionId)) {
+      return;
+    }
+
     const session = this.sessionById(sessionId);
     const repo = session ? this.repoById(session.repoID) : null;
     const agentId =
@@ -3922,8 +3928,6 @@ class AppController {
     }
 
     const prompt = buildAgentHandoffPrompt(session, repo, agentId);
-    const label = AGENT_LABELS[agentId] || agentId;
-    const bannerChunk = `\r\n[Continuing this session with ${label} ${timestampLabel()}]\r\n`;
 
     this.pendingAgentHandoffs.set(sessionId, {
       agentId,
@@ -3936,12 +3940,9 @@ class AppController {
     this.queuedSessionLaunches.delete(sessionId);
     this.resetSignalTracking(sessionId);
 
-    session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${bannerChunk}`);
-    session.transcript = trimTranscript(this.terminalBuffer(session.id, session.transcript).consume(bannerChunk));
     session.status = "running";
     session.blocker = null;
     session.updatedAt = now();
-    this.sendSessionOutput(session, bannerChunk);
     this.scheduleSave();
     this.broadcastState();
 
@@ -3973,8 +3974,10 @@ class AppController {
     session.initialPrompt = handoffPrompt;
     session.launchesClaudeOnStart = true;
     session.startupAgentId = pending.agentId;
-    session.claudeSessionId = pending.agentId === DEFAULT_AGENT_ID ? session.id : null;
-    session.agentSessionId = pending.agentId === DEFAULT_AGENT_ID ? session.id : null;
+    // Handoff starts a fresh agent session — don't reuse previous session IDs
+    // since the prior session likely hit a usage limit.
+    session.claudeSessionId = null;
+    session.agentSessionId = null;
     session.runtimeState = "live";
     session.status = "running";
     session.blocker = null;
@@ -3986,9 +3989,16 @@ class AppController {
 
     invalidateSessionSearchCache(repo.path);
     this.configureParallelWorktreeLaunch(session, repo, "reopen");
-    if (handoffPrompt && session.parallelWorktree.mode === "disabled") {
+
+    if (session.parallelWorktree.mode === "disabled") {
+      // configureParallelWorktreeLaunch clears initialPrompt when worktrees are
+      // disabled. Restore it so resolvedSessionLaunchCommand passes it as a CLI arg.
       session.initialPrompt = handoffPrompt;
-      this.queueSessionLaunch(session.id, `${handoffPrompt}\r`, session.title);
+    } else {
+      // When worktrees are enabled, configureParallelWorktreeLaunch already
+      // wrapped the prompt and queued it as stdin input. Clear initialPrompt
+      // so resolvedSessionLaunchCommand doesn't also pass it as a CLI arg.
+      session.initialPrompt = "";
     }
 
     this.launchRuntime(session, repo);
@@ -4201,12 +4211,12 @@ class AppController {
     const limitHint =
       session.blocker?.kind === "usageLimit" || transcriptLooksUsageLimited(session.transcript);
     const shellReady = limitHint
-      ? ` Shell is ready; type "continue" to hand off to ${handoffLabel}.`
-      : " Shell is ready.";
+      ? ` Type "hydra-continue" to hand off to ${handoffLabel}.`
+      : "";
     const banner =
       exitCode === 0
         ? `\r\n[Agent exited.${shellReady}]\r\n`
-        : `\r\n[Agent exited with status ${exitCode}.${shellReady}]\r\n`;
+        : `\r\n[Agent exited (${exitCode}).${shellReady}]\r\n`;
 
     session.launchProfile = "shell";
     session.launchesClaudeOnStart = false;
@@ -4827,12 +4837,17 @@ function buildAgentHandoffPrompt(
 }
 
 function handoffTranscriptTail(transcript: string): string {
-  const normalized = String(transcript || "").trim();
-  if (normalized.length <= AGENT_HANDOFF_TRANSCRIPT_CHAR_LIMIT) {
-    return normalized;
+  // Strip Hydra handoff/exit banners so they don't clutter the next agent's context.
+  const cleaned = String(transcript || "")
+    .replace(/\[Continuing this session with [^\]]*\]/g, "")
+    .replace(/\[Agent exited[^\]]*\]/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (cleaned.length <= AGENT_HANDOFF_TRANSCRIPT_CHAR_LIMIT) {
+    return cleaned;
   }
 
-  return normalized.slice(-AGENT_HANDOFF_TRANSCRIPT_CHAR_LIMIT);
+  return cleaned.slice(-AGENT_HANDOFF_TRANSCRIPT_CHAR_LIMIT);
 }
 
 function transcriptLooksUsageLimited(transcript: string | null | undefined): boolean {
@@ -5070,6 +5085,8 @@ function ensureShellHandoffBridge(): {
 function shellHandoffExecutableSource(): string {
   return [
     "#!/bin/sh",
+    "# Hydra agent handoff trigger — emits an OSC control sequence that Hydra",
+    "# detects and uses to launch the next agent. No visible output.",
     "target=\"$1\"",
     "if [ \"$target\" = \"with\" ]; then",
     "  shift",
@@ -5102,9 +5119,6 @@ function bashHandoffRcSource(): string {
     "hydra-continue() {",
     "  \"$HYDRA_HANDOFF_BIN\" \"$@\"",
     "}",
-    "continue() {",
-    "  \"$HYDRA_HANDOFF_BIN\" \"$@\"",
-    "}",
     ""
   ].join("\n");
 }
@@ -5124,9 +5138,6 @@ function zshHandoffRcSource(): string {
     "  source \"$HOME/.zshrc\"",
     "fi",
     "hydra-continue() {",
-    "  \"$HYDRA_HANDOFF_BIN\" \"$@\"",
-    "}",
-    "continue() {",
     "  \"$HYDRA_HANDOFF_BIN\" \"$@\"",
     "}",
     ""
@@ -5183,6 +5194,7 @@ function resolvedSessionLaunchCommand(
   const commandSpec = resolvedAgentCommand(preferences, startupAgentId);
   const command = [...commandSpec.argv];
   const env = Object.keys(commandSpec.env).length ? { ...commandSpec.env } : undefined;
+  const initialPrompt = typeof session.initialPrompt === "string" ? session.initialPrompt.trim() : "";
 
   if (startupAgentId === "codex" && session.agentSessionId) {
     return {
@@ -5192,6 +5204,14 @@ function resolvedSessionLaunchCommand(
   }
 
   if (startupAgentId !== DEFAULT_AGENT_ID) {
+    // Pass initial prompt as a positional CLI argument so it doesn't need to
+    // be typed via stdin (which can overflow PTY buffers and split on newlines).
+    if (initialPrompt) {
+      return {
+        command: [...command, initialPrompt],
+        env
+      };
+    }
     return {
       command,
       env
@@ -5215,6 +5235,14 @@ function resolvedSessionLaunchCommand(
   if (session.claudeSessionId) {
     return {
       command: [...command, "--session-id", session.claudeSessionId],
+      env
+    };
+  }
+
+  // No session ID — pass prompt as positional argument for a fresh session.
+  if (initialPrompt) {
+    return {
+      command: [...command, initialPrompt],
       env
     };
   }

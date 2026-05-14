@@ -4975,7 +4975,7 @@ function renderGeneralSettingsPane() {
             </select>
           </label>
         </div>
-        <div class="muted">Every new session launches the selected agent. The handoff agent is used when a terminal session continues after an agent exits.</div>
+        <div class="muted">Every new session launches the selected agent. The handoff agent is used when you run <code>hydra-continue</code> in the shell after an agent exits.</div>
       </section>
 
       <section class="settings-field-card">

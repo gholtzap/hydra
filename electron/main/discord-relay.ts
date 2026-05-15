@@ -256,7 +256,10 @@ export class DiscordRelayClient {
           limit: numberOption(options.limit, 10, 1, 20),
         });
       case "tail":
-        return formatTail(this.sessionTail(requiredStringOption(options.session, "session")));
+        return formatTail(this.sessionTail(
+          requiredStringOption(options.session, "session"),
+          numberOption(options.lines, SESSION_TAIL_DEFAULT_LINES, 1, SESSION_TAIL_MAX_LINES)
+        ));
       case "prompt":
         this.sendPromptToSession(
           requiredStringOption(options.session, "session"),
@@ -321,7 +324,7 @@ export class DiscordRelayClient {
     return `${approve ? "Approved" : "Denied"} blocker in session \`${sessionId}\`.`;
   }
 
-  private sessionTail(sessionId: string): {
+  private sessionTail(sessionId: string, lines: number): {
     sessionId: string;
     title: string;
     status: SessionStatus;
@@ -339,7 +342,7 @@ export class DiscordRelayClient {
       status: session.status,
       runtimeState: session.runtimeState,
       transcript: {
-        text: transcriptTail(session.transcript, SESSION_TAIL_DEFAULT_LINES, SESSION_TAIL_MAX_CHARS),
+        text: transcriptTail(session.transcript, lines, SESSION_TAIL_MAX_CHARS),
       },
     };
   }

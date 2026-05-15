@@ -202,6 +202,14 @@ const commandDefinitions = [
         description: "Show recent terminal output for a session",
         options: [
           { type: 3, name: "session", description: "Hydra session ID", required: true },
+          {
+            type: 4,
+            name: "lines",
+            description: "Number of lines to return",
+            required: false,
+            min_value: 1,
+            max_value: 80,
+          },
         ],
       },
       {

@@ -25,7 +25,7 @@ local AppController
 6. Click Install App if the Discord app is not already installed in the target server.
 7. Click Generate Code.
 8. Run `/hydra link` with that code in the Discord channel that should control Hydra.
-9. Refresh settings, then connect the relay.
+9. Return to Hydra and connect the relay after the link is detected.
 
 Users can still enter the allowed Discord server ID, channel ID, and optional comma-separated user IDs manually.
 

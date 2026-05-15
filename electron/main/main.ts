@@ -485,6 +485,36 @@ function assertTrustedGitHubUrl(input: unknown) {
   return parsed.toString();
 }
 
+function assertTrustedDiscordInstallUrl(input: unknown): string {
+  const value = typeof input === "string" ? input.trim() : "";
+  if (!value) {
+    throw new Error("Discord install URL is required.");
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("Invalid Discord install URL.");
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    parsed.protocol !== "https:" ||
+    (hostname !== "discord.com" && hostname !== "www.discord.com") ||
+    parsed.pathname !== "/oauth2/authorize"
+  ) {
+    throw new Error("Only Discord install URLs may be opened.");
+  }
+
+  const scopes = new Set((parsed.searchParams.get("scope") || "").split(/\s+/u).filter(Boolean));
+  if (!parsed.searchParams.get("client_id") || !scopes.has("applications.commands")) {
+    throw new Error("Discord install URL is missing required application command scope.");
+  }
+
+  return parsed.toString();
+}
+
 function sanitizePreferencesPatch(patch: unknown): AppPreferencesPatch {
   if (!isPlainObject(patch)) {
     return {};
@@ -1332,6 +1362,10 @@ class AppController {
     ipcMain.handle("discord:updateControlSettings", (_event, payload: DiscordControlSettingsPatch) =>
       this.discordRelay.updateSettings(payload || {})
     );
+    ipcMain.handle("discord:openInstallUrl", async () => {
+      const installInfo = await this.discordRelay.getInstallInfo();
+      await shell.openExternal(assertTrustedDiscordInstallUrl(installInfo.installUrl));
+    });
     ipcMain.handle("discord:connect", () => this.discordRelay.connect());
     ipcMain.handle("discord:disconnect", () => this.discordRelay.disconnect());
     ipcMain.handle("discord:getRelayStatus", () => this.discordRelay.getStatus());

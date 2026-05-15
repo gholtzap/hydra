@@ -7,6 +7,7 @@ import {
   handleDiscordCommandSync,
   handleDiscordControlSettings,
   handleDiscordDesktopConnect,
+  handleDiscordInstallInfo,
   handleDiscordInteraction,
   handleDiscordRelayToken,
 } from "./discord-relay";
@@ -148,6 +149,17 @@ app.post("/api/auth/discord/relay-token", async (c) => {
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : "Unable to create Discord relay token." },
+      400
+    );
+  }
+});
+
+app.get("/api/auth/discord/install-info", async (c) => {
+  try {
+    return await handleDiscordInstallInfo(c);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Unable to load Discord install info." },
       400
     );
   }

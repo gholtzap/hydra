@@ -187,6 +187,7 @@ interface ClaudeWorkspaceApi {
   updateDiscordControlSettings: (
     patch: DiscordControlSettingsPatch
   ) => Promise<DiscordControlSettings>;
+  openDiscordInstallUrl: () => Promise<void>;
   connectDiscordRelay: () => Promise<DiscordRelayStatus>;
   disconnectDiscordRelay: () => Promise<DiscordRelayStatus>;
   getDiscordRelayStatus: () => Promise<DiscordRelayStatus>;

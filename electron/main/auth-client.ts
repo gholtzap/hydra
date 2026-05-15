@@ -10,6 +10,7 @@ import { app, BrowserWindow } from "electron";
 import type {
   DiscordControlSettings,
   DiscordControlSettingsPatch,
+  DiscordInstallInfo,
   DiscordRelayTokenResponse
 } from "../shared-types";
 
@@ -388,6 +389,20 @@ export class HydraAuthClient {
     return this.toDiscordRelayTokenResponse(response.data);
   }
 
+  async getDiscordInstallInfo(): Promise<DiscordInstallInfo> {
+    const response = this.normalizeResponse(
+      await (await this.ensureClient()).$fetch("/discord/install-info", {
+        method: "GET",
+      })
+    );
+
+    if (response.error) {
+      throw new Error(this.formatClientError(response.error, "Unable to load Discord install info."));
+    }
+
+    return this.toDiscordInstallInfo(response.data);
+  }
+
   async verifyTotp(code: string): Promise<AuthResult> {
     try {
       const response = this.normalizeResponse(
@@ -587,6 +602,22 @@ export class HydraAuthClient {
       token: data.token,
       websocketUrl: data.websocketUrl,
       expiresAt: data.expiresAt,
+    };
+  }
+
+  private toDiscordInstallInfo(payload: unknown): DiscordInstallInfo {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid Discord install info response.");
+    }
+
+    const data = payload as Partial<DiscordInstallInfo>;
+    if (typeof data.applicationId !== "string" || typeof data.installUrl !== "string") {
+      throw new Error("Invalid Discord install info response.");
+    }
+
+    return {
+      applicationId: data.applicationId,
+      installUrl: data.installUrl,
     };
   }
 

@@ -4860,6 +4860,11 @@ function renderIntegrationsSettingsPane() {
           <div class="settings-detail-actions">
             <button
               type="button"
+              data-action="discord-install-app"
+              ${loading ? "disabled" : ""}
+            >Install App</button>
+            <button
+              type="button"
               data-action="discord-refresh-settings"
               ${loading ? "disabled" : ""}
             >Refresh</button>
@@ -6625,6 +6630,9 @@ async function handleClick(event) {
       break;
     case "discord-refresh-settings":
       await refreshDiscordControlSettings();
+      break;
+    case "discord-install-app":
+      await openDiscordInstallUrlFromSettings();
       break;
     case "discord-save-settings":
       await saveDiscordControlSettings();
@@ -8396,6 +8404,25 @@ async function saveDiscordControlSettings(patch: Partial<DiscordControlSettings>
   } catch (error) {
     ui.discordSettingsMessage =
       error instanceof Error ? error.message : "Failed to save Discord settings.";
+  } finally {
+    ui.discordSettingsInFlight = false;
+    if (settingsDialog.open) {
+      await renderSettingsDialog();
+    }
+  }
+}
+
+async function openDiscordInstallUrlFromSettings() {
+  ui.discordSettingsInFlight = true;
+  ui.discordSettingsMessage = "";
+  await renderSettingsDialog();
+
+  try {
+    await api.openDiscordInstallUrl();
+    ui.discordSettingsMessage = "Discord install page opened.";
+  } catch (error) {
+    ui.discordSettingsMessage =
+      error instanceof Error ? error.message : "Failed to open Discord install page.";
   } finally {
     ui.discordSettingsInFlight = false;
     if (settingsDialog.open) {

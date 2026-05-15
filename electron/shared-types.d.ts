@@ -287,6 +287,11 @@ export type DiscordControlSettingsPatch = {
   allowedUserIds?: string[];
 };
 
+export type DiscordInstallInfo = {
+  applicationId: string;
+  installUrl: string;
+};
+
 export type DiscordRelayStatus = {
   state: DiscordRelayConnectionState;
   connected: boolean;

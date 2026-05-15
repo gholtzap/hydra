@@ -403,6 +403,8 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
       invoke<DiscordControlSettings>("discord:getControlSettings"),
     updateDiscordControlSettings: (patch: DiscordControlSettingsPatch) =>
       invoke<DiscordControlSettings>("discord:updateControlSettings", patch),
+    openDiscordInstallUrl: () =>
+      invoke<void>("discord:openInstallUrl"),
     connectDiscordRelay: () =>
       invoke<DiscordRelayStatus>("discord:connect"),
     disconnectDiscordRelay: () =>

@@ -13,8 +13,11 @@ const RELAY_PROTOCOL_VERSION = 1;
 const RELAY_TOKEN_TTL_MS = 5 * 60 * 1000;
 const RELAY_COMMAND_TIMEOUT_MS = 25_000;
 const DISCORD_EPHEMERAL_FLAG = 1 << 6;
+const DISCORD_INTEGRATION_TYPE_GUILD_INSTALL = 0;
+const DISCORD_INTERACTION_CONTEXT_GUILD = 0;
 const DISCORD_MESSAGE_LIMIT = 2000;
 const DISCORD_ID_PATTERN = /^\d{5,30}$/u;
+const DISCORD_SIGNATURE_TOLERANCE_MS = 5 * 60 * 1000;
 
 type HydraContext = Context<{ Bindings: CloudflareBindings }>;
 
@@ -134,6 +137,8 @@ const commandDefinitions = [
     name: HYDRA_COMMAND_NAME,
     description: "Control your active Hydra desktop",
     type: 1,
+    integration_types: [DISCORD_INTEGRATION_TYPE_GUILD_INSTALL],
+    contexts: [DISCORD_INTERACTION_CONTEXT_GUILD],
     options: [
       { type: 1, name: "status", description: "Show Hydra status" },
       { type: 1, name: "inbox", description: "Show blocked or unread sessions" },
@@ -285,6 +290,24 @@ export async function handleDiscordRelayToken(c: HydraContext): Promise<Response
     token,
     websocketUrl: websocketUrl.toString(),
     expiresAt: new Date(exp).toISOString(),
+  });
+}
+
+export async function handleDiscordInstallInfo(c: HydraContext): Promise<Response> {
+  const applicationId = c.env.DISCORD_APPLICATION_ID?.trim();
+  if (!applicationId) {
+    return c.json({ error: "DISCORD_APPLICATION_ID is required." }, 500);
+  }
+
+  assertOptionalDiscordId(applicationId, "Application ID");
+
+  const installUrl = new URL("https://discord.com/oauth2/authorize");
+  installUrl.searchParams.set("client_id", applicationId);
+  installUrl.searchParams.set("scope", "applications.commands");
+
+  return c.json({
+    applicationId,
+    installUrl: installUrl.toString(),
   });
 }
 
@@ -752,7 +775,8 @@ async function hmacSha256(env: CloudflareBindings, body: string): Promise<string
 async function verifyDiscordRequest(c: HydraContext, body: string): Promise<boolean> {
   const publicKey = c.env.DISCORD_PUBLIC_KEY?.trim();
   if (!publicKey) {
-    return true;
+    console.error("[discord] DISCORD_PUBLIC_KEY is required to verify interactions.");
+    return false;
   }
 
   const signature = c.req.header("x-signature-ed25519") || "";
@@ -761,19 +785,31 @@ async function verifyDiscordRequest(c: HydraContext, body: string): Promise<bool
     return false;
   }
 
-  const key = await crypto.subtle.importKey(
-    "raw",
-    hexToBytes(publicKey),
-    "Ed25519",
-    false,
-    ["verify"]
-  );
-  return crypto.subtle.verify(
-    "Ed25519",
-    key,
-    hexToBytes(signature),
-    new TextEncoder().encode(`${timestamp}${body}`)
-  );
+  const timestampMs = Number.parseInt(timestamp, 10) * 1000;
+  if (
+    !Number.isFinite(timestampMs) ||
+    Math.abs(Date.now() - timestampMs) > DISCORD_SIGNATURE_TOLERANCE_MS
+  ) {
+    return false;
+  }
+
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      hexToBytes(publicKey),
+      "Ed25519",
+      false,
+      ["verify"]
+    );
+    return crypto.subtle.verify(
+      "Ed25519",
+      key,
+      hexToBytes(signature),
+      new TextEncoder().encode(`${timestamp}${body}`)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isDesktopSocketMessage(value: unknown): value is DesktopSocketMessage {

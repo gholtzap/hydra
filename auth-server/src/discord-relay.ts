@@ -83,7 +83,7 @@ type DiscordInteractionOption = {
   options?: DiscordInteractionOption[];
 };
 
-type DiscordHydraCommandName =
+type DiscordDesktopCommandName =
   | "status"
   | "inbox"
   | "sessions"
@@ -93,8 +93,9 @@ type DiscordHydraCommandName =
   | "approve"
   | "deny"
   | "focus"
-  | "new"
-  | "link";
+  | "new";
+
+type DiscordHydraCommandName = DiscordDesktopCommandName | "link";
 
 type DiscordHydraCommandPayload = {
   name: DiscordHydraCommandName;
@@ -104,9 +105,13 @@ type DiscordHydraCommandPayload = {
   userId: string;
 };
 
+type DiscordDesktopCommandPayload = Omit<DiscordHydraCommandPayload, "name"> & {
+  name: DiscordDesktopCommandName;
+};
+
 type RelayDispatchRequest = {
   requestId: string;
-  command: DiscordHydraCommandPayload;
+  command: DiscordDesktopCommandPayload;
 };
 
 type RelayCommandResult = {
@@ -416,7 +421,12 @@ export async function handleDiscordInteraction(c: HydraContext): Promise<Respons
     return c.json({ type: 4, data: { content, flags: DISCORD_EPHEMERAL_FLAG } });
   }
 
-  const route = await findDiscordRoute(c.env, command);
+  const desktopCommand = toDesktopCommand(command);
+  if (!desktopCommand) {
+    return c.json({ error: "Invalid Discord command payload." }, 400);
+  }
+
+  const route = await findDiscordRoute(c.env, desktopCommand);
   if (!route) {
     return c.json({
       type: 4,
@@ -427,7 +437,7 @@ export async function handleDiscordInteraction(c: HydraContext): Promise<Respons
     });
   }
 
-  c.executionCtx.waitUntil(dispatchInteractionCommand(c.env, route.userId, interaction, command));
+  c.executionCtx.waitUntil(dispatchInteractionCommand(c.env, route.userId, interaction, desktopCommand));
   return c.json({ type: 5, data: { flags: DISCORD_EPHEMERAL_FLAG } });
 }
 
@@ -524,7 +534,7 @@ export class DiscordRelayHub {
     }
 
     const payload = await request.json().catch(() => null) as RelayDispatchRequest | null;
-    if (!payload || typeof payload.requestId !== "string" || !isHydraCommandPayload(payload.command)) {
+    if (!payload || typeof payload.requestId !== "string" || !isDesktopCommandPayload(payload.command)) {
       return Response.json({ ok: false, error: "Invalid relay dispatch payload." }, { status: 400 });
     }
 
@@ -723,7 +733,7 @@ function parseAllowedUsers(value: string): string[] {
 
 async function findDiscordRoute(
   env: CloudflareBindings,
-  command: DiscordHydraCommandPayload
+  command: DiscordDesktopCommandPayload
 ): Promise<{ userId: string } | null> {
   const rows = await env.DATABASE.prepare(
     `SELECT user_id, allowed_user_ids
@@ -777,7 +787,7 @@ async function dispatchInteractionCommand(
   env: CloudflareBindings,
   userId: string,
   interaction: DiscordInteraction,
-  command: DiscordHydraCommandPayload
+  command: DiscordDesktopCommandPayload
 ): Promise<void> {
   const requestId = crypto.randomUUID();
   const id = env.DISCORD_RELAY.idFromName(userId);
@@ -831,6 +841,10 @@ function interactionToCommand(interaction: DiscordInteraction): DiscordHydraComm
     channelId,
     userId,
   };
+}
+
+function toDesktopCommand(command: DiscordHydraCommandPayload): DiscordDesktopCommandPayload | null {
+  return command.name === "link" ? null : command as DiscordDesktopCommandPayload;
 }
 
 function optionsByName(options: DiscordInteractionOption[]): Record<string, string | number | boolean | null> {
@@ -967,13 +981,13 @@ function isDesktopSocketMessage(value: unknown): value is DesktopSocketMessage {
   );
 }
 
-function isHydraCommandPayload(value: unknown): value is DiscordHydraCommandPayload {
+function isDesktopCommandPayload(value: unknown): value is DiscordDesktopCommandPayload {
   if (!value || typeof value !== "object") {
     return false;
   }
   const payload = value as Partial<DiscordHydraCommandPayload>;
   return (
-    isHydraCommandName(payload.name) &&
+    isDesktopCommandName(payload.name) &&
     !!payload.options &&
     typeof payload.options === "object" &&
     typeof payload.guildId === "string" &&
@@ -983,6 +997,10 @@ function isHydraCommandPayload(value: unknown): value is DiscordHydraCommandPayl
 }
 
 function isHydraCommandName(value: unknown): value is DiscordHydraCommandName {
+  return isDesktopCommandName(value) || value === "link";
+}
+
+function isDesktopCommandName(value: unknown): value is DiscordDesktopCommandName {
   return (
     value === "status" ||
     value === "inbox" ||
@@ -993,8 +1011,7 @@ function isHydraCommandName(value: unknown): value is DiscordHydraCommandName {
     value === "approve" ||
     value === "deny" ||
     value === "focus" ||
-    value === "new" ||
-    value === "link"
+    value === "new"
   );
 }
 

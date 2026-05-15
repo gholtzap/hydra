@@ -17,15 +17,14 @@ local AppController
 
 ## User Setup
 
-1. Install the official Hydra Discord app into the target server.
-2. Open Hydra desktop.
-3. Sign in.
-4. Open Settings, then Integrations.
-5. Enable Discord control.
-6. Click Install App if the Discord app is not already installed in the target server.
-7. Click Generate Code.
-8. Run `/hydra link` with that code in the Discord channel that should control Hydra.
-9. Return to Hydra and connect the relay after the link is detected.
+1. Open Hydra desktop.
+2. Sign in.
+3. Open Settings, then Integrations.
+4. Enable Discord control.
+5. Click Install App to add the official Hydra Discord app to the target server.
+6. Click Generate Code.
+7. Run `/hydra link` with that code in the Discord channel that should control Hydra.
+8. Return to Hydra and connect the relay after the link is detected.
 
 Users can still enter the allowed Discord server ID, channel ID, and optional comma-separated user IDs manually.
 

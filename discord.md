@@ -72,12 +72,14 @@ The Worker also requires the `DISCORD_RELAY` Durable Object binding and the `dis
 4. Apply the remote D1 migrations:
 
    ```sh
+   HYDRA_ALLOW_AUTH_REMOTE_MIGRATE=1 \
    npm --prefix auth-server run d1:migrate:remote
    ```
 
 5. Deploy the Worker:
 
    ```sh
+   HYDRA_ALLOW_AUTH_DEPLOY=1 \
    npm --prefix auth-server run deploy
    ```
 

@@ -57,6 +57,15 @@ DISCORD_PUBLIC_KEY=discord_interactions_public_key
 
 The Worker also requires the `DISCORD_RELAY` Durable Object binding and the `discord_control_settings` and `discord_link_codes` D1 migrations.
 
+After deploying the Worker and setting the official Discord app secrets, sync the global slash commands:
+
+```sh
+HYDRA_ALLOW_DISCORD_COMMAND_SYNC=1 \
+AUTH_SERVER_URL=https://your-hydra-auth-worker.example \
+DISCORD_COMMAND_SYNC_SECRET=... \
+npm run discord:sync:centralized
+```
+
 ## Legacy Local Bridge
 
 The local bridge remains useful for local development, but it is no longer the recommended user setup. It runs a local Discord bot next to Hydra and talks to the loopback MCP server at `127.0.0.1:4141`.

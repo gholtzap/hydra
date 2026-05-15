@@ -387,7 +387,11 @@ export async function handleDiscordInteraction(c: HydraContext): Promise<Respons
     return c.json({ error: "Invalid Discord signature." }, 401);
   }
 
-  const interaction = JSON.parse(body) as DiscordInteraction;
+  const interaction = parseDiscordInteraction(body);
+  if (!interaction) {
+    return c.json({ error: "Invalid Discord interaction payload." }, 400);
+  }
+
   if (interaction.type === 1) {
     return c.json({ type: 1 });
   }
@@ -862,11 +866,17 @@ async function verifyRelayToken(
   }
 
   const expected = await hmacSha256(env, body);
-  if (signature !== expected) {
+  if (!constantTimeEqual(signature, expected)) {
     return null;
   }
 
-  const parsed = JSON.parse(base64UrlDecode(body)) as RelayTokenPayload;
+  let parsed: RelayTokenPayload;
+  try {
+    parsed = JSON.parse(base64UrlDecode(body)) as RelayTokenPayload;
+  } catch {
+    return null;
+  }
+
   if (
     typeof parsed.userId !== "string" ||
     typeof parsed.exp !== "number" ||
@@ -1017,6 +1027,27 @@ function base64UrlDecode(value: string): string {
 function hexToBytes(value: string): Uint8Array {
   const matches = value.match(/.{1,2}/gu) || [];
   return Uint8Array.from(matches.map((byte) => Number.parseInt(byte, 16)));
+}
+
+function parseDiscordInteraction(body: string): DiscordInteraction | null {
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return parsed && typeof parsed === "object" ? parsed as DiscordInteraction : null;
+  } catch {
+    return null;
+  }
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  let diff = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    diff |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return diff === 0;
 }
 
 function limitDiscord(content: string): string {

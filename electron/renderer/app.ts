@@ -8499,7 +8499,7 @@ async function copyDiscordLinkCommandFromSettings() {
     return;
   }
 
-  await api.writeClipboardText(`/hydra link code:${ui.discordLinkCode.code}`);
+  await api.writeClipboardText(`/hydra link code: ${ui.discordLinkCode.code}`);
   ui.discordSettingsMessage = "Discord link command copied.";
   await renderSettingsDialog();
 }

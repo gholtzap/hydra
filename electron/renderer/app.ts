@@ -34,6 +34,8 @@ import type {
 
 const api = window.claudeWorkspace;
 let sessionSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let discordLinkPollTimer: ReturnType<typeof window.setTimeout> | null = null;
+let discordLinkSettingsBaseline: string | null = null;
 let sessionSearchRenderStateCache: {
   results: SessionSearchResult[];
   state: SessionSearchRenderState;
@@ -8480,7 +8482,9 @@ async function createDiscordLinkCodeFromSettings() {
 
   try {
     ui.discordLinkCode = await api.createDiscordLinkCode();
+    discordLinkSettingsBaseline = discordSettingsSignature(ui.discordControlSettings);
     ui.discordSettingsMessage = "Discord link code created.";
+    scheduleDiscordLinkSettingsPoll();
   } catch (error) {
     ui.discordSettingsMessage =
       error instanceof Error ? error.message : "Failed to create Discord link code.";
@@ -8490,6 +8494,83 @@ async function createDiscordLinkCodeFromSettings() {
       await renderSettingsDialog();
     }
   }
+}
+
+function scheduleDiscordLinkSettingsPoll() {
+  clearDiscordLinkSettingsPoll();
+  const expiresAt = Date.parse(ui.discordLinkCode?.expiresAt || "");
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    return;
+  }
+
+  discordLinkPollTimer = window.setTimeout(() => {
+    discordLinkPollTimer = null;
+    void pollDiscordLinkSettings();
+  }, 3000);
+}
+
+function clearDiscordLinkSettingsPoll() {
+  if (discordLinkPollTimer) {
+    window.clearTimeout(discordLinkPollTimer);
+    discordLinkPollTimer = null;
+  }
+}
+
+async function pollDiscordLinkSettings() {
+  const activeCode = ui.discordLinkCode;
+  const expiresAt = Date.parse(activeCode?.expiresAt || "");
+  if (!activeCode || !Number.isFinite(expiresAt)) {
+    return;
+  }
+
+  if (expiresAt <= Date.now()) {
+    ui.discordLinkCode = null;
+    discordLinkSettingsBaseline = null;
+    ui.discordSettingsMessage = "Discord link code expired.";
+    if (settingsDialog.open && ui.settingsTab === "integrations") {
+      await renderSettingsDialog();
+    }
+    return;
+  }
+
+  try {
+    const [settings, status] = await Promise.all([
+      api.getDiscordControlSettings(),
+      api.getDiscordRelayStatus()
+    ]);
+    ui.discordControlSettings = settings;
+    ui.discordAllowedUsersDraft = settings.allowedUserIds.join(", ");
+    ui.discordRelayStatus = status;
+    ui.discordSettingsLoaded = true;
+
+    const settingsChanged = discordSettingsSignature(settings) !== discordLinkSettingsBaseline;
+    if (settings.enabled && settings.guildId && settings.channelId && settingsChanged) {
+      ui.discordLinkCode = null;
+      discordLinkSettingsBaseline = null;
+      ui.discordSettingsMessage = "Discord channel linked. Connect the relay.";
+    } else {
+      scheduleDiscordLinkSettingsPoll();
+    }
+  } catch {
+    scheduleDiscordLinkSettingsPoll();
+  }
+
+  if (settingsDialog.open && ui.settingsTab === "integrations") {
+    await renderSettingsDialog();
+  }
+}
+
+function discordSettingsSignature(settings: DiscordControlSettings | null): string {
+  if (!settings) {
+    return "";
+  }
+
+  return JSON.stringify({
+    enabled: settings.enabled,
+    guildId: settings.guildId,
+    channelId: settings.channelId,
+    allowedUserIds: settings.allowedUserIds,
+  });
 }
 
 async function copyDiscordLinkCommandFromSettings() {

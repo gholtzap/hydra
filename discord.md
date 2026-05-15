@@ -22,8 +22,12 @@ local AppController
 3. Sign in.
 4. Open Settings, then Integrations.
 5. Enable Discord control.
-6. Enter the allowed Discord server ID, channel ID, and optional comma-separated user IDs.
-7. Save settings and connect the relay.
+6. Click Install App if the Discord app is not already installed in the target server.
+7. Click Generate Code.
+8. Run `/hydra link` with that code in the Discord channel that should control Hydra.
+9. Refresh settings, then connect the relay.
+
+Users can still enter the allowed Discord server ID, channel ID, and optional comma-separated user IDs manually.
 
 This setup does not require users to create a Discord Developer Portal application, manage a bot token, register slash commands, or run a sidecar script.
 
@@ -35,6 +39,8 @@ The auth Worker owns the centralized Discord integration:
 - `GET /api/discord/desktop/connect` upgrades signed-in desktops to websocket relay connections.
 - `POST /api/auth/discord/relay-token` issues short-lived relay tokens to signed-in desktops.
 - `GET` and `POST /api/auth/discord/control-settings` store per-user allowed server, channel, and user IDs.
+- `GET /api/auth/discord/install-info` returns the official Discord app install URL.
+- `POST /api/auth/discord/link-code` creates a short-lived setup code for linking a Discord channel.
 - `POST /api/discord/commands` syncs the official `/hydra` commands when called with `x-hydra-admin-secret`.
 
 Required Worker bindings and secrets:
@@ -49,7 +55,7 @@ DISCORD_COMMAND_SYNC_SECRET=admin_only_sync_secret
 DISCORD_PUBLIC_KEY=discord_interactions_public_key
 ```
 
-The Worker also requires the `DISCORD_RELAY` Durable Object binding and the `discord_control_settings` D1 migration.
+The Worker also requires the `DISCORD_RELAY` Durable Object binding and the `discord_control_settings` and `discord_link_codes` D1 migrations.
 
 ## Legacy Local Bridge
 
@@ -58,6 +64,14 @@ The local bridge remains useful for local development, but it is no longer the r
 ## Discord Commands
 
 All commands are under `/hydra`.
+
+### `/hydra link`
+
+Links the current Discord channel to the signed-in Hydra desktop that generated the setup code.
+
+Options:
+
+- `code`: required 8-character code generated from Hydra Settings, then Integrations
 
 ### `/hydra status`
 

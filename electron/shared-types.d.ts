@@ -292,6 +292,11 @@ export type DiscordInstallInfo = {
   installUrl: string;
 };
 
+export type DiscordLinkCode = {
+  code: string;
+  expiresAt: string;
+};
+
 export type DiscordRelayStatus = {
   state: DiscordRelayConnectionState;
   connected: boolean;

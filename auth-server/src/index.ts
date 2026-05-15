@@ -9,6 +9,7 @@ import {
   handleDiscordDesktopConnect,
   handleDiscordInstallInfo,
   handleDiscordInteraction,
+  handleDiscordLinkCode,
   handleDiscordRelayToken,
 } from "./discord-relay";
 
@@ -160,6 +161,17 @@ app.get("/api/auth/discord/install-info", async (c) => {
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : "Unable to load Discord install info." },
+      400
+    );
+  }
+});
+
+app.post("/api/auth/discord/link-code", async (c) => {
+  try {
+    return await handleDiscordLinkCode(c);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Unable to create Discord link code." },
       400
     );
   }

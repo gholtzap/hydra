@@ -3,6 +3,7 @@ import type {
   DiscordControlSettingsPatch,
   DiscordHydraCommandPayload,
   DiscordInstallInfo,
+  DiscordLinkCode,
   DiscordRelayStatus,
   SessionRecord,
   SessionStatus
@@ -104,6 +105,11 @@ export class DiscordRelayClient {
   async getInstallInfo(): Promise<DiscordInstallInfo> {
     const authClient = this.requireAuthClient();
     return authClient.getDiscordInstallInfo();
+  }
+
+  async createLinkCode(): Promise<DiscordLinkCode> {
+    const authClient = this.requireAuthClient();
+    return authClient.createDiscordLinkCode();
   }
 
   async connect(): Promise<DiscordRelayStatus> {

@@ -16,6 +16,7 @@ import type {
   DirectoryReadResult,
   DiscordControlSettings,
   DiscordControlSettingsPatch,
+  DiscordLinkCode,
   DiscordRelayStatus,
   EphemeralToolExitPayload,
   EphemeralToolId,
@@ -405,6 +406,8 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
       invoke<DiscordControlSettings>("discord:updateControlSettings", patch),
     openDiscordInstallUrl: () =>
       invoke<void>("discord:openInstallUrl"),
+    createDiscordLinkCode: () =>
+      invoke<DiscordLinkCode>("discord:createLinkCode"),
     connectDiscordRelay: () =>
       invoke<DiscordRelayStatus>("discord:connect"),
     disconnectDiscordRelay: () =>

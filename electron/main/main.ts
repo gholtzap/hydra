@@ -1366,6 +1366,7 @@ class AppController {
       const installInfo = await this.discordRelay.getInstallInfo();
       await shell.openExternal(assertTrustedDiscordInstallUrl(installInfo.installUrl));
     });
+    ipcMain.handle("discord:createLinkCode", () => this.discordRelay.createLinkCode());
     ipcMain.handle("discord:connect", () => this.discordRelay.connect());
     ipcMain.handle("discord:disconnect", () => this.discordRelay.disconnect());
     ipcMain.handle("discord:getRelayStatus", () => this.discordRelay.getStatus());

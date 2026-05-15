@@ -11,6 +11,7 @@ import type {
   DiscordControlSettings,
   DiscordControlSettingsPatch,
   DiscordInstallInfo,
+  DiscordLinkCode,
   DiscordRelayTokenResponse
 } from "../shared-types";
 
@@ -403,6 +404,20 @@ export class HydraAuthClient {
     return this.toDiscordInstallInfo(response.data);
   }
 
+  async createDiscordLinkCode(): Promise<DiscordLinkCode> {
+    const response = this.normalizeResponse(
+      await (await this.ensureClient()).$fetch("/discord/link-code", {
+        method: "POST",
+      })
+    );
+
+    if (response.error) {
+      throw new Error(this.formatClientError(response.error, "Unable to create Discord link code."));
+    }
+
+    return this.toDiscordLinkCode(response.data);
+  }
+
   async verifyTotp(code: string): Promise<AuthResult> {
     try {
       const response = this.normalizeResponse(
@@ -618,6 +633,22 @@ export class HydraAuthClient {
     return {
       applicationId: data.applicationId,
       installUrl: data.installUrl,
+    };
+  }
+
+  private toDiscordLinkCode(payload: unknown): DiscordLinkCode {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid Discord link code response.");
+    }
+
+    const data = payload as Partial<DiscordLinkCode>;
+    if (typeof data.code !== "string" || typeof data.expiresAt !== "string") {
+      throw new Error("Invalid Discord link code response.");
+    }
+
+    return {
+      code: data.code,
+      expiresAt: data.expiresAt,
     };
   }
 

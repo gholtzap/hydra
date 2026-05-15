@@ -9,6 +9,7 @@ import type {
   EphemeralToolId,
   EphemeralToolOutputPayload,
   DiscordControlSettings,
+  DiscordLinkCode,
   DiscordRelayStatus,
   FileTreeNode as SharedFileTreeNode,
   JsonObject,
@@ -302,6 +303,7 @@ type UiState = {
   discordSettingsInFlight: boolean;
   discordSettingsMessage: string;
   discordAllowedUsersDraft: string;
+  discordLinkCode: DiscordLinkCode | null;
   settingsContext: ClaudeSettingsContext | null;
   settingsSelectedFilePath: string | null;
   settingsJsonCategoryId: string;
@@ -416,6 +418,7 @@ const ui: UiState = {
   discordSettingsInFlight: false,
   discordSettingsMessage: "",
   discordAllowedUsersDraft: "",
+  discordLinkCode: null,
   settingsContext: null,
   settingsSelectedFilePath: null,
   settingsJsonCategoryId: "",
@@ -4845,6 +4848,7 @@ function renderIntegrationsSettingsPane() {
   const loading = !ui.discordSettingsLoaded || ui.discordSettingsInFlight;
   const usersDraft = ui.discordAllowedUsersDraft || settings.allowedUserIds.join(", ");
   const canConnect = settings.enabled && settings.guildId && settings.channelId && !loading;
+  const linkCode = ui.discordLinkCode;
   const statusDetail = status.connected
     ? `Connected ${formatDateTime(status.lastConnectedAt || "", "recently")}`
     : status.lastError || "Hydra is not connected to the Discord relay.";
@@ -4884,6 +4888,38 @@ function renderIntegrationsSettingsPane() {
                   <input type="checkbox" id="discord-enabled" ${settings.enabled ? "checked" : ""} />
                   <span>Enable Discord control</span>
                 </label>
+                <div class="settings-detail-panel">
+                  <div class="settings-group-header">
+                    <div class="settings-field-copy">
+                      <div class="row-title">Link from Discord</div>
+                      <div class="muted">Generate a short-lived code, then run <span class="mono">/hydra link</span> in the Discord channel.</div>
+                    </div>
+                    <div class="settings-detail-actions">
+                      <button type="button" data-action="discord-create-link-code">Generate Code</button>
+                      ${
+                        linkCode
+                          ? `<button type="button" data-action="discord-copy-link-code">Copy Command</button>`
+                          : ""
+                      }
+                    </div>
+                  </div>
+                  ${
+                    linkCode
+                      ? `
+                        <div class="account-detail-grid">
+                          <div class="account-detail-item">
+                            <span class="account-detail-label">Code</span>
+                            <span class="account-detail-value mono">${escapeHtml(linkCode.code)}</span>
+                          </div>
+                          <div class="account-detail-item">
+                            <span class="account-detail-label">Expires</span>
+                            <span class="account-detail-value">${escapeHtml(formatDateTime(linkCode.expiresAt, "soon"))}</span>
+                          </div>
+                        </div>
+                      `
+                      : ""
+                  }
+                </div>
                 <div class="settings-add-grid">
                   <label class="settings-field-control">
                     <div class="row-title">Allowed Server ID</div>
@@ -6633,6 +6669,12 @@ async function handleClick(event) {
       break;
     case "discord-install-app":
       await openDiscordInstallUrlFromSettings();
+      break;
+    case "discord-create-link-code":
+      await createDiscordLinkCodeFromSettings();
+      break;
+    case "discord-copy-link-code":
+      await copyDiscordLinkCommandFromSettings();
       break;
     case "discord-save-settings":
       await saveDiscordControlSettings();
@@ -8429,6 +8471,37 @@ async function openDiscordInstallUrlFromSettings() {
       await renderSettingsDialog();
     }
   }
+}
+
+async function createDiscordLinkCodeFromSettings() {
+  ui.discordSettingsInFlight = true;
+  ui.discordSettingsMessage = "";
+  await renderSettingsDialog();
+
+  try {
+    ui.discordLinkCode = await api.createDiscordLinkCode();
+    ui.discordSettingsMessage = "Discord link code created.";
+  } catch (error) {
+    ui.discordSettingsMessage =
+      error instanceof Error ? error.message : "Failed to create Discord link code.";
+  } finally {
+    ui.discordSettingsInFlight = false;
+    if (settingsDialog.open) {
+      await renderSettingsDialog();
+    }
+  }
+}
+
+async function copyDiscordLinkCommandFromSettings() {
+  if (!ui.discordLinkCode) {
+    ui.discordSettingsMessage = "Create a Discord link code first.";
+    await renderSettingsDialog();
+    return;
+  }
+
+  await api.writeClipboardText(`/hydra link code:${ui.discordLinkCode.code}`);
+  ui.discordSettingsMessage = "Discord link command copied.";
+  await renderSettingsDialog();
 }
 
 async function connectDiscordRelayFromSettings() {

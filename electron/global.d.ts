@@ -16,6 +16,7 @@ import type {
   DirectoryReadResult,
   DiscordControlSettings,
   DiscordControlSettingsPatch,
+  DiscordLinkCode,
   DiscordRelayStatus,
   EphemeralToolExitPayload,
   EphemeralToolId,
@@ -188,6 +189,7 @@ interface ClaudeWorkspaceApi {
     patch: DiscordControlSettingsPatch
   ) => Promise<DiscordControlSettings>;
   openDiscordInstallUrl: () => Promise<void>;
+  createDiscordLinkCode: () => Promise<DiscordLinkCode>;
   connectDiscordRelay: () => Promise<DiscordRelayStatus>;
   disconnectDiscordRelay: () => Promise<DiscordRelayStatus>;
   getDiscordRelayStatus: () => Promise<DiscordRelayStatus>;

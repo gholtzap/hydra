@@ -18,6 +18,9 @@ const DISCORD_INTERACTION_CONTEXT_GUILD = 0;
 const DISCORD_MESSAGE_LIMIT = 2000;
 const DISCORD_ID_PATTERN = /^\d{5,30}$/u;
 const DISCORD_SIGNATURE_TOLERANCE_MS = 5 * 60 * 1000;
+const DISCORD_LINK_CODE_TTL_MS = 10 * 60 * 1000;
+const DISCORD_LINK_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const DISCORD_LINK_CODE_PATTERN = /^[A-Z2-9]{8}$/u;
 
 type HydraContext = Context<{ Bindings: CloudflareBindings }>;
 
@@ -39,6 +42,11 @@ type DiscordSettingsRow = {
   guild_id: string;
   channel_id: string;
   allowed_user_ids: string;
+};
+
+type DiscordLinkCodeRow = {
+  user_id: string;
+  expires_at: number;
 };
 
 type RelayTokenPayload = {
@@ -85,7 +93,8 @@ type DiscordHydraCommandName =
   | "approve"
   | "deny"
   | "focus"
-  | "new";
+  | "new"
+  | "link";
 
 type DiscordHydraCommandPayload = {
   name: DiscordHydraCommandName;
@@ -140,6 +149,21 @@ const commandDefinitions = [
     integration_types: [DISCORD_INTEGRATION_TYPE_GUILD_INSTALL],
     contexts: [DISCORD_INTERACTION_CONTEXT_GUILD],
     options: [
+      {
+        type: 1,
+        name: "link",
+        description: "Link this Discord channel to your signed-in Hydra desktop",
+        options: [
+          {
+            type: 3,
+            name: "code",
+            description: "Hydra link code",
+            required: true,
+            min_length: 8,
+            max_length: 8,
+          },
+        ],
+      },
       { type: 1, name: "status", description: "Show Hydra status" },
       { type: 1, name: "inbox", description: "Show blocked or unread sessions" },
       {
@@ -311,6 +335,24 @@ export async function handleDiscordInstallInfo(c: HydraContext): Promise<Respons
   });
 }
 
+export async function handleDiscordLinkCode(c: HydraContext): Promise<Response> {
+  const userId = await requireAuthUserId(c);
+  await deleteExpiredDiscordLinkCodes(c.env);
+  await c.env.DATABASE.prepare("DELETE FROM discord_link_codes WHERE user_id = ?").bind(userId).run();
+
+  const expiresAt = Date.now() + DISCORD_LINK_CODE_TTL_MS;
+  const code = await createUniqueDiscordLinkCode(c.env);
+  await c.env.DATABASE.prepare(
+    `INSERT INTO discord_link_codes (code, user_id, expires_at, created_at)
+     VALUES (?, ?, ?, ?)`
+  ).bind(code, userId, expiresAt, Date.now()).run();
+
+  return c.json({
+    code,
+    expiresAt: new Date(expiresAt).toISOString(),
+  });
+}
+
 export async function handleDiscordDesktopConnect(c: HydraContext): Promise<Response> {
   const upgrade = c.req.header("upgrade");
   if (upgrade?.toLowerCase() !== "websocket") {
@@ -363,6 +405,11 @@ export async function handleDiscordInteraction(c: HydraContext): Promise<Respons
       type: 4,
       data: { content: "No Hydra subcommand was provided.", flags: DISCORD_EPHEMERAL_FLAG },
     });
+  }
+
+  if (command.name === "link") {
+    const content = await redeemDiscordLinkCode(c.env, command);
+    return c.json({ type: 4, data: { content, flags: DISCORD_EPHEMERAL_FLAG } });
   }
 
   const route = await findDiscordRoute(c.env, command);
@@ -615,6 +662,36 @@ async function writeDiscordSettings(
   ).run();
 }
 
+async function deleteExpiredDiscordLinkCodes(env: CloudflareBindings): Promise<void> {
+  await env.DATABASE.prepare("DELETE FROM discord_link_codes WHERE expires_at <= ?")
+    .bind(Date.now())
+    .run();
+}
+
+async function createUniqueDiscordLinkCode(env: CloudflareBindings): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const code = generateDiscordLinkCode();
+    const existing = await env.DATABASE.prepare(
+      "SELECT code FROM discord_link_codes WHERE code = ?"
+    ).bind(code).first<{ code: string }>();
+    if (!existing) {
+      return code;
+    }
+  }
+
+  throw new Error("Unable to create a unique Discord link code.");
+}
+
+function generateDiscordLinkCode(): string {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  let code = "";
+  for (const byte of bytes) {
+    code += DISCORD_LINK_CODE_ALPHABET[byte % DISCORD_LINK_CODE_ALPHABET.length];
+  }
+  return code;
+}
+
 function rowToSettings(row: DiscordSettingsRow | null): DiscordControlSettings {
   if (!row) {
     return {
@@ -647,7 +724,8 @@ async function findDiscordRoute(
   const rows = await env.DATABASE.prepare(
     `SELECT user_id, allowed_user_ids
        FROM discord_control_settings
-      WHERE enabled = 1 AND guild_id = ? AND channel_id = ?`
+      WHERE enabled = 1 AND guild_id = ? AND channel_id = ?
+      ORDER BY updated_at DESC`
   ).bind(command.guildId, command.channelId).all<{ user_id: string; allowed_user_ids: string }>();
 
   const candidates = rows.results || [];
@@ -658,6 +736,37 @@ async function findDiscordRoute(
 
   const open = candidates.find((row) => parseAllowedUsers(row.allowed_user_ids).length === 0);
   return open ? { userId: open.user_id } : null;
+}
+
+async function redeemDiscordLinkCode(
+  env: CloudflareBindings,
+  command: DiscordHydraCommandPayload
+): Promise<string> {
+  const code = normalizeDiscordLinkCode(command.options.code);
+  if (!code) {
+    return "Enter the 8-character link code from Hydra settings.";
+  }
+
+  await deleteExpiredDiscordLinkCodes(env);
+  const row = await env.DATABASE.prepare(
+    `SELECT user_id, expires_at
+       FROM discord_link_codes
+      WHERE code = ?`
+  ).bind(code).first<DiscordLinkCodeRow>();
+
+  if (!row || row.expires_at <= Date.now()) {
+    return "That Hydra link code is invalid or expired. Generate a new code in Hydra settings.";
+  }
+
+  await env.DATABASE.prepare("DELETE FROM discord_link_codes WHERE code = ?").bind(code).run();
+  await writeDiscordSettings(env, row.user_id, {
+    enabled: true,
+    guildId: command.guildId,
+    channelId: command.channelId,
+    allowedUserIds: [command.userId],
+  });
+
+  return "Hydra Discord control is linked to this channel and Discord user. Open Hydra settings and connect the relay.";
 }
 
 async function dispatchInteractionCommand(
@@ -726,6 +835,15 @@ function optionsByName(options: DiscordInteractionOption[]): Record<string, stri
     mapped[option.name] = option.value ?? null;
   }
   return mapped;
+}
+
+function normalizeDiscordLinkCode(value: string | number | boolean | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const code = value.trim().toUpperCase();
+  return DISCORD_LINK_CODE_PATTERN.test(code) ? code : null;
 }
 
 async function signRelayToken(env: CloudflareBindings, payload: RelayTokenPayload): Promise<string> {
@@ -865,7 +983,8 @@ function isHydraCommandName(value: unknown): value is DiscordHydraCommandName {
     value === "approve" ||
     value === "deny" ||
     value === "focus" ||
-    value === "new"
+    value === "new" ||
+    value === "link"
   );
 }
 

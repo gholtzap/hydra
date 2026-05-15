@@ -508,8 +508,13 @@ function assertTrustedDiscordInstallUrl(input: unknown): string {
   }
 
   const scopes = new Set((parsed.searchParams.get("scope") || "").split(/\s+/u).filter(Boolean));
-  if (!parsed.searchParams.get("client_id") || !scopes.has("applications.commands")) {
-    throw new Error("Discord install URL is missing required application command scope.");
+  const integrationType = parsed.searchParams.get("integration_type");
+  if (
+    !parsed.searchParams.get("client_id") ||
+    !scopes.has("applications.commands") ||
+    integrationType !== "0"
+  ) {
+    throw new Error("Discord install URL is missing required guild command install parameters.");
   }
 
   return parsed.toString();

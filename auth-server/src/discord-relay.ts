@@ -332,6 +332,7 @@ export async function handleDiscordInstallInfo(c: HydraContext): Promise<Respons
 
   const installUrl = new URL("https://discord.com/oauth2/authorize");
   installUrl.searchParams.set("client_id", applicationId);
+  installUrl.searchParams.set("integration_type", String(DISCORD_INTEGRATION_TYPE_GUILD_INSTALL));
   installUrl.searchParams.set("scope", "applications.commands");
 
   return c.json({

@@ -2,6 +2,16 @@ import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { createAuth } from "./auth";
 import { getAuthRuntimeConfig, type CloudflareBindings } from "./env";
+import {
+  DiscordRelayHub,
+  handleDiscordCommandSync,
+  handleDiscordControlSettings,
+  handleDiscordDesktopConnect,
+  handleDiscordInteraction,
+  handleDiscordRelayToken,
+} from "./discord-relay";
+
+export { DiscordRelayHub };
 
 const app = new Hono<{ Bindings: CloudflareBindings }>();
 
@@ -109,6 +119,43 @@ app.get("/api/auth/electron/init-oauth-proxy", async (c) => {
   responseHeaders.set("content-type", "application/json");
   return new Response(JSON.stringify(data), { headers: responseHeaders, status: 200 });
 });
+
+app.get("/api/auth/discord/control-settings", async (c) => {
+  try {
+    return await handleDiscordControlSettings(c);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Unable to load Discord settings." },
+      400
+    );
+  }
+});
+
+app.post("/api/auth/discord/control-settings", async (c) => {
+  try {
+    return await handleDiscordControlSettings(c);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Unable to update Discord settings." },
+      400
+    );
+  }
+});
+
+app.post("/api/auth/discord/relay-token", async (c) => {
+  try {
+    return await handleDiscordRelayToken(c);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Unable to create Discord relay token." },
+      400
+    );
+  }
+});
+
+app.get("/api/discord/desktop/connect", async (c) => handleDiscordDesktopConnect(c));
+app.post("/api/discord/interactions", async (c) => handleDiscordInteraction(c));
+app.post("/api/discord/commands", async (c) => handleDiscordCommandSync(c));
 
 // Catch-all handler — delegates to Better Auth
 app.all("/api/auth/*", async (c) => {

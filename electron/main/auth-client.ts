@@ -7,6 +7,11 @@
  */
 
 import { app, BrowserWindow } from "electron";
+import type {
+  DiscordControlSettings,
+  DiscordControlSettingsPatch,
+  DiscordRelayTokenResponse
+} from "../shared-types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -338,6 +343,51 @@ export class HydraAuthClient {
     }
   }
 
+  async getDiscordControlSettings(): Promise<DiscordControlSettings> {
+    const response = this.normalizeResponse(
+      await (await this.ensureClient()).$fetch("/discord/control-settings", {
+        method: "GET",
+      })
+    );
+
+    if (response.error) {
+      throw new Error(this.formatClientError(response.error, "Unable to load Discord settings."));
+    }
+
+    return this.toDiscordControlSettings(response.data);
+  }
+
+  async updateDiscordControlSettings(
+    patch: DiscordControlSettingsPatch
+  ): Promise<DiscordControlSettings> {
+    const response = this.normalizeResponse(
+      await (await this.ensureClient()).$fetch("/discord/control-settings", {
+        body: patch,
+        method: "POST",
+      })
+    );
+
+    if (response.error) {
+      throw new Error(this.formatClientError(response.error, "Unable to update Discord settings."));
+    }
+
+    return this.toDiscordControlSettings(response.data);
+  }
+
+  async requestDiscordRelayToken(): Promise<DiscordRelayTokenResponse> {
+    const response = this.normalizeResponse(
+      await (await this.ensureClient()).$fetch("/discord/relay-token", {
+        method: "POST",
+      })
+    );
+
+    if (response.error) {
+      throw new Error(this.formatClientError(response.error, "Unable to create Discord relay token."));
+    }
+
+    return this.toDiscordRelayTokenResponse(response.data);
+  }
+
   async verifyTotp(code: string): Promise<AuthResult> {
     try {
       const response = this.normalizeResponse(
@@ -500,6 +550,43 @@ export class HydraAuthClient {
         name: typeof user.name === "string" ? user.name : "",
       },
       expiresAt,
+    };
+  }
+
+  private toDiscordControlSettings(payload: unknown): DiscordControlSettings {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid Discord settings response.");
+    }
+
+    const data = payload as Partial<DiscordControlSettings>;
+    return {
+      enabled: data.enabled === true,
+      guildId: typeof data.guildId === "string" ? data.guildId : "",
+      channelId: typeof data.channelId === "string" ? data.channelId : "",
+      allowedUserIds: Array.isArray(data.allowedUserIds)
+        ? data.allowedUserIds.filter((value): value is string => typeof value === "string")
+        : [],
+    };
+  }
+
+  private toDiscordRelayTokenResponse(payload: unknown): DiscordRelayTokenResponse {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid Discord relay token response.");
+    }
+
+    const data = payload as Partial<DiscordRelayTokenResponse>;
+    if (
+      typeof data.token !== "string" ||
+      typeof data.websocketUrl !== "string" ||
+      typeof data.expiresAt !== "string"
+    ) {
+      throw new Error("Invalid Discord relay token response.");
+    }
+
+    return {
+      token: data.token,
+      websocketUrl: data.websocketUrl,
+      expiresAt: data.expiresAt,
     };
   }
 

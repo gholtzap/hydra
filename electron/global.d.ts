@@ -14,6 +14,9 @@ import type {
   ClaudeSettingsContext,
   ClaudeSkillFileRequest,
   DirectoryReadResult,
+  DiscordControlSettings,
+  DiscordControlSettingsPatch,
+  DiscordRelayStatus,
   EphemeralToolExitPayload,
   EphemeralToolId,
   EphemeralToolOutputPayload,
@@ -178,6 +181,16 @@ interface ClaudeWorkspaceApi {
   requestPasswordReset: (email: string, redirectUrl: string) => Promise<AuthResult>;
   verifyTotp: (code: string) => Promise<AuthResult>;
   onAuthStateChanged: (callback: (session: AuthSession | null) => void) => Unsubscribe;
+
+  // Discord control
+  getDiscordControlSettings: () => Promise<DiscordControlSettings>;
+  updateDiscordControlSettings: (
+    patch: DiscordControlSettingsPatch
+  ) => Promise<DiscordControlSettings>;
+  connectDiscordRelay: () => Promise<DiscordRelayStatus>;
+  disconnectDiscordRelay: () => Promise<DiscordRelayStatus>;
+  getDiscordRelayStatus: () => Promise<DiscordRelayStatus>;
+  onDiscordRelayStatusChanged: (callback: (status: DiscordRelayStatus) => void) => Unsubscribe;
 }
 
 interface PipecatClientLike {

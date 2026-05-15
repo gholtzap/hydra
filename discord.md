@@ -63,10 +63,10 @@ The Worker also requires the `DISCORD_RELAY` Durable Object binding and the `dis
 3. Set the required auth secrets from the block above, then copy the Discord application's ID, public key, and bot token into Worker secrets:
 
    ```sh
-   npm exec --prefix auth-server -- wrangler secret put DISCORD_APPLICATION_ID
-   npm exec --prefix auth-server -- wrangler secret put DISCORD_PUBLIC_KEY
-   npm exec --prefix auth-server -- wrangler secret put DISCORD_BOT_TOKEN
-   npm exec --prefix auth-server -- wrangler secret put DISCORD_COMMAND_SYNC_SECRET
+   npm exec --prefix auth-server -- wrangler --config auth-server/wrangler.toml secret put DISCORD_APPLICATION_ID
+   npm exec --prefix auth-server -- wrangler --config auth-server/wrangler.toml secret put DISCORD_PUBLIC_KEY
+   npm exec --prefix auth-server -- wrangler --config auth-server/wrangler.toml secret put DISCORD_BOT_TOKEN
+   npm exec --prefix auth-server -- wrangler --config auth-server/wrangler.toml secret put DISCORD_COMMAND_SYNC_SECRET
    ```
 
 4. Apply the remote D1 migrations:

@@ -56,6 +56,33 @@ DISCORD_PUBLIC_KEY=discord_interactions_public_key
 
 The Worker also requires the `DISCORD_RELAY` Durable Object binding and the `discord_control_settings` and `discord_link_codes` D1 migrations.
 
+### Deployment Checklist
+
+1. Create or select the official Hydra application in the Discord Developer Portal.
+2. Set the Discord Interactions Endpoint URL to `https://your-hydra-auth-worker.example/api/discord/interactions`.
+3. Set the required auth secrets from the block above, then copy the Discord application's ID, public key, and bot token into Worker secrets:
+
+   ```sh
+   npm exec --prefix auth-server -- wrangler secret put DISCORD_APPLICATION_ID
+   npm exec --prefix auth-server -- wrangler secret put DISCORD_PUBLIC_KEY
+   npm exec --prefix auth-server -- wrangler secret put DISCORD_BOT_TOKEN
+   npm exec --prefix auth-server -- wrangler secret put DISCORD_COMMAND_SYNC_SECRET
+   ```
+
+4. Apply the remote D1 migrations:
+
+   ```sh
+   npm --prefix auth-server run d1:migrate:remote
+   ```
+
+5. Deploy the Worker:
+
+   ```sh
+   npm --prefix auth-server run deploy
+   ```
+
+6. Sync the official slash commands.
+
 After deploying the Worker and setting the official Discord app secrets, sync the global slash commands:
 
 ```sh

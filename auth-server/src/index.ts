@@ -1,3 +1,4 @@
+import type { IncomingRequestCfProperties } from "@cloudflare/workers-types";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { createAuth } from "./auth";
@@ -49,6 +50,18 @@ function appendSetCookie(headers: Headers, source: Headers): void {
   }
 }
 
+function requestCfProperties(c: Context<{ Bindings: CloudflareBindings }>): IncomingRequestCfProperties {
+  return c.req.raw.cf as IncomingRequestCfProperties;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorStack(error: unknown): string {
+  return error instanceof Error && error.stack ? error.stack.slice(0, 500) : "none";
+}
+
 // CORS for auth routes — allow Electron origins
 app.use("/api/auth/*", async (c, next) => {
   const result = authConfigOrError(c);
@@ -93,7 +106,7 @@ app.get("/api/auth/electron/init-oauth-proxy", async (c) => {
   headers.set("content-type", "application/json");
   headers.set("origin", new URL(result.config.baseURL).origin);
 
-  const auth = createAuth(c.env, c.req.raw.cf as any, result.config.baseURL);
+  const auth = createAuth(c.env, requestCfProperties(c), result.config.baseURL);
   const signInResponse = await auth.handler(
     new Request(signInUrl, {
       body: JSON.stringify({ provider }),
@@ -188,7 +201,7 @@ app.all("/api/auth/*", async (c) => {
     return result.response;
   }
 
-  const auth = createAuth(c.env, c.req.raw.cf as any, result.config.baseURL);
+  const auth = createAuth(c.env, requestCfProperties(c), result.config.baseURL);
 
   // Reconstruct the request so the body stream is guaranteed to be fresh.
   // Passing c.req.raw directly can hand better-call a body ReadableStream
@@ -213,10 +226,10 @@ app.all("/api/auth/*", async (c) => {
       } catch {}
     }
     return response;
-  } catch (err: any) {
-    console.error(`[auth] THROWN: ${err?.message || err}`);
-    console.error(`[auth] stack: ${err?.stack?.slice(0, 500) || "none"}`);
-    throw err;
+  } catch (error) {
+    console.error(`[auth] THROWN: ${errorMessage(error)}`);
+    console.error(`[auth] stack: ${errorStack(error)}`);
+    throw error;
   }
 });
 

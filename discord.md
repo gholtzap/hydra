@@ -94,6 +94,8 @@ DISCORD_COMMAND_SYNC_SECRET=... \
 npm run discord:sync:centralized
 ```
 
+Release desktop builds that expose centralized Discord control only after the production auth Worker has been migrated, deployed, and synced. The desktop install, link-code, and relay actions call the configured auth server at runtime, so releasing the desktop before the Worker rollout completes leaves those controls unable to finish setup.
+
 ## Legacy Local Bridge
 
 The local bridge remains useful for local development, but it is no longer the recommended user setup. It runs a local Discord bot next to Hydra and talks to the loopback MCP server at `127.0.0.1:4141`.

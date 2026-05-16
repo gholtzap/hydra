@@ -1,7 +1,20 @@
+import type { IncomingRequestCfProperties } from "@cloudflare/workers-types";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { createAuth } from "./auth";
 import { getAuthRuntimeConfig, type CloudflareBindings } from "./env";
+import {
+  DiscordRelayHub,
+  handleDiscordCommandSync,
+  handleDiscordControlSettings,
+  handleDiscordDesktopConnect,
+  handleDiscordInstallInfo,
+  handleDiscordInteraction,
+  handleDiscordLinkCode,
+  handleDiscordRelayToken,
+} from "./discord-relay";
+
+export { DiscordRelayHub };
 
 const app = new Hono<{ Bindings: CloudflareBindings }>();
 
@@ -35,6 +48,18 @@ function appendSetCookie(headers: Headers, source: Headers): void {
   if (cookie) {
     headers.append("set-cookie", cookie);
   }
+}
+
+function requestCfProperties(c: Context<{ Bindings: CloudflareBindings }>): IncomingRequestCfProperties {
+  return c.req.raw.cf as IncomingRequestCfProperties;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorStack(error: unknown): string {
+  return error instanceof Error && error.stack ? error.stack.slice(0, 500) : "none";
 }
 
 // CORS for auth routes — allow Electron origins
@@ -81,7 +106,7 @@ app.get("/api/auth/electron/init-oauth-proxy", async (c) => {
   headers.set("content-type", "application/json");
   headers.set("origin", new URL(result.config.baseURL).origin);
 
-  const auth = createAuth(c.env, c.req.raw.cf as any, result.config.baseURL);
+  const auth = createAuth(c.env, requestCfProperties(c), result.config.baseURL);
   const signInResponse = await auth.handler(
     new Request(signInUrl, {
       body: JSON.stringify({ provider }),
@@ -110,6 +135,65 @@ app.get("/api/auth/electron/init-oauth-proxy", async (c) => {
   return new Response(JSON.stringify(data), { headers: responseHeaders, status: 200 });
 });
 
+app.get("/api/auth/discord/control-settings", async (c) => {
+  try {
+    return await handleDiscordControlSettings(c);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Unable to load Discord settings." },
+      400
+    );
+  }
+});
+
+app.post("/api/auth/discord/control-settings", async (c) => {
+  try {
+    return await handleDiscordControlSettings(c);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Unable to update Discord settings." },
+      400
+    );
+  }
+});
+
+app.post("/api/auth/discord/relay-token", async (c) => {
+  try {
+    return await handleDiscordRelayToken(c);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Unable to create Discord relay token." },
+      400
+    );
+  }
+});
+
+app.get("/api/auth/discord/install-info", async (c) => {
+  try {
+    return await handleDiscordInstallInfo(c);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Unable to load Discord install info." },
+      400
+    );
+  }
+});
+
+app.post("/api/auth/discord/link-code", async (c) => {
+  try {
+    return await handleDiscordLinkCode(c);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Unable to create Discord link code." },
+      400
+    );
+  }
+});
+
+app.get("/api/discord/desktop/connect", async (c) => handleDiscordDesktopConnect(c));
+app.post("/api/discord/interactions", async (c) => handleDiscordInteraction(c));
+app.post("/api/discord/commands", async (c) => handleDiscordCommandSync(c));
+
 // Catch-all handler — delegates to Better Auth
 app.all("/api/auth/*", async (c) => {
   const result = authConfigOrError(c);
@@ -117,7 +201,7 @@ app.all("/api/auth/*", async (c) => {
     return result.response;
   }
 
-  const auth = createAuth(c.env, c.req.raw.cf as any, result.config.baseURL);
+  const auth = createAuth(c.env, requestCfProperties(c), result.config.baseURL);
 
   // Reconstruct the request so the body stream is guaranteed to be fresh.
   // Passing c.req.raw directly can hand better-call a body ReadableStream
@@ -142,10 +226,10 @@ app.all("/api/auth/*", async (c) => {
       } catch {}
     }
     return response;
-  } catch (err: any) {
-    console.error(`[auth] THROWN: ${err?.message || err}`);
-    console.error(`[auth] stack: ${err?.stack?.slice(0, 500) || "none"}`);
-    throw err;
+  } catch (error) {
+    console.error(`[auth] THROWN: ${errorMessage(error)}`);
+    console.error(`[auth] stack: ${errorStack(error)}`);
+    throw error;
   }
 });
 

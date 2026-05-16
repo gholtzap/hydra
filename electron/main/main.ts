@@ -15,6 +15,7 @@ import type {
   ClaudePathRevealRequest,
   ClaudeSettingsContext,
   DirectoryReadResult,
+  DiscordControlSettingsPatch,
   EphemeralToolExitPayload,
   EphemeralToolId,
   EphemeralToolInputRequest,
@@ -64,6 +65,7 @@ import type { HydraMcpServer } from "./mcp-server";
 import type { VoiceManager } from "./voice-manager";
 import type { AuthSession } from "./auth-client";
 import { HydraAuthClient } from "./auth-client";
+import { DiscordRelayClient } from "./discord-relay";
 import {
   extractPreferencesPatch,
   normalizeMarketplaceInstallArgs,
@@ -573,6 +575,41 @@ function assertTrustedGitHubUrl(input: unknown) {
   return parsed.toString();
 }
 
+function assertTrustedDiscordInstallUrl(input: unknown): string {
+  const value = typeof input === "string" ? input.trim() : "";
+  if (!value) {
+    throw new Error("Discord install URL is required.");
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("Invalid Discord install URL.");
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    parsed.protocol !== "https:" ||
+    (hostname !== "discord.com" && hostname !== "www.discord.com") ||
+    parsed.pathname !== "/oauth2/authorize"
+  ) {
+    throw new Error("Only Discord install URLs may be opened.");
+  }
+
+  const scopes = new Set((parsed.searchParams.get("scope") || "").split(/\s+/u).filter(Boolean));
+  const integrationType = parsed.searchParams.get("integration_type");
+  if (
+    !parsed.searchParams.get("client_id") ||
+    !scopes.has("applications.commands") ||
+    integrationType !== "0"
+  ) {
+    throw new Error("Discord install URL is missing required guild command install parameters.");
+  }
+
+  return parsed.toString();
+}
+
 function sanitizePreferencesPatch(patch: unknown): AppPreferencesPatch {
   if (!isPlainObject(patch)) {
     return {};
@@ -894,6 +931,7 @@ class AppController {
   mcpServer: HydraMcpServer | null;
   mcpAuthToken: string | null;
   voiceManager: VoiceManager | null;
+  discordRelay: DiscordRelayClient;
   authClient: HydraAuthClient | null;
   authMainSetup: Promise<void>;
 
@@ -942,6 +980,11 @@ class AppController {
       csp: true,
       getWindow: () => this.window,
     });
+    this.discordRelay = new DiscordRelayClient(
+      this,
+      () => this.authClient,
+      (status) => this.sendDiscordRelayStatus(status)
+    );
     this.ptyHost = new PtyHostClient();
     this.ptyHost.onMessage((message) => this.handlePtyMessage(message));
   }
@@ -1321,6 +1364,10 @@ class AppController {
   }
 
   private async handleAuthSessionChanged(session: AuthSession | null): Promise<void> {
+    if (!session) {
+      this.discordRelay.disconnect();
+    }
+
     if (!this.window || this.window.isDestroyed()) {
       return;
     }
@@ -1574,6 +1621,20 @@ class AppController {
       if (!this.authClient) return { success: false, error: "Auth not initialized." };
       return this.authClient.verifyTotp(payload.code);
     });
+    ipcMain.handle("discord:getControlSettings", () =>
+      this.discordRelay.getSettings()
+    );
+    ipcMain.handle("discord:updateControlSettings", (_event, payload: DiscordControlSettingsPatch) =>
+      this.discordRelay.updateSettings(payload || {})
+    );
+    ipcMain.handle("discord:openInstallUrl", async () => {
+      const installInfo = await this.discordRelay.getInstallInfo();
+      await shell.openExternal(assertTrustedDiscordInstallUrl(installInfo.installUrl));
+    });
+    ipcMain.handle("discord:createLinkCode", () => this.discordRelay.createLinkCode());
+    ipcMain.handle("discord:connect", () => this.discordRelay.connect());
+    ipcMain.handle("discord:disconnect", () => this.discordRelay.disconnect());
+    ipcMain.handle("discord:getRelayStatus", () => this.discordRelay.getStatus());
 
     ipcMain.handle("fs:readFile", async (_event, payload) => {
       try {
@@ -2168,6 +2229,12 @@ class AppController {
     // Notify MCP subscribers about plan
     if (this.mcpServer) {
       this.mcpServer.notifyResourceChanged(`hydra://sessions/${sessionId}`);
+    }
+  }
+
+  sendDiscordRelayStatus(status: ReturnType<DiscordRelayClient["getStatus"]>): void {
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send("discord:relayStatusChanged", status);
     }
   }
 
@@ -4684,6 +4751,8 @@ class AppController {
   }
 
   async performShutdown(): Promise<void> {
+    this.discordRelay.disconnect();
+
     if (this.voiceManager) {
       await this.voiceManager.dispose();
       this.voiceManager = null;

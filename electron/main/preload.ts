@@ -14,6 +14,10 @@ import type {
   ClaudeSettingsContext,
   ClaudeSkillFileRequest,
   DirectoryReadResult,
+  DiscordControlSettings,
+  DiscordControlSettingsPatch,
+  DiscordLinkCode,
+  DiscordRelayStatus,
   EphemeralToolExitPayload,
   EphemeralToolId,
   EphemeralToolOutputPayload,
@@ -417,5 +421,23 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     verifyTotp: (code: string) =>
       invoke<AuthResult>("auth:verifyTotp", { code }),
     onAuthStateChanged: (callback: (session: AuthSession | null) => void) =>
-      subscribe<AuthSession | null>("auth:stateChanged", callback)
+      subscribe<AuthSession | null>("auth:stateChanged", callback),
+
+    // Discord control
+    getDiscordControlSettings: () =>
+      invoke<DiscordControlSettings>("discord:getControlSettings"),
+    updateDiscordControlSettings: (patch: DiscordControlSettingsPatch) =>
+      invoke<DiscordControlSettings>("discord:updateControlSettings", patch),
+    openDiscordInstallUrl: () =>
+      invoke<void>("discord:openInstallUrl"),
+    createDiscordLinkCode: () =>
+      invoke<DiscordLinkCode>("discord:createLinkCode"),
+    connectDiscordRelay: () =>
+      invoke<DiscordRelayStatus>("discord:connect"),
+    disconnectDiscordRelay: () =>
+      invoke<DiscordRelayStatus>("discord:disconnect"),
+    getDiscordRelayStatus: () =>
+      invoke<DiscordRelayStatus>("discord:getRelayStatus"),
+    onDiscordRelayStatusChanged: (callback: (status: DiscordRelayStatus) => void) =>
+      subscribe<DiscordRelayStatus>("discord:relayStatusChanged", callback)
   });

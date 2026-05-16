@@ -52,7 +52,7 @@ function createAuth(
   cf?: IncomingRequestCfProperties,
   baseURL?: string
 ) {
-  const db = env ? drizzle(env.DATABASE, { schema }) : ({} as any);
+  const db = env ? drizzle(env.DATABASE, { schema }) : null;
   const runtimeConfig = env ? getAuthRuntimeConfig(env) : null;
   const secondaryStorage =
     env && runtimeConfig
@@ -99,7 +99,7 @@ function createAuth(
     secret: runtimeConfig?.secret,
     ...withCloudflare(
       {
-        d1: env
+        d1: env && db
           ? { db, options: { usePlural: false } }
           : undefined,
         cf: cf || {},

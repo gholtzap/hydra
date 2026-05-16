@@ -1,96 +1,116 @@
 # Discord Control
 
-Hydra can be controlled from Discord by running a local Discord bridge next to the Hydra desktop app. Discord commands are accepted only from the configured guild, channel, and optional allowlisted users. The bridge talks to Hydra through the local MCP server at `127.0.0.1:4141`.
+Hydra can be controlled from Discord through the official Hydra Discord app and the Hydra relay service. Discord cannot call a user's `127.0.0.1:4141` MCP server, so the desktop app opens an outbound authenticated websocket to the relay after the user signs in.
 
-Do not expose Hydra's MCP port to the internet. The Discord bridge should run on the same machine as Hydra.
+```text
+Discord official Hydra app
+        |
+        v
+Hydra relay/auth service
+        |
+outbound authenticated websocket
+        |
+Hydra desktop
+        |
+local AppController
+```
 
-## Discord Developer Portal Setup
+## User Setup
 
-1. Open the Discord Developer Portal:
-   <https://discord.com/developers/applications>
-2. Create a new application.
-3. Open the **Bot** page and create a bot.
-4. Regenerate and copy the bot token.
-5. Keep **Public Bot** disabled for private use.
-6. Install the app into a private server using **Guild Install**.
-7. Use these OAuth scopes:
-   - `bot`
-   - `applications.commands`
-8. Use these bot permissions:
-   - `Send Messages`
-   - `Use Slash Commands`
-   - `Embed Links` optional
-9. Create a private channel such as `#hydra-control`.
-10. Copy these IDs:
-    - Application/client ID
-    - Guild/server ID
-    - Hydra control channel ID
-    - Discord user ID for each allowed user
+1. Open Hydra desktop.
+2. Sign in.
+3. Open Settings, then Integrations.
+4. Enable Discord control.
+5. Click Install App to add the official Hydra Discord app to the target server.
+6. Click Generate Code.
+7. Run `/hydra link` with that code in the Discord channel that should control Hydra.
+8. Return to Hydra and connect the relay after the link is detected.
 
-## Environment
+Users can still enter the allowed Discord server ID, channel ID, and optional comma-separated user IDs manually.
 
-Create or update `.env` with:
+This setup does not require users to create a Discord Developer Portal application, manage a bot token, register slash commands, or run a sidecar script.
+
+## Cloud Setup
+
+The auth Worker owns the centralized Discord integration:
+
+- `POST /api/discord/interactions` receives Discord interactions.
+- `GET /api/discord/desktop/connect` upgrades signed-in desktops to websocket relay connections.
+- `POST /api/auth/discord/relay-token` issues short-lived relay tokens to signed-in desktops.
+- `GET` and `POST /api/auth/discord/control-settings` store per-user allowed server, channel, and user IDs.
+- `GET /api/auth/discord/install-info` returns the official Discord app install URL.
+- `POST /api/auth/discord/link-code` creates a short-lived setup code for linking a Discord channel.
+- `POST /api/discord/commands` syncs the official `/hydra` commands when called with `x-hydra-admin-secret`.
+
+Required Worker bindings and secrets:
 
 ```env
-DISCORD_BOT_TOKEN=your_discord_bot_token
-DISCORD_CLIENT_ID=your_discord_application_id
-DISCORD_GUILD_ID=your_discord_server_id
-DISCORD_CHANNEL_ID=your_hydra_control_channel_id
-DISCORD_ALLOWED_USER_IDS=comma,separated,discord,user,ids
+BETTER_AUTH_SECRET=...
+BETTER_AUTH_URL=...
+AUTH_ALLOWED_ORIGINS=app://-,...
+DISCORD_APPLICATION_ID=official_hydra_discord_application_id
+DISCORD_BOT_TOKEN=official_hydra_bot_token
+DISCORD_COMMAND_SYNC_SECRET=admin_only_sync_secret
+DISCORD_PUBLIC_KEY=discord_interactions_public_key
 ```
 
-`DISCORD_ALLOWED_USER_IDS` is required by default. If it is empty, the bridge will not start. To intentionally allow every user who can use slash commands in the configured channel to control Hydra, set:
+The Worker also requires the `DISCORD_RELAY` Durable Object binding and the `discord_control_settings` and `discord_link_codes` D1 migrations.
 
-```env
-HYDRA_DISCORD_ALLOW_CHANNEL_MEMBERS=1
-```
+### Deployment Checklist
 
-Hydra must also have its local MCP server enabled:
+1. Create or select the official Hydra application in the Discord Developer Portal.
+2. Set the Discord Interactions Endpoint URL to `https://your-hydra-auth-worker.example/api/discord/interactions`.
+3. Set the required auth secrets from the block above, then copy the Discord application's ID, public key, and bot token into Worker secrets:
+
+   ```sh
+   npm exec --prefix auth-server -- wrangler --config auth-server/wrangler.toml secret put DISCORD_APPLICATION_ID
+   npm exec --prefix auth-server -- wrangler --config auth-server/wrangler.toml secret put DISCORD_PUBLIC_KEY
+   npm exec --prefix auth-server -- wrangler --config auth-server/wrangler.toml secret put DISCORD_BOT_TOKEN
+   npm exec --prefix auth-server -- wrangler --config auth-server/wrangler.toml secret put DISCORD_COMMAND_SYNC_SECRET
+   ```
+
+4. Apply the remote D1 migrations:
+
+   ```sh
+   HYDRA_ALLOW_AUTH_REMOTE_MIGRATE=1 \
+   npm --prefix auth-server run d1:migrate:remote
+   ```
+
+5. Deploy the Worker:
+
+   ```sh
+   HYDRA_ALLOW_AUTH_DEPLOY=1 \
+   npm --prefix auth-server run deploy
+   ```
+
+6. Sync the official slash commands.
+
+After deploying the Worker and setting the official Discord app secrets, sync the global slash commands:
 
 ```sh
-HYDRA_ENABLE_MCP_SERVER=1 npm run dev:desktop
+HYDRA_ALLOW_DISCORD_COMMAND_SYNC=1 \
+AUTH_SERVER_URL=https://your-hydra-auth-worker.example \
+DISCORD_COMMAND_SYNC_SECRET=... \
+npm run discord:sync:centralized
 ```
 
-By default, the Discord bridge reads Hydra's generated MCP token from the app data directory. If needed, override the token or token file:
+Release desktop builds that expose centralized Discord control only after the production auth Worker has been migrated, deployed, and synced. The desktop install, link-code, and relay actions call the configured auth server at runtime, so releasing the desktop before the Worker rollout completes leaves those controls unable to finish setup.
 
-```env
-HYDRA_MCP_AUTH_TOKEN=your_hydra_mcp_token
-HYDRA_MCP_AUTH_TOKEN_FILE=/path/to/mcp-auth-token
-HYDRA_MCP_ENDPOINT=http://127.0.0.1:4141/mcp
-HYDRA_MCP_HEALTH_URL=http://127.0.0.1:4141/health
-```
+## Legacy Local Bridge
 
-`HYDRA_MCP_ENDPOINT` and `HYDRA_MCP_HEALTH_URL` must use `http://` and point to `localhost`, `127.0.0.1`, or `::1`. The bridge refuses non-loopback URLs so it does not send the Hydra MCP bearer token to another host.
-
-## Running
-
-Start Hydra with MCP enabled:
-
-```sh
-HYDRA_ENABLE_MCP_SERVER=1 npm run dev:desktop
-```
-
-Register guild slash commands:
-
-```sh
-npm run discord:register
-```
-
-Start the Discord bridge:
-
-```sh
-npm run discord:bot
-```
-
-If the `.env` file lives outside the current working directory, pass its path:
-
-```sh
-HYDRA_DISCORD_ENV_PATH=/path/to/.env npm run discord:bot
-```
+The local bridge remains useful for local development, but it is no longer the recommended user setup. It runs a local Discord bot next to Hydra and talks to the loopback MCP server at `127.0.0.1:4141`.
 
 ## Discord Commands
 
 All commands are under `/hydra`.
+
+### `/hydra link`
+
+Links the current Discord channel to the signed-in Hydra desktop that generated the setup code.
+
+Options:
+
+- `code`: required 8-character code generated from Hydra Settings, then Integrations
 
 ### `/hydra status`
 
@@ -199,12 +219,11 @@ Supported agent IDs:
 
 ## Security Notes
 
-- Never commit `.env`.
-- Never paste bot tokens into chat, logs, issues, or pull requests.
-- Regenerate the Discord bot token if it is exposed.
+- Never commit Worker secrets or local `.env` files.
+- Never paste the official bot token into chat, logs, issues, or pull requests.
+- Regenerate the official Discord bot token if it is exposed.
 - Keep the control channel private.
-- Keep `DISCORD_ALLOWED_USER_IDS` set for personal use.
-- Set `HYDRA_DISCORD_ALLOW_CHANNEL_MEMBERS=1` only when every user with access to the configured channel should be able to control Hydra.
+- Configure allowed user IDs for personal use.
 - Do not expose `127.0.0.1:4141` through a tunnel or public proxy.
-- Keep the MCP endpoint and health URL on loopback addresses.
+- The centralized relay does not require exposing the local MCP server.
 - Treat approvals from Discord as sensitive because they can allow agents to run tools or modify files.

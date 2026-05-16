@@ -20,6 +20,7 @@
     "dev:auth": "npm --prefix auth-server run dev:local",
     "discord:bot": "node scripts/hydra-discord-bot.mjs start",
     "discord:register": "node scripts/hydra-discord-bot.mjs register",
+    "discord:sync:centralized": "node scripts/sync-discord-commands.mjs",
     "pack": "npm run build && npm run build:icon && node scripts/run-electron-builder.mjs --dir",
     "pack:mac": "npm run build && node scripts/run-electron-builder.mjs --dir --mac --publish never",
     "smoke:packaged:mac": "node scripts/smoke-packaged-mac.mjs",

@@ -8,6 +8,9 @@ import type {
   ClaudeSettingsContext,
   EphemeralToolId,
   EphemeralToolOutputPayload,
+  DiscordControlSettings,
+  DiscordLinkCode,
+  DiscordRelayStatus,
   FileTreeNode as SharedFileTreeNode,
   JsonObject,
   JsonValue,
@@ -34,6 +37,8 @@ import type {
 
 const api = window.claudeWorkspace;
 let sessionSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let discordLinkPollTimer: ReturnType<typeof window.setTimeout> | null = null;
+let discordLinkSettingsBaseline: string | null = null;
 let sessionSearchRenderStateCache: {
   results: SessionSearchResult[];
   state: SessionSearchRenderState;
@@ -140,7 +145,7 @@ type FileTreeNode = SharedFileTreeNode;
 type SessionSearchResult = SharedSessionSearchResult & {
   hydraSessionId?: string | null;
 };
-type SettingsTab = "general" | "account" | "themes" | "keybindings" | "claude";
+type SettingsTab = "general" | "account" | "integrations" | "themes" | "keybindings" | "claude";
 
 type SessionSearchFilter = "all" | SessionSearchSource;
 type WorktreeManagerFilter = "all" | "active" | "inactive";
@@ -304,6 +309,13 @@ type UiState = {
   authSessionLoaded: boolean;
   settingsAuthInFlight: boolean;
   settingsAuthError: string;
+  discordControlSettings: DiscordControlSettings | null;
+  discordRelayStatus: DiscordRelayStatus | null;
+  discordSettingsLoaded: boolean;
+  discordSettingsInFlight: boolean;
+  discordSettingsMessage: string;
+  discordAllowedUsersDraft: string;
+  discordLinkCode: DiscordLinkCode | null;
   settingsContext: ClaudeSettingsContext | null;
   settingsSelectedFilePath: string | null;
   settingsJsonCategoryId: string;
@@ -415,6 +427,13 @@ const ui: UiState = {
   authSessionLoaded: false,
   settingsAuthInFlight: false,
   settingsAuthError: "",
+  discordControlSettings: null,
+  discordRelayStatus: null,
+  discordSettingsLoaded: false,
+  discordSettingsInFlight: false,
+  discordSettingsMessage: "",
+  discordAllowedUsersDraft: "",
+  discordLinkCode: null,
   settingsContext: null,
   settingsSelectedFilePath: null,
   settingsJsonCategoryId: "",
@@ -1324,6 +1343,13 @@ api.onAuthStateChanged((session) => {
   ui.authSessionLoaded = true;
   ui.settingsAuthError = "";
   if (settingsDialog.open) {
+    void renderSettingsDialog();
+  }
+});
+
+api.onDiscordRelayStatusChanged((status) => {
+  ui.discordRelayStatus = status;
+  if (settingsDialog.open && ui.settingsTab === "integrations") {
     void renderSettingsDialog();
   }
 });
@@ -4432,6 +4458,7 @@ async function renderSettingsDialog() {
         <div class="settings-tabs">
           <button type="button" class="settings-tab ${ui.settingsTab === "general" ? "active" : ""}" data-action="settings-tab" data-tab="general">General</button>
           <button type="button" class="settings-tab ${ui.settingsTab === "account" ? "active" : ""}" data-action="settings-tab" data-tab="account">Account</button>
+          <button type="button" class="settings-tab ${ui.settingsTab === "integrations" ? "active" : ""}" data-action="settings-tab" data-tab="integrations">Integrations</button>
           <button type="button" class="settings-tab ${ui.settingsTab === "themes" ? "active" : ""}" data-action="settings-tab" data-tab="themes">Themes</button>
           <button type="button" class="settings-tab ${ui.settingsTab === "keybindings" ? "active" : ""}" data-action="settings-tab" data-tab="keybindings">Keybindings</button>
           <button type="button" class="settings-tab ${ui.settingsTab === "claude" ? "active" : ""}" data-action="settings-tab" data-tab="claude">Agent Files</button>
@@ -4444,6 +4471,8 @@ async function renderSettingsDialog() {
             ? renderGeneralSettingsPane()
             : ui.settingsTab === "account"
               ? renderAccountSettingsPane()
+            : ui.settingsTab === "integrations"
+              ? renderIntegrationsSettingsPane()
             : ui.settingsTab === "themes"
               ? renderThemesSettingsPane()
               : ui.settingsTab === "keybindings"
@@ -5115,6 +5144,129 @@ function renderAccountSettingsPane() {
         ${
           ui.settingsAuthError
             ? `<div class="settings-warning-card"><div class="row-title">Account error</div><div class="row-subtitle">${escapeHtml(ui.settingsAuthError)}</div></div>`
+            : ""
+        }
+      </section>
+    </div>
+  `;
+}
+
+function renderIntegrationsSettingsPane() {
+  const settings = ui.discordControlSettings || {
+    enabled: false,
+    guildId: "",
+    channelId: "",
+    allowedUserIds: []
+  };
+  const status = ui.discordRelayStatus || {
+    state: "disconnected",
+    connected: false,
+    lastConnectedAt: null,
+    lastDisconnectedAt: null,
+    lastError: null
+  };
+  const loading = !ui.discordSettingsLoaded || ui.discordSettingsInFlight;
+  const usersDraft = ui.discordAllowedUsersDraft || settings.allowedUserIds.join(", ");
+  const canConnect = settings.enabled && settings.guildId && settings.channelId && !loading;
+  const linkCode = ui.discordLinkCode;
+  const statusDetail = status.connected
+    ? `Connected ${formatDateTime(status.lastConnectedAt || "", "recently")}`
+    : status.lastError || "Hydra is not connected to the Discord relay.";
+
+  return `
+    <div class="dialog-panel">
+      <section class="settings-group-card settings-toggle-card">
+        <div class="settings-group-header">
+          <div class="settings-field-copy">
+            <div class="row-title">Discord Control</div>
+            <div class="muted">Use the official Hydra Discord app through the signed-in relay service.</div>
+          </div>
+          <div class="settings-detail-actions">
+            <button
+              type="button"
+              data-action="discord-install-app"
+              ${loading ? "disabled" : ""}
+            >Install App</button>
+            <button
+              type="button"
+              data-action="discord-refresh-settings"
+              ${loading ? "disabled" : ""}
+            >Refresh</button>
+            ${
+              status.connected
+                ? `<button type="button" class="ws-action-danger" data-action="discord-disconnect" ${loading ? "disabled" : ""}>Disconnect</button>`
+                : `<button type="button" class="primary" data-action="discord-connect" ${canConnect ? "" : "disabled"}>Connect</button>`
+            }
+          </div>
+        </div>
+        <div class="settings-group-body">
+          ${
+            loading
+              ? `<div class="muted">Loading Discord settings...</div>`
+              : `
+                <label class="inline-toggle">
+                  <input type="checkbox" id="discord-enabled" ${settings.enabled ? "checked" : ""} />
+                  <span>Enable Discord control</span>
+                </label>
+                <div class="settings-detail-panel">
+                  <div class="settings-group-header">
+                    <div class="settings-field-copy">
+                      <div class="row-title">Link from Discord</div>
+                      <div class="muted">Generate a short-lived code, then run <span class="mono">/hydra link</span> in the Discord channel.</div>
+                    </div>
+                    <div class="settings-detail-actions">
+                      <button type="button" data-action="discord-create-link-code">Generate Code</button>
+                      ${
+                        linkCode
+                          ? `<button type="button" data-action="discord-copy-link-code">Copy Command</button>`
+                          : ""
+                      }
+                    </div>
+                  </div>
+                  ${
+                    linkCode
+                      ? `
+                        <div class="account-detail-grid">
+                          <div class="account-detail-item">
+                            <span class="account-detail-label">Code</span>
+                            <span class="account-detail-value mono">${escapeHtml(linkCode.code)}</span>
+                          </div>
+                          <div class="account-detail-item">
+                            <span class="account-detail-label">Expires</span>
+                            <span class="account-detail-value">${escapeHtml(formatDateTime(linkCode.expiresAt, "soon"))}</span>
+                          </div>
+                        </div>
+                      `
+                      : ""
+                  }
+                </div>
+                <div class="settings-add-grid">
+                  <label class="settings-field-control">
+                    <div class="row-title">Allowed Server ID</div>
+                    <input id="discord-guild-id" value="${escapeAttribute(settings.guildId)}" placeholder="123456789012345678" />
+                  </label>
+                  <label class="settings-field-control">
+                    <div class="row-title">Allowed Channel ID</div>
+                    <input id="discord-channel-id" value="${escapeAttribute(settings.channelId)}" placeholder="123456789012345678" />
+                  </label>
+                </div>
+                <label class="settings-field-control">
+                  <div class="row-title">Allowed User IDs</div>
+                  <input id="discord-allowed-users" value="${escapeAttribute(usersDraft)}" placeholder="Optional comma-separated Discord user IDs" />
+                </label>
+                <div class="settings-detail-actions">
+                  <button type="button" class="primary" data-action="discord-save-settings" ${loading ? "disabled" : ""}>Save Discord Settings</button>
+                </div>
+              `
+          }
+        </div>
+        <div class="settings-update-status settings-update-status-${escapeAttribute(status.state)}">
+          <div class="row-title">Relay ${escapeHtml(status.state)}</div>
+          <div class="muted">${escapeHtml(statusDetail)}</div>
+        </div>
+        ${
+          ui.discordSettingsMessage
+            ? `<div class="settings-save-message">${escapeHtml(ui.discordSettingsMessage)}</div>`
             : ""
         }
       </section>
@@ -6811,6 +6963,10 @@ async function handleClick(event) {
         await refreshAuthSession();
         break;
       }
+      if (ui.settingsTab === "integrations") {
+        await refreshDiscordControlSettings();
+        break;
+      }
       await renderSettingsDialog();
       break;
     case "worktree-filter":
@@ -6851,6 +7007,27 @@ async function handleClick(event) {
       } finally {
         ui.settingsAuthInFlight = false;
       }
+      break;
+    case "discord-refresh-settings":
+      await refreshDiscordControlSettings();
+      break;
+    case "discord-install-app":
+      await openDiscordInstallUrlFromSettings();
+      break;
+    case "discord-create-link-code":
+      await createDiscordLinkCodeFromSettings();
+      break;
+    case "discord-copy-link-code":
+      await copyDiscordLinkCommandFromSettings();
+      break;
+    case "discord-save-settings":
+      await saveDiscordControlSettings();
+      break;
+    case "discord-connect":
+      await connectDiscordRelayFromSettings();
+      break;
+    case "discord-disconnect":
+      await disconnectDiscordRelayFromSettings();
       break;
     case "settings-claude-view":
       ui.settingsClaudeView = (target.dataset.claudeView || "files") as ClaudeSettingsView;
@@ -7789,6 +7966,9 @@ async function handleInput(event) {
     case "marketplace-inspect-url":
       ui.marketplaceInspectUrl = target.value;
       break;
+    case "discord-allowed-users":
+      ui.discordAllowedUsersDraft = target.value;
+      break;
     default:
       if (target.dataset.sessionRenameInput === "true") {
         ui.renamingSessionTitle = target.value;
@@ -8000,6 +8180,9 @@ async function handleChange(event) {
       break;
     case "pref-in-app-badges":
       await api.updatePreferences({ showInAppBadges: (target as HTMLInputElement).checked });
+      break;
+    case "discord-enabled":
+      await saveDiscordControlSettings({ enabled: (target as HTMLInputElement).checked });
       break;
     default:
       break;
@@ -8951,6 +9134,9 @@ async function openSettings(
   if (initialTab === "account" || !ui.authSessionLoaded) {
     await refreshAuthSession();
   }
+  if (initialTab === "integrations" || !ui.discordSettingsLoaded) {
+    await refreshDiscordControlSettings();
+  }
   await renderSettingsDialog();
   if (!settingsDialog.open) {
     settingsDialog.showModal();
@@ -8978,6 +9164,240 @@ async function refreshAuthSession() {
       await renderSettingsDialog();
     }
   }
+}
+
+async function refreshDiscordControlSettings() {
+  ui.discordSettingsInFlight = true;
+  if (settingsDialog.open) {
+    await renderSettingsDialog();
+  }
+
+  try {
+    const [settings, status] = await Promise.all([
+      api.getDiscordControlSettings(),
+      api.getDiscordRelayStatus()
+    ]);
+    ui.discordControlSettings = settings;
+    ui.discordAllowedUsersDraft = settings.allowedUserIds.join(", ");
+    ui.discordRelayStatus = status;
+    ui.discordSettingsLoaded = true;
+    ui.discordSettingsMessage = "";
+  } catch (error) {
+    ui.discordSettingsLoaded = true;
+    ui.discordSettingsMessage =
+      error instanceof Error ? error.message : "Failed to load Discord settings.";
+  } finally {
+    ui.discordSettingsInFlight = false;
+    if (settingsDialog.open) {
+      await renderSettingsDialog();
+    }
+  }
+}
+
+async function saveDiscordControlSettings(patch: Partial<DiscordControlSettings> = {}) {
+  const guildInput = settingsDialog.querySelector("#discord-guild-id") as HTMLInputElement | null;
+  const channelInput = settingsDialog.querySelector("#discord-channel-id") as HTMLInputElement | null;
+  const usersInput = settingsDialog.querySelector("#discord-allowed-users") as HTMLInputElement | null;
+  const enabledInput = settingsDialog.querySelector("#discord-enabled") as HTMLInputElement | null;
+  const current = ui.discordControlSettings || {
+    enabled: false,
+    guildId: "",
+    channelId: "",
+    allowedUserIds: []
+  };
+
+  ui.discordSettingsInFlight = true;
+  ui.discordSettingsMessage = "";
+  await renderSettingsDialog();
+
+  try {
+    const nextSettings = await api.updateDiscordControlSettings({
+      enabled: enabledInput ? enabledInput.checked : current.enabled,
+      guildId: guildInput ? guildInput.value.trim() : current.guildId,
+      channelId: channelInput ? channelInput.value.trim() : current.channelId,
+      allowedUserIds: parseDiscordUserIds(usersInput ? usersInput.value : ui.discordAllowedUsersDraft),
+      ...patch
+    });
+    ui.discordControlSettings = nextSettings;
+    ui.discordAllowedUsersDraft = nextSettings.allowedUserIds.join(", ");
+    ui.discordSettingsLoaded = true;
+    ui.discordSettingsMessage = "Discord settings saved.";
+  } catch (error) {
+    ui.discordSettingsMessage =
+      error instanceof Error ? error.message : "Failed to save Discord settings.";
+  } finally {
+    ui.discordSettingsInFlight = false;
+    if (settingsDialog.open) {
+      await renderSettingsDialog();
+    }
+  }
+}
+
+async function openDiscordInstallUrlFromSettings() {
+  ui.discordSettingsInFlight = true;
+  ui.discordSettingsMessage = "";
+  await renderSettingsDialog();
+
+  try {
+    await api.openDiscordInstallUrl();
+    ui.discordSettingsMessage = "Discord install page opened.";
+  } catch (error) {
+    ui.discordSettingsMessage =
+      error instanceof Error ? error.message : "Failed to open Discord install page.";
+  } finally {
+    ui.discordSettingsInFlight = false;
+    if (settingsDialog.open) {
+      await renderSettingsDialog();
+    }
+  }
+}
+
+async function createDiscordLinkCodeFromSettings() {
+  ui.discordSettingsInFlight = true;
+  ui.discordSettingsMessage = "";
+  await renderSettingsDialog();
+
+  try {
+    ui.discordLinkCode = await api.createDiscordLinkCode();
+    discordLinkSettingsBaseline = discordSettingsSignature(ui.discordControlSettings);
+    ui.discordSettingsMessage = "Discord link code created.";
+    scheduleDiscordLinkSettingsPoll();
+  } catch (error) {
+    ui.discordSettingsMessage =
+      error instanceof Error ? error.message : "Failed to create Discord link code.";
+  } finally {
+    ui.discordSettingsInFlight = false;
+    if (settingsDialog.open) {
+      await renderSettingsDialog();
+    }
+  }
+}
+
+function scheduleDiscordLinkSettingsPoll() {
+  clearDiscordLinkSettingsPoll();
+  const expiresAt = Date.parse(ui.discordLinkCode?.expiresAt || "");
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    return;
+  }
+
+  discordLinkPollTimer = window.setTimeout(() => {
+    discordLinkPollTimer = null;
+    void pollDiscordLinkSettings();
+  }, 3000);
+}
+
+function clearDiscordLinkSettingsPoll() {
+  if (discordLinkPollTimer) {
+    window.clearTimeout(discordLinkPollTimer);
+    discordLinkPollTimer = null;
+  }
+}
+
+async function pollDiscordLinkSettings() {
+  const activeCode = ui.discordLinkCode;
+  const expiresAt = Date.parse(activeCode?.expiresAt || "");
+  if (!activeCode || !Number.isFinite(expiresAt)) {
+    return;
+  }
+
+  if (expiresAt <= Date.now()) {
+    ui.discordLinkCode = null;
+    discordLinkSettingsBaseline = null;
+    ui.discordSettingsMessage = "Discord link code expired.";
+    if (settingsDialog.open && ui.settingsTab === "integrations") {
+      await renderSettingsDialog();
+    }
+    return;
+  }
+
+  try {
+    const [settings, status] = await Promise.all([
+      api.getDiscordControlSettings(),
+      api.getDiscordRelayStatus()
+    ]);
+    ui.discordControlSettings = settings;
+    ui.discordAllowedUsersDraft = settings.allowedUserIds.join(", ");
+    ui.discordRelayStatus = status;
+    ui.discordSettingsLoaded = true;
+
+    const settingsChanged = discordSettingsSignature(settings) !== discordLinkSettingsBaseline;
+    if (settings.enabled && settings.guildId && settings.channelId && settingsChanged) {
+      ui.discordLinkCode = null;
+      discordLinkSettingsBaseline = null;
+      ui.discordSettingsMessage = "Discord channel linked. Connect the relay.";
+    } else {
+      scheduleDiscordLinkSettingsPoll();
+    }
+  } catch {
+    scheduleDiscordLinkSettingsPoll();
+  }
+
+  if (settingsDialog.open && ui.settingsTab === "integrations") {
+    await renderSettingsDialog();
+  }
+}
+
+function discordSettingsSignature(settings: DiscordControlSettings | null): string {
+  if (!settings) {
+    return "";
+  }
+
+  return JSON.stringify({
+    enabled: settings.enabled,
+    guildId: settings.guildId,
+    channelId: settings.channelId,
+    allowedUserIds: settings.allowedUserIds,
+  });
+}
+
+async function copyDiscordLinkCommandFromSettings() {
+  if (!ui.discordLinkCode) {
+    ui.discordSettingsMessage = "Create a Discord link code first.";
+    await renderSettingsDialog();
+    return;
+  }
+
+  await api.writeClipboardText(`/hydra link code: ${ui.discordLinkCode.code}`);
+  ui.discordSettingsMessage = "Discord link command copied.";
+  await renderSettingsDialog();
+}
+
+async function connectDiscordRelayFromSettings() {
+  ui.discordSettingsInFlight = true;
+  ui.discordSettingsMessage = "";
+  await renderSettingsDialog();
+
+  try {
+    ui.discordRelayStatus = await api.connectDiscordRelay();
+    ui.discordSettingsMessage = ui.discordRelayStatus.connected
+      ? "Discord relay connected."
+      : ui.discordRelayStatus.lastError || "Discord relay is connecting.";
+  } catch (error) {
+    ui.discordSettingsMessage =
+      error instanceof Error ? error.message : "Failed to connect Discord relay.";
+  } finally {
+    ui.discordSettingsInFlight = false;
+    if (settingsDialog.open) {
+      await renderSettingsDialog();
+    }
+  }
+}
+
+async function disconnectDiscordRelayFromSettings() {
+  ui.discordRelayStatus = await api.disconnectDiscordRelay();
+  ui.discordSettingsMessage = "Discord relay disconnected.";
+  if (settingsDialog.open) {
+    await renderSettingsDialog();
+  }
+}
+
+function parseDiscordUserIds(value: string): string[] {
+  return [...new Set(
+    value
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+  )];
 }
 
 function openQuickSwitcher() {

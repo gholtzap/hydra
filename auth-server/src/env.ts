@@ -1,10 +1,15 @@
-import type { D1Database } from "@cloudflare/workers-types";
+import type { D1Database, DurableObjectNamespace } from "@cloudflare/workers-types";
 
 export interface CloudflareBindings {
   DATABASE: D1Database;
+  DISCORD_RELAY: DurableObjectNamespace;
   BETTER_AUTH_SECRET?: string;
   BETTER_AUTH_URL?: string;
   AUTH_ALLOWED_ORIGINS?: string;
+  DISCORD_APPLICATION_ID?: string;
+  DISCORD_BOT_TOKEN?: string;
+  DISCORD_COMMAND_SYNC_SECRET?: string;
+  DISCORD_PUBLIC_KEY?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   DISCORD_CLIENT_ID?: string;

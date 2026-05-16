@@ -336,6 +336,70 @@ export type AppUpdateCheckResult = {
   detail: string;
 };
 
+export type DiscordRelayConnectionState =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "error";
+
+export type DiscordControlSettings = {
+  enabled: boolean;
+  guildId: string;
+  channelId: string;
+  allowedUserIds: string[];
+};
+
+export type DiscordControlSettingsPatch = {
+  enabled?: boolean;
+  guildId?: string;
+  channelId?: string;
+  allowedUserIds?: string[];
+};
+
+export type DiscordInstallInfo = {
+  applicationId: string;
+  installUrl: string;
+};
+
+export type DiscordLinkCode = {
+  code: string;
+  expiresAt: string;
+};
+
+export type DiscordRelayStatus = {
+  state: DiscordRelayConnectionState;
+  connected: boolean;
+  lastConnectedAt: string | null;
+  lastDisconnectedAt: string | null;
+  lastError: string | null;
+};
+
+export type DiscordRelayTokenResponse = {
+  token: string;
+  websocketUrl: string;
+  expiresAt: string;
+};
+
+export type DiscordHydraCommandName =
+  | "status"
+  | "inbox"
+  | "sessions"
+  | "tail"
+  | "prompt"
+  | "focused-prompt"
+  | "approve"
+  | "deny"
+  | "focus"
+  | "new";
+
+export type DiscordHydraCommandPayload = {
+  name: DiscordHydraCommandName;
+  options: Record<string, string | number | boolean | null>;
+  guildId: string;
+  channelId: string;
+  userId: string;
+};
+
 export type EphemeralToolId = "lazygit" | "tokscale";
 
 export type EphemeralToolLaunchRequest = {

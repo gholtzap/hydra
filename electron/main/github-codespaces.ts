@@ -27,11 +27,15 @@ type CommandResult = {
 type RawCodespace = {
   name?: unknown;
   displayName?: unknown;
+  display_name?: unknown;
   repository?: unknown;
   state?: unknown;
   machineName?: unknown;
+  machine?: unknown;
   createdAt?: unknown;
+  created_at?: unknown;
   lastUsedAt?: unknown;
+  last_used_at?: unknown;
 };
 
 type RawMachine = {
@@ -125,17 +129,13 @@ async function listGitHubCodespaces(repository?: string | null): Promise<GitHubC
     };
   }
 
-  const args = [
-    "codespace",
-    "list",
-    "--limit",
-    "100",
-    "--json",
-    "name,displayName,repository,state,machineName,createdAt,lastUsedAt"
-  ];
   const normalizedRepository = normalizeRepository(repository);
+  const args = ["api"];
   if (normalizedRepository) {
-    args.push("--repo", normalizedRepository);
+    const [owner, repo] = normalizedRepository.split("/");
+    args.push(`/repos/${owner}/${repo}/codespaces?per_page=100`);
+  } else {
+    args.push("/user/codespaces?per_page=100");
   }
 
   const result = await runCommand(ghPath, args, 30_000);
@@ -144,7 +144,7 @@ async function listGitHubCodespaces(repository?: string | null): Promise<GitHubC
       ok: false,
       status,
       codespaces: [],
-      error: cleanCommandError(result) || "GitHub CLI could not list codespaces."
+      error: cleanCommandError(result) || "GitHub API could not list codespaces."
     };
   }
 
@@ -347,25 +347,22 @@ async function createGitHubCodespace(input: {
   const repository = requireRepository(input.repository);
   const branch = requireBranch(input.branch);
   const displayName = normalizeDisplayName(input.displayName) || defaultDisplayName(repository);
-  const args = [
-    "codespace",
-    "create",
-    "--repo",
-    repository,
-    "--branch",
-    branch,
-    "--display-name",
-    displayName,
-    "--default-permissions"
-  ];
+  const [owner, repo] = repository.split("/");
+  const args = ["api", "--method", "POST", `/repos/${owner}/${repo}/codespaces`, "--field", `ref=${branch}`];
   const machine = normalizeMachine(input.machine);
   if (machine) {
-    args.push("--machine", machine);
+    args.push("--field", `machine=${machine}`);
   }
+  args.push("--field", `display_name=${displayName}`);
 
   const createResult = await runCommand(ghPath, args, 120_000);
   if (createResult.exitCode !== 0) {
-    throw new Error(cleanCommandError(createResult) || "GitHub CLI could not create the codespace.");
+    throw new Error(cleanCommandError(createResult) || "GitHub API could not create the codespace.");
+  }
+
+  const created = parseCodespace(createResult.stdout);
+  if (created) {
+    return created;
   }
 
   const listResult = await listGitHubCodespaces(repository);
@@ -373,9 +370,9 @@ async function createGitHubCodespace(input: {
     throw new Error(listResult.error || "Codespace was created, but Hydra could not find it.");
   }
 
-  const created = listResult.codespaces.find((codespace) => codespace.displayName === displayName);
-  if (created) {
-    return created;
+  const matchingCodespace = listResult.codespaces.find((codespace) => codespace.displayName === displayName);
+  if (matchingCodespace) {
+    return matchingCodespace;
   }
 
   const fallback = listResult.codespaces[0];
@@ -383,7 +380,7 @@ async function createGitHubCodespace(input: {
     return fallback;
   }
 
-  throw new Error("Codespace was created, but GitHub CLI returned no matching codespaces.");
+  throw new Error("Codespace was created, but GitHub API returned no matching codespaces.");
 }
 
 async function disconnectGitHubCli(): Promise<GitHubCliStatus> {
@@ -517,10 +514,10 @@ function codespaceLifecycleArgs(name: string, action: GitHubCodespaceLifecycleAc
     return ["api", "--method", "POST", `/user/codespaces/${encodeURIComponent(name)}/start`, "--silent"];
   }
   if (action === "stop") {
-    return ["codespace", "stop", "--codespace", name];
+    return ["api", "--method", "POST", `/user/codespaces/${encodeURIComponent(name)}/stop`, "--silent"];
   }
   if (action === "delete") {
-    return ["codespace", "delete", "--codespace", name, "--force"];
+    return ["api", "--method", "DELETE", `/user/codespaces/${encodeURIComponent(name)}`, "--silent"];
   }
   if (action === "rebuild") {
     return ["codespace", "rebuild", "--codespace", name];
@@ -621,32 +618,47 @@ function parseCodespaces(stdout: string): GitHubCodespaceListItem[] {
     return [];
   }
 
-  if (!Array.isArray(parsed)) {
-    return [];
+  const codespaceValues = isRecord(parsed) && Array.isArray(parsed.codespaces)
+    ? parsed.codespaces
+    : Array.isArray(parsed)
+      ? parsed
+      : [];
+
+  return codespaceValues
+    .map((value): GitHubCodespaceListItem | null => codespaceFromValue(value))
+    .filter((value): value is GitHubCodespaceListItem => value !== null);
+}
+
+function parseCodespace(stdout: string): GitHubCodespaceListItem | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
   }
 
-  return parsed
-    .map((value): GitHubCodespaceListItem | null => {
-      if (!isRecord(value)) {
-        return null;
-      }
-      const raw = value as RawCodespace;
-      const name = stringValue(raw.name);
-      const repository = repositoryValue(raw.repository);
-      if (!name || !repository) {
-        return null;
-      }
-      return {
-        name,
-        displayName: stringValue(raw.displayName),
-        repository,
-        state: stringValue(raw.state) || "unknown",
-        machineName: stringValue(raw.machineName),
-        createdAt: stringValue(raw.createdAt),
-        lastUsedAt: stringValue(raw.lastUsedAt)
-      };
-    })
-    .filter((value): value is GitHubCodespaceListItem => value !== null);
+  return codespaceFromValue(parsed);
+}
+
+function codespaceFromValue(value: unknown): GitHubCodespaceListItem | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const raw = value as RawCodespace;
+  const name = stringValue(raw.name);
+  const repository = repositoryValue(raw.repository);
+  if (!name || !repository) {
+    return null;
+  }
+  return {
+    name,
+    displayName: stringValue(raw.displayName) || stringValue(raw.display_name),
+    repository,
+    state: stringValue(raw.state) || "unknown",
+    machineName: stringValue(raw.machineName) || machineNameValue(raw.machine),
+    createdAt: stringValue(raw.createdAt) || stringValue(raw.created_at),
+    lastUsedAt: stringValue(raw.lastUsedAt) || stringValue(raw.last_used_at)
+  };
 }
 
 function parseMachines(stdout: string): GitHubCodespaceMachine[] {
@@ -768,6 +780,16 @@ function repositoryValue(value: unknown): string | null {
   const owner = isRecord(value.owner) ? stringValue(value.owner.login) : stringValue(value.owner);
   const name = stringValue(value.name);
   return owner && name ? normalizeRepository(`${owner}/${name}`) : null;
+}
+
+function machineNameValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    return stringValue(value);
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
+  return stringValue(value.name);
 }
 
 function stringValue(value: unknown): string | null {

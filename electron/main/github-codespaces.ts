@@ -506,7 +506,7 @@ async function manageGitHubCodespace(
 
   const name = validateCodespaceName(codespaceName);
   const args = codespaceLifecycleArgs(name, action);
-  const result = await runCommand(ghPath, args, 60_000);
+  const result = await runCommand(ghPath, args, codespaceLifecycleTimeoutMs(action));
   if (result.exitCode !== 0) {
     throw new Error(cleanCommandError(result) || `GitHub CLI could not ${action} the codespace.`);
   }
@@ -522,7 +522,17 @@ function codespaceLifecycleArgs(name: string, action: GitHubCodespaceLifecycleAc
   if (action === "delete") {
     return ["codespace", "delete", "--codespace", name, "--force"];
   }
+  if (action === "rebuild") {
+    return ["codespace", "rebuild", "--codespace", name];
+  }
+  if (action === "fullRebuild") {
+    return ["codespace", "rebuild", "--codespace", name, "--full"];
+  }
   throw new Error("Choose a valid GitHub Codespace action.");
+}
+
+function codespaceLifecycleTimeoutMs(action: GitHubCodespaceLifecycleAction): number {
+  return action === "rebuild" || action === "fullRebuild" ? 600_000 : 60_000;
 }
 
 function validateCodespaceName(value: unknown): string {

@@ -283,7 +283,7 @@ export type GitHubBranchListResult = {
   error: string | null;
 };
 
-export type GitHubCodespaceLifecycleAction = "start" | "stop" | "delete";
+export type GitHubCodespaceLifecycleAction = "start" | "stop" | "delete" | "rebuild" | "fullRebuild";
 
 export type GitHubCodespaceLifecycleRequest = {
   codespaceName: string;

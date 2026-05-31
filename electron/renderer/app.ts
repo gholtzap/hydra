@@ -6477,6 +6477,12 @@ async function handleClick(event) {
     case "delete-codespace":
       await manageSelectedCodespace("delete");
       break;
+    case "rebuild-codespace":
+      await manageSelectedCodespace("rebuild");
+      break;
+    case "full-rebuild-codespace":
+      await manageSelectedCodespace("fullRebuild");
+      break;
     case "create-codespace-session":
       await createCodespaceSession();
       break;
@@ -8337,6 +8343,12 @@ async function manageSelectedCodespace(action: GitHubCodespaceLifecycleAction) {
   if (action === "delete" && !window.confirm("Delete this GitHub Codespace?")) {
     return;
   }
+  if (action === "rebuild" && !window.confirm("Rebuild this GitHub Codespace?")) {
+    return;
+  }
+  if (action === "fullRebuild" && !window.confirm("Full rebuild this GitHub Codespace?")) {
+    return;
+  }
 
   ui.codespaces.submitting = true;
   ui.codespaces.error = "";
@@ -9376,6 +9388,28 @@ function renderCodespacesDialog() {
                 }
               },
               "Delete"
+            ),
+            dom(
+              "button",
+              {
+                attrs: {
+                  type: "button",
+                  "data-action": "rebuild-codespace",
+                  disabled: !canManageSelected || ui.codespaces.submitting
+                }
+              },
+              "Rebuild"
+            ),
+            dom(
+              "button",
+              {
+                attrs: {
+                  type: "button",
+                  "data-action": "full-rebuild-codespace",
+                  disabled: !canManageSelected || ui.codespaces.submitting
+                }
+              },
+              "Full Rebuild"
             ),
             dom(
               "button",

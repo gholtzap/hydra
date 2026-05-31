@@ -22,11 +22,13 @@ import type {
   EphemeralToolId,
   EphemeralToolOutputPayload,
   GitHubCliStatus,
+  GitHubBranchListResult,
   GitHubCodespaceDefaults,
   GitHubCodespaceLifecycleRequest,
   GitHubCodespaceListResult,
   GitHubCodespaceMachineListResult,
   GitHubCodespaceSessionRequest,
+  GitHubRepositoryListResult,
   KeybindingEventSnapshot,
   KeybindingLabels,
   KeybindingMap,
@@ -299,8 +301,14 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
       invoke<GitHubCodespaceDefaults>("github:codespaceDefaults", repoId),
     listGitHubCodespaces: (repoId: string | null) =>
       invoke<GitHubCodespaceListResult>("github:codespaces", repoId),
+    listGitHubRepositories: () =>
+      invoke<GitHubRepositoryListResult>("github:repositories"),
+    listGitHubBranches: (repository: string) =>
+      invoke<GitHubBranchListResult>("github:branches", repository),
     listGitHubCodespaceMachines: (repoId: string | null) =>
       invoke<GitHubCodespaceMachineListResult>("github:codespaceMachines", repoId),
+    listGitHubCodespaceMachinesForRepository: (repository: string) =>
+      invoke<GitHubCodespaceMachineListResult>("github:codespaceMachinesForRepository", repository),
     manageGitHubCodespace: (payload: GitHubCodespaceLifecycleRequest) =>
       invoke<GitHubCodespaceListResult>("github:codespaceLifecycle", payload),
     createGitHubCodespaceSession: (payload: GitHubCodespaceSessionRequest) =>

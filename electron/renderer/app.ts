@@ -12,11 +12,13 @@ import type {
   DiscordLinkCode,
   DiscordRelayStatus,
   FileTreeNode as SharedFileTreeNode,
+  GitHubBranchListItem,
   GitHubCliStatus,
   GitHubCodespaceDefaults,
   GitHubCodespaceLifecycleAction,
   GitHubCodespaceListItem,
   GitHubCodespaceMachine,
+  GitHubRepositoryListItem,
   JsonObject,
   JsonValue,
   KeybindingAction,
@@ -168,7 +170,10 @@ type CodespacesDialogState = {
   defaults: GitHubCodespaceDefaults | null;
   codespaces: GitHubCodespaceListItem[];
   machines: GitHubCodespaceMachine[];
+  repositories: GitHubRepositoryListItem[];
+  branches: GitHubBranchListItem[];
   loading: boolean;
+  optionsLoading: boolean;
   submitting: boolean;
   error: string;
   selectedCodespaceName: string;
@@ -461,7 +466,10 @@ const ui: UiState = {
     defaults: null,
     codespaces: [],
     machines: [],
+    repositories: [],
+    branches: [],
     loading: false,
+    optionsLoading: false,
     submitting: false,
     error: "",
     selectedCodespaceName: "",
@@ -6440,6 +6448,9 @@ async function handleClick(event) {
     case "refresh-codespaces":
       await refreshCodespacesDialog();
       break;
+    case "refresh-codespace-options":
+      await refreshCodespaceOptionsForRepository();
+      break;
     case "disconnect-github-cli":
       await disconnectGitHubCliFromCodespaces();
       break;
@@ -8099,7 +8110,10 @@ async function openCodespacesDialog(repoId: string | null) {
     defaults: null,
     codespaces: [],
     machines: [],
+    repositories: [],
+    branches: [],
     loading: true,
+    optionsLoading: false,
     submitting: false,
     error: "",
     selectedCodespaceName: "",
@@ -8126,22 +8140,30 @@ async function refreshCodespacesDialog() {
   renderCodespacesDialog();
 
   try {
-    const [status, defaults, list, machines] = await Promise.all([
+    const [status, defaults, list, repositories, branches, machines] = await Promise.all([
       api.getGitHubCliStatus(),
       api.getGitHubCodespaceDefaults(repoId),
       api.listGitHubCodespaces(repoId),
+      api.listGitHubRepositories(),
+      api.getGitHubCodespaceDefaults(repoId).then((defaults) =>
+        defaults.repository
+          ? api.listGitHubBranches(defaults.repository)
+          : Promise.resolve(null)
+      ),
       api.listGitHubCodespaceMachines(repoId)
     ]);
     ui.codespaces.status = status;
     ui.codespaces.defaults = defaults;
     ui.codespaces.codespaces = list.codespaces;
+    ui.codespaces.repositories = repositories.repositories;
+    ui.codespaces.branches = branches?.branches || [];
     ui.codespaces.machines = machines.machines;
     ui.codespaces.repository = ui.codespaces.repository || defaults.repository || "";
     ui.codespaces.branch = ui.codespaces.branch || defaults.branch || "main";
     ui.codespaces.error =
-      list.ok && machines.ok
+      list.ok && repositories.ok && machines.ok && (!branches || branches.ok)
         ? defaults.error || ""
-        : list.error || machines.error || status.error || "";
+        : list.error || repositories.error || branches?.error || machines.error || status.error || "";
     if (!ui.codespaces.selectedCodespaceName && list.codespaces.length) {
       ui.codespaces.selectedCodespaceName = list.codespaces[0].name;
     }
@@ -8188,6 +8210,41 @@ function readCodespaceDialogFields() {
   ui.codespaces.machine = machineInput?.value.trim() || "";
   ui.codespaces.displayName = displayNameInput?.value.trim() || "";
   ui.codespaces.selectedCodespaceName = selectedInput?.value || ui.codespaces.selectedCodespaceName;
+}
+
+async function refreshCodespaceOptionsForRepository() {
+  readCodespaceDialogFields();
+  const repository = ui.codespaces.repository;
+  if (!repository) {
+    ui.codespaces.error = "Enter a GitHub repository as owner/repo.";
+    renderCodespacesDialog();
+    return;
+  }
+
+  ui.codespaces.optionsLoading = true;
+  ui.codespaces.error = "";
+  renderCodespacesDialog();
+
+  try {
+    const [branches, machines] = await Promise.all([
+      api.listGitHubBranches(repository),
+      api.listGitHubCodespaceMachinesForRepository(repository)
+    ]);
+    ui.codespaces.status = branches.status;
+    ui.codespaces.branches = branches.branches;
+    ui.codespaces.machines = machines.machines;
+    const repoOption = ui.codespaces.repositories.find((repo) => repo.nameWithOwner === repository);
+    if (repoOption?.defaultBranch && !branches.branches.some((branch) => branch.name === ui.codespaces.branch)) {
+      ui.codespaces.branch = repoOption.defaultBranch;
+    }
+    ui.codespaces.error = branches.ok && machines.ok ? "" : branches.error || machines.error || "";
+  } catch (error) {
+    ui.codespaces.error =
+      error instanceof Error ? error.message : "Failed to load repository options.";
+  } finally {
+    ui.codespaces.optionsLoading = false;
+    renderCodespacesDialog();
+  }
 }
 
 async function openExistingCodespaceSession() {
@@ -9090,6 +9147,7 @@ function renderCodespacesDialog() {
   const createDisabled =
     ui.codespaces.loading ||
     ui.codespaces.submitting ||
+    ui.codespaces.optionsLoading ||
     !canUseCodespaces ||
     !ui.codespaces.repository ||
     !ui.codespaces.branch;
@@ -9142,6 +9200,28 @@ function renderCodespacesDialog() {
       ui.codespaces.error
         ? dom("div", { className: "settings-warning-card" }, ui.codespaces.error)
         : null,
+      dom(
+        "datalist",
+        { attrs: { id: "github-repository-options" } },
+        ...ui.codespaces.repositories.map((repository) =>
+          dom(
+            "option",
+            { attrs: { value: repository.nameWithOwner } },
+            repository.isPrivate ? "Private" : "Public"
+          )
+        )
+      ),
+      dom(
+        "datalist",
+        { attrs: { id: "github-branch-options" } },
+        ...ui.codespaces.branches.map((branch) =>
+          dom(
+            "option",
+            { attrs: { value: branch.name } },
+            branch.protected ? "Protected" : ""
+          )
+        )
+      ),
       dom(
         "div",
         { className: "codespaces-grid" },
@@ -9245,10 +9325,26 @@ function renderCodespacesDialog() {
               value: ui.codespaces.repository,
               attrs: {
                 id: "codespace-repository",
+                list: "github-repository-options",
                 placeholder: "owner/repo",
-                disabled: ui.codespaces.loading || ui.codespaces.submitting
+                disabled: ui.codespaces.loading || ui.codespaces.submitting || ui.codespaces.optionsLoading
               }
             })
+          ),
+          dom(
+            "div",
+            { className: "dialog-footer codespaces-panel-actions" },
+            dom(
+              "button",
+              {
+                attrs: {
+                  type: "button",
+                  "data-action": "refresh-codespace-options",
+                  disabled: ui.codespaces.loading || ui.codespaces.submitting || ui.codespaces.optionsLoading
+                }
+              },
+              ui.codespaces.optionsLoading ? "Loading Options..." : "Load Repo Options"
+            )
           ),
           dom(
             "label",
@@ -9258,8 +9354,9 @@ function renderCodespacesDialog() {
               value: ui.codespaces.branch,
               attrs: {
                 id: "codespace-branch",
+                list: "github-branch-options",
                 placeholder: "main",
-                disabled: ui.codespaces.loading || ui.codespaces.submitting
+                disabled: ui.codespaces.loading || ui.codespaces.submitting || ui.codespaces.optionsLoading
               }
             })
           ),
@@ -9271,7 +9368,7 @@ function renderCodespacesDialog() {
               value: ui.codespaces.machine,
               attrs: {
                 id: "codespace-machine",
-                disabled: ui.codespaces.loading || ui.codespaces.submitting
+                disabled: ui.codespaces.loading || ui.codespaces.submitting || ui.codespaces.optionsLoading
               }
             },
               dom("option", { attrs: { value: "" } }, "Automatic"),
@@ -9297,7 +9394,7 @@ function renderCodespacesDialog() {
               attrs: {
                 id: "codespace-display-name",
                 placeholder: "Optional",
-                disabled: ui.codespaces.loading || ui.codespaces.submitting
+                disabled: ui.codespaces.loading || ui.codespaces.submitting || ui.codespaces.optionsLoading
               }
             })
           ),

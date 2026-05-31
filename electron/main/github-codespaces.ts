@@ -5,7 +5,11 @@ import type {
   GitHubCodespaceListItem,
   GitHubCodespaceListResult,
   GitHubCodespaceMachine,
-  GitHubCodespaceMachineListResult
+  GitHubCodespaceMachineListResult,
+  GitHubBranchListItem,
+  GitHubBranchListResult,
+  GitHubRepositoryListItem,
+  GitHubRepositoryListResult
 } from "../shared-types";
 import type { ExecFileException } from "node:child_process";
 
@@ -41,6 +45,17 @@ type RawMachine = {
   memory_in_bytes?: unknown;
   memoryBytes?: unknown;
   cpus?: unknown;
+};
+
+type RawRepository = {
+  nameWithOwner?: unknown;
+  isPrivate?: unknown;
+  defaultBranchRef?: unknown;
+};
+
+type RawBranch = {
+  name?: unknown;
+  protected?: unknown;
 };
 
 const GITHUB_REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -137,6 +152,94 @@ async function listGitHubCodespaces(repository?: string | null): Promise<GitHubC
     ok: true,
     status,
     codespaces: parseCodespaces(result.stdout),
+    error: null
+  };
+}
+
+async function listGitHubRepositories(): Promise<GitHubRepositoryListResult> {
+  const status = await githubCliStatus();
+  if (!status.installed || !status.authenticated) {
+    return {
+      ok: false,
+      status,
+      repositories: [],
+      error: status.error
+    };
+  }
+
+  const ghPath = resolveCommandPathSync("gh");
+  if (!ghPath) {
+    return {
+      ok: false,
+      status,
+      repositories: [],
+      error: "Install GitHub CLI, then run gh auth login."
+    };
+  }
+
+  const result = await runCommand(
+    ghPath,
+    ["repo", "list", "--limit", "100", "--json", "nameWithOwner,isPrivate,defaultBranchRef"],
+    30_000
+  );
+  if (result.exitCode !== 0) {
+    return {
+      ok: false,
+      status,
+      repositories: [],
+      error: cleanCommandError(result) || "GitHub CLI could not list repositories."
+    };
+  }
+
+  return {
+    ok: true,
+    status,
+    repositories: parseRepositories(result.stdout),
+    error: null
+  };
+}
+
+async function listGitHubBranches(repository: string): Promise<GitHubBranchListResult> {
+  const status = await githubCliStatus();
+  if (!status.installed || !status.authenticated) {
+    return {
+      ok: false,
+      status,
+      branches: [],
+      error: status.error
+    };
+  }
+
+  const ghPath = resolveCommandPathSync("gh");
+  if (!ghPath) {
+    return {
+      ok: false,
+      status,
+      branches: [],
+      error: "Install GitHub CLI, then run gh auth login."
+    };
+  }
+
+  const normalizedRepository = requireRepository(repository);
+  const [owner, repo] = normalizedRepository.split("/");
+  const result = await runCommand(
+    ghPath,
+    ["api", `/repos/${owner}/${repo}/branches?per_page=100`],
+    30_000
+  );
+  if (result.exitCode !== 0) {
+    return {
+      ok: false,
+      status,
+      branches: [],
+      error: cleanCommandError(result) || "GitHub CLI could not list branches."
+    };
+  }
+
+  return {
+    ok: true,
+    status,
+    branches: parseBranches(result.stdout),
     error: null
   };
 }
@@ -500,6 +603,75 @@ function parseMachines(stdout: string): GitHubCodespaceMachine[] {
     .filter((value): value is GitHubCodespaceMachine => value !== null);
 }
 
+function parseRepositories(stdout: string): GitHubRepositoryListItem[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+
+  return parsed
+    .map((value): GitHubRepositoryListItem | null => {
+      if (!isRecord(value)) {
+        return null;
+      }
+      const raw = value as RawRepository;
+      const nameWithOwner = stringValue(raw.nameWithOwner);
+      const repository = normalizeRepository(nameWithOwner);
+      if (!repository) {
+        return null;
+      }
+      return {
+        nameWithOwner: repository,
+        isPrivate: raw.isPrivate === true,
+        defaultBranch: defaultBranchName(raw.defaultBranchRef)
+      };
+    })
+    .filter((value): value is GitHubRepositoryListItem => value !== null);
+}
+
+function parseBranches(stdout: string): GitHubBranchListItem[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+
+  return parsed
+    .map((value): GitHubBranchListItem | null => {
+      if (!isRecord(value)) {
+        return null;
+      }
+      const raw = value as RawBranch;
+      const name = stringValue(raw.name);
+      if (!name) {
+        return null;
+      }
+      return {
+        name,
+        protected: raw.protected === true
+      };
+    })
+    .filter((value): value is GitHubBranchListItem => value !== null);
+}
+
+function defaultBranchName(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return stringValue(value.name);
+}
+
 function repositoryValue(value: unknown): string | null {
   if (typeof value === "string") {
     return normalizeRepository(value);
@@ -578,8 +750,10 @@ module.exports = {
   disconnectGitHubCli,
   gitHubCodespaceDefaults,
   githubCliStatus,
+  listGitHubBranches,
   listGitHubCodespaces,
   listGitHubCodespaceMachines,
+  listGitHubRepositories,
   manageGitHubCodespace,
   normalizeRepository,
   validateCodespaceName

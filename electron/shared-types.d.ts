@@ -244,6 +244,17 @@ export type GitHubCodespaceMachine = {
   cpus: number | null;
 };
 
+export type GitHubRepositoryListItem = {
+  nameWithOwner: string;
+  isPrivate: boolean;
+  defaultBranch: string | null;
+};
+
+export type GitHubBranchListItem = {
+  name: string;
+  protected: boolean;
+};
+
 export type GitHubCodespaceListResult = {
   ok: boolean;
   status: GitHubCliStatus;
@@ -255,6 +266,20 @@ export type GitHubCodespaceMachineListResult = {
   ok: boolean;
   status: GitHubCliStatus;
   machines: GitHubCodespaceMachine[];
+  error: string | null;
+};
+
+export type GitHubRepositoryListResult = {
+  ok: boolean;
+  status: GitHubCliStatus;
+  repositories: GitHubRepositoryListItem[];
+  error: string | null;
+};
+
+export type GitHubBranchListResult = {
+  ok: boolean;
+  status: GitHubCliStatus;
+  branches: GitHubBranchListItem[];
   error: string | null;
 };
 

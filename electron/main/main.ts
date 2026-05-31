@@ -32,6 +32,8 @@ import type {
   GitHubCodespaceMachineListResult,
   GitHubCodespaceSessionRequest,
   GitHubCodespaceSessionTarget,
+  GitHubBranchListResult,
+  GitHubRepositoryListResult,
   MarketplaceInspectResponse,
   MarketplaceInstallResponse,
   MarketplaceSkillDetails,
@@ -299,8 +301,10 @@ const {
   disconnectGitHubCli,
   gitHubCodespaceDefaults,
   githubCliStatus,
+  listGitHubBranches,
   listGitHubCodespaces,
   listGitHubCodespaceMachines,
+  listGitHubRepositories,
   manageGitHubCodespace,
   validateCodespaceName
 } = require("./github-codespaces") as {
@@ -313,8 +317,10 @@ const {
   disconnectGitHubCli: () => Promise<GitHubCliStatus>;
   gitHubCodespaceDefaults: (repoPath: string) => Promise<GitHubCodespaceDefaults>;
   githubCliStatus: () => Promise<GitHubCliStatus>;
+  listGitHubBranches: (repository: string) => Promise<GitHubBranchListResult>;
   listGitHubCodespaces: (repository?: string | null) => Promise<GitHubCodespaceListResult>;
   listGitHubCodespaceMachines: (repository: string) => Promise<GitHubCodespaceMachineListResult>;
+  listGitHubRepositories: () => Promise<GitHubRepositoryListResult>;
   manageGitHubCodespace: (
     codespaceName: string,
     action: GitHubCodespaceLifecycleRequest["action"]
@@ -1237,8 +1243,15 @@ class AppController {
     ipcMain.handle("github:codespaces", (_event, repoId) =>
       this.listGitHubCodespacesForRepo(repoId)
     );
+    ipcMain.handle("github:repositories", () => this.listGitHubRepositories());
+    ipcMain.handle("github:branches", (_event, repository) =>
+      this.listGitHubBranches(repository)
+    );
     ipcMain.handle("github:codespaceMachines", (_event, repoId) =>
       this.listGitHubCodespaceMachinesForRepo(repoId)
+    );
+    ipcMain.handle("github:codespaceMachinesForRepository", (_event, repository) =>
+      this.listGitHubCodespaceMachinesForRepository(repository)
     );
     ipcMain.handle("github:codespaceLifecycle", (_event, payload) =>
       this.manageGitHubCodespace(payload)
@@ -2860,6 +2873,14 @@ class AppController {
     return listGitHubCodespaces(defaults?.repository || null);
   }
 
+  async listGitHubRepositories(): Promise<GitHubRepositoryListResult> {
+    return listGitHubRepositories();
+  }
+
+  async listGitHubBranches(repository: string): Promise<GitHubBranchListResult> {
+    return listGitHubBranches(repository);
+  }
+
   async listGitHubCodespaceMachinesForRepo(
     repoId: string | null | undefined
   ): Promise<GitHubCodespaceMachineListResult> {
@@ -2876,6 +2897,12 @@ class AppController {
     }
 
     return listGitHubCodespaceMachines(defaults.repository);
+  }
+
+  async listGitHubCodespaceMachinesForRepository(
+    repository: string
+  ): Promise<GitHubCodespaceMachineListResult> {
+    return listGitHubCodespaceMachines(repository);
   }
 
   async manageGitHubCodespace(request: GitHubCodespaceLifecycleRequest): Promise<GitHubCodespaceListResult> {

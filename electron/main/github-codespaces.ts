@@ -9,13 +9,21 @@ import type {
   GitHubBranchListItem,
   GitHubBranchListResult,
   GitHubRepositoryListItem,
-  GitHubRepositoryListResult
+  GitHubRepositoryListResult,
+  GitHubNativeAuthStatus
 } from "../shared-types";
 import type { ExecFileException } from "node:child_process";
 
 const { execFile } = require("node:child_process") as typeof import("node:child_process");
 const { resolveCommandPathSync } = require("./command-path") as {
   resolveCommandPathSync: (command: string, envPath?: string | null) => string | null;
+};
+const {
+  gitHubNativeAccessToken,
+  gitHubNativeAuthStatus
+} = require("./github-native-auth") as {
+  gitHubNativeAccessToken: (requiredScope?: string) => Promise<string | null>;
+  gitHubNativeAuthStatus: () => Promise<GitHubNativeAuthStatus>;
 };
 
 type CommandResult = {
@@ -53,8 +61,11 @@ type RawMachine = {
 
 type RawRepository = {
   nameWithOwner?: unknown;
+  full_name?: unknown;
   isPrivate?: unknown;
+  private?: unknown;
   defaultBranchRef?: unknown;
+  default_branch?: unknown;
 };
 
 type RawBranch = {
@@ -65,6 +76,8 @@ type RawBranch = {
 const GITHUB_REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const CODESPACE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const BRANCH_PATTERN = /^[^\s~^:?*[\\\]](?:[^\s~^:?*[\\\]]|\/(?!\.))*$/;
+const GITHUB_API_URL = "https://api.github.com";
+const GITHUB_API_VERSION = "2022-11-28";
 
 async function githubCliStatus(): Promise<GitHubCliStatus> {
   const ghPath = resolveCommandPathSync("gh");
@@ -101,48 +114,28 @@ async function githubCliStatus(): Promise<GitHubCliStatus> {
 }
 
 async function listGitHubCodespaces(repository?: string | null): Promise<GitHubCodespaceListResult> {
-  const status = await githubCliStatus();
-  if (!status.installed || !status.authenticated) {
+  const auth = await codespaceApiAuth();
+  if (auth.error) {
     return {
       ok: false,
-      status,
+      status: auth.status,
       codespaces: [],
-      error: status.error
-    };
-  }
-  if (!hasCodespaceScope(status)) {
-    return {
-      ok: false,
-      status,
-      codespaces: [],
-      error: "GitHub CLI needs the codespace scope. Run gh auth refresh -h github.com -s codespace."
-    };
-  }
-
-  const ghPath = resolveCommandPathSync("gh");
-  if (!ghPath) {
-    return {
-      ok: false,
-      status,
-      codespaces: [],
-      error: "Install GitHub CLI, then run gh auth login."
+      error: auth.error
     };
   }
 
   const normalizedRepository = normalizeRepository(repository);
-  const args = ["api"];
+  let apiPath = "/user/codespaces?per_page=100";
   if (normalizedRepository) {
     const [owner, repo] = normalizedRepository.split("/");
-    args.push(`/repos/${owner}/${repo}/codespaces?per_page=100`);
-  } else {
-    args.push("/user/codespaces?per_page=100");
+    apiPath = `/repos/${owner}/${repo}/codespaces?per_page=100`;
   }
 
-  const result = await runCommand(ghPath, args, 30_000);
+  const result = await runGitHubApi(apiPath, {}, 30_000);
   if (result.exitCode !== 0) {
     return {
       ok: false,
-      status,
+      status: auth.status,
       codespaces: [],
       error: cleanCommandError(result) || "GitHub API could not list codespaces."
     };
@@ -150,42 +143,30 @@ async function listGitHubCodespaces(repository?: string | null): Promise<GitHubC
 
   return {
     ok: true,
-    status,
+    status: auth.status,
     codespaces: parseCodespaces(result.stdout),
     error: null
   };
 }
 
 async function listGitHubRepositories(): Promise<GitHubRepositoryListResult> {
-  const status = await githubCliStatus();
-  if (!status.installed || !status.authenticated) {
+  const auth = await generalGitHubApiAuth();
+  if (auth.error) {
     return {
       ok: false,
-      status,
+      status: auth.status,
       repositories: [],
-      error: status.error
+      error: auth.error
     };
   }
 
-  const ghPath = resolveCommandPathSync("gh");
-  if (!ghPath) {
-    return {
-      ok: false,
-      status,
-      repositories: [],
-      error: "Install GitHub CLI, then run gh auth login."
-    };
-  }
-
-  const result = await runCommand(
-    ghPath,
-    ["repo", "list", "--limit", "100", "--json", "nameWithOwner,isPrivate,defaultBranchRef"],
-    30_000
-  );
+  const result = auth.nativeReady
+    ? await runGitHubApi("/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member", {}, 30_000)
+    : await runGitHubCliRepoList(30_000);
   if (result.exitCode !== 0) {
     return {
       ok: false,
-      status,
+      status: auth.status,
       repositories: [],
       error: cleanCommandError(result) || "GitHub CLI could not list repositories."
     };
@@ -193,44 +174,30 @@ async function listGitHubRepositories(): Promise<GitHubRepositoryListResult> {
 
   return {
     ok: true,
-    status,
+    status: auth.status,
     repositories: parseRepositories(result.stdout),
     error: null
   };
 }
 
 async function listGitHubBranches(repository: string): Promise<GitHubBranchListResult> {
-  const status = await githubCliStatus();
-  if (!status.installed || !status.authenticated) {
+  const auth = await generalGitHubApiAuth();
+  if (auth.error) {
     return {
       ok: false,
-      status,
+      status: auth.status,
       branches: [],
-      error: status.error
-    };
-  }
-
-  const ghPath = resolveCommandPathSync("gh");
-  if (!ghPath) {
-    return {
-      ok: false,
-      status,
-      branches: [],
-      error: "Install GitHub CLI, then run gh auth login."
+      error: auth.error
     };
   }
 
   const normalizedRepository = requireRepository(repository);
   const [owner, repo] = normalizedRepository.split("/");
-  const result = await runCommand(
-    ghPath,
-    ["api", `/repos/${owner}/${repo}/branches?per_page=100`],
-    30_000
-  );
+  const result = await runGitHubApi(`/repos/${owner}/${repo}/branches?per_page=100`, {}, 30_000);
   if (result.exitCode !== 0) {
     return {
       ok: false,
-      status,
+      status: auth.status,
       branches: [],
       error: cleanCommandError(result) || "GitHub CLI could not list branches."
     };
@@ -238,7 +205,7 @@ async function listGitHubBranches(repository: string): Promise<GitHubBranchListR
 
   return {
     ok: true,
-    status,
+    status: auth.status,
     branches: parseBranches(result.stdout),
     error: null
   };
@@ -247,46 +214,24 @@ async function listGitHubBranches(repository: string): Promise<GitHubBranchListR
 async function listGitHubCodespaceMachines(
   repository: string
 ): Promise<GitHubCodespaceMachineListResult> {
-  const status = await githubCliStatus();
-  if (!status.installed || !status.authenticated) {
+  const auth = await codespaceApiAuth();
+  if (auth.error) {
     return {
       ok: false,
-      status,
+      status: auth.status,
       machines: [],
-      error: status.error
-    };
-  }
-  if (!hasCodespaceScope(status)) {
-    return {
-      ok: false,
-      status,
-      machines: [],
-      error: "GitHub CLI needs the codespace scope. Run gh auth refresh -h github.com -s codespace."
-    };
-  }
-
-  const ghPath = resolveCommandPathSync("gh");
-  if (!ghPath) {
-    return {
-      ok: false,
-      status,
-      machines: [],
-      error: "Install GitHub CLI, then run gh auth login."
+      error: auth.error
     };
   }
 
   const normalizedRepository = requireRepository(repository);
   const [owner, repo] = normalizedRepository.split("/");
-  const result = await runCommand(
-    ghPath,
-    ["api", `/repos/${owner}/${repo}/codespaces/machines`],
-    30_000
-  );
+  const result = await runGitHubApi(`/repos/${owner}/${repo}/codespaces/machines`, {}, 30_000);
 
   if (result.exitCode !== 0) {
     return {
       ok: false,
-      status,
+      status: auth.status,
       machines: [],
       error: cleanCommandError(result) || "GitHub CLI could not list Codespaces machines."
     };
@@ -294,7 +239,7 @@ async function listGitHubCodespaceMachines(
 
   return {
     ok: true,
-    status,
+    status: auth.status,
     machines: parseMachines(result.stdout),
     error: null
   };
@@ -331,31 +276,28 @@ async function createGitHubCodespace(input: {
   machine?: string;
   displayName?: string;
 }): Promise<GitHubCodespaceListItem> {
-  const status = await githubCliStatus();
-  if (!status.installed || !status.authenticated) {
-    throw new Error(status.error || "Authenticate GitHub CLI with gh auth login.");
-  }
-  if (!hasCodespaceScope(status)) {
-    throw new Error("GitHub CLI needs the codespace scope. Run gh auth refresh -h github.com -s codespace.");
-  }
-
-  const ghPath = resolveCommandPathSync("gh");
-  if (!ghPath) {
-    throw new Error("Install GitHub CLI, then run gh auth login.");
+  const auth = await codespaceApiAuth();
+  if (auth.error) {
+    throw new Error(auth.error);
   }
 
   const repository = requireRepository(input.repository);
   const branch = requireBranch(input.branch);
   const displayName = normalizeDisplayName(input.displayName) || defaultDisplayName(repository);
   const [owner, repo] = repository.split("/");
-  const args = ["api", "--method", "POST", `/repos/${owner}/${repo}/codespaces`, "--field", `ref=${branch}`];
+  const fields: Record<string, string> = {
+    ref: branch,
+    display_name: displayName
+  };
   const machine = normalizeMachine(input.machine);
   if (machine) {
-    args.push("--field", `machine=${machine}`);
+    fields.machine = machine;
   }
-  args.push("--field", `display_name=${displayName}`);
 
-  const createResult = await runCommand(ghPath, args, 120_000);
+  const createResult = await runGitHubApi(`/repos/${owner}/${repo}/codespaces`, {
+    method: "POST",
+    fields
+  }, 120_000);
   if (createResult.exitCode !== 0) {
     throw new Error(cleanCommandError(createResult) || "GitHub API could not create the codespace.");
   }
@@ -488,42 +430,53 @@ async function manageGitHubCodespace(
   codespaceName: string,
   action: GitHubCodespaceLifecycleAction
 ): Promise<void> {
-  const status = await githubCliStatus();
-  if (!status.installed || !status.authenticated) {
-    throw new Error(status.error || "Authenticate GitHub CLI with gh auth login.");
-  }
-  if (!hasCodespaceScope(status)) {
-    throw new Error("GitHub CLI needs the codespace scope. Run gh auth refresh -h github.com -s codespace.");
-  }
-
-  const ghPath = resolveCommandPathSync("gh");
-  if (!ghPath) {
-    throw new Error("Install GitHub CLI, then run gh auth login.");
+  const auth = await codespaceApiAuth();
+  if (auth.error) {
+    throw new Error(auth.error);
   }
 
   const name = validateCodespaceName(codespaceName);
-  const args = codespaceLifecycleArgs(name, action);
-  const result = await runCommand(ghPath, args, codespaceLifecycleTimeoutMs(action));
+  const result = await runGitHubApiForLifecycle(name, action);
   if (result.exitCode !== 0) {
     throw new Error(cleanCommandError(result) || `GitHub CLI could not ${action} the codespace.`);
   }
 }
 
-function codespaceLifecycleArgs(name: string, action: GitHubCodespaceLifecycleAction): string[] {
+async function runGitHubApiForLifecycle(
+  name: string,
+  action: GitHubCodespaceLifecycleAction
+): Promise<CommandResult> {
   if (action === "start") {
-    return ["api", "--method", "POST", `/user/codespaces/${encodeURIComponent(name)}/start`, "--silent"];
+    return runGitHubApi(`/user/codespaces/${encodeURIComponent(name)}/start`, {
+      method: "POST",
+      silent: true
+    }, codespaceLifecycleTimeoutMs(action));
   }
   if (action === "stop") {
-    return ["api", "--method", "POST", `/user/codespaces/${encodeURIComponent(name)}/stop`, "--silent"];
+    return runGitHubApi(`/user/codespaces/${encodeURIComponent(name)}/stop`, {
+      method: "POST",
+      silent: true
+    }, codespaceLifecycleTimeoutMs(action));
   }
   if (action === "delete") {
-    return ["api", "--method", "DELETE", `/user/codespaces/${encodeURIComponent(name)}`, "--silent"];
+    return runGitHubApi(`/user/codespaces/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+      silent: true
+    }, codespaceLifecycleTimeoutMs(action));
+  }
+  const ghPath = resolveCommandPathSync("gh");
+  if (!ghPath) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: "Install GitHub CLI to rebuild Codespaces."
+    };
   }
   if (action === "rebuild") {
-    return ["codespace", "rebuild", "--codespace", name];
+    return runCommand(ghPath, ["codespace", "rebuild", "--codespace", name], codespaceLifecycleTimeoutMs(action));
   }
   if (action === "fullRebuild") {
-    return ["codespace", "rebuild", "--codespace", name, "--full"];
+    return runCommand(ghPath, ["codespace", "rebuild", "--codespace", name, "--full"], codespaceLifecycleTimeoutMs(action));
   }
   throw new Error("Choose a valid GitHub Codespace action.");
 }
@@ -715,15 +668,15 @@ function parseRepositories(stdout: string): GitHubRepositoryListItem[] {
         return null;
       }
       const raw = value as RawRepository;
-      const nameWithOwner = stringValue(raw.nameWithOwner);
+      const nameWithOwner = stringValue(raw.nameWithOwner) || stringValue(raw.full_name);
       const repository = normalizeRepository(nameWithOwner);
       if (!repository) {
         return null;
       }
       return {
         nameWithOwner: repository,
-        isPrivate: raw.isPrivate === true,
-        defaultBranch: defaultBranchName(raw.defaultBranchRef)
+        isPrivate: raw.isPrivate === true || raw.private === true,
+        defaultBranch: defaultBranchName(raw.defaultBranchRef) || stringValue(raw.default_branch)
       };
     })
     .filter((value): value is GitHubRepositoryListItem => value !== null);
@@ -818,6 +771,166 @@ function parseScopes(output: string): string[] {
 
 function hasCodespaceScope(status: GitHubCliStatus): boolean {
   return status.scopes.length === 0 || status.scopes.includes("codespace");
+}
+
+function hasNativeCodespaceScope(status: GitHubNativeAuthStatus): boolean {
+  return status.scopes.length === 0 || status.scopes.includes("codespace");
+}
+
+type GitHubApiAuth = {
+  status: GitHubCliStatus;
+  nativeReady: boolean;
+  error: string | null;
+};
+
+async function codespaceApiAuth(): Promise<GitHubApiAuth> {
+  const [status, nativeStatus] = await Promise.all([
+    githubCliStatus(),
+    gitHubNativeAuthStatus()
+  ]);
+  const nativeReady =
+    nativeStatus.configured &&
+    nativeStatus.authenticated &&
+    hasNativeCodespaceScope(nativeStatus);
+  if (nativeReady) {
+    return { status, nativeReady: true, error: null };
+  }
+  if (!status.installed || !status.authenticated) {
+    return { status, nativeReady: false, error: status.error };
+  }
+  if (!hasCodespaceScope(status)) {
+    return {
+      status,
+      nativeReady: false,
+      error: "GitHub CLI needs the codespace scope. Run gh auth refresh -h github.com -s codespace."
+    };
+  }
+  return { status, nativeReady: false, error: null };
+}
+
+async function generalGitHubApiAuth(): Promise<GitHubApiAuth> {
+  const [status, nativeStatus] = await Promise.all([
+    githubCliStatus(),
+    gitHubNativeAuthStatus()
+  ]);
+  const nativeReady = nativeStatus.configured && nativeStatus.authenticated;
+  if (nativeReady || (status.installed && status.authenticated)) {
+    return { status, nativeReady, error: null };
+  }
+  return { status, nativeReady: false, error: status.error };
+}
+
+type GitHubApiRequestOptions = {
+  method?: "GET" | "POST" | "DELETE";
+  fields?: Record<string, string>;
+  silent?: boolean;
+};
+
+async function runGitHubApi(
+  apiPath: string,
+  options: GitHubApiRequestOptions,
+  timeout: number
+): Promise<CommandResult> {
+  const token = await gitHubNativeAccessToken(options.method === "GET" ? undefined : "codespace");
+  const ghPath = resolveCommandPathSync("gh");
+  if (token) {
+    const nativeResult = await fetchGitHubApiCommand(apiPath, options, token, timeout);
+    if (nativeResult.exitCode === 0 || !ghPath) {
+      return nativeResult;
+    }
+  }
+
+  if (!ghPath) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: "Install GitHub CLI, then sign in to GitHub."
+    };
+  }
+
+  return runCommand(ghPath, gitHubApiArgs(apiPath, options), timeout);
+}
+
+function runGitHubCliRepoList(timeout: number): Promise<CommandResult> {
+  const ghPath = resolveCommandPathSync("gh");
+  if (!ghPath) {
+    return Promise.resolve({
+      exitCode: 1,
+      stdout: "",
+      stderr: "Install GitHub CLI, then sign in to GitHub."
+    });
+  }
+
+  return runCommand(
+    ghPath,
+    ["repo", "list", "--limit", "100", "--json", "nameWithOwner,isPrivate,defaultBranchRef"],
+    timeout
+  );
+}
+
+function gitHubApiArgs(apiPath: string, options: GitHubApiRequestOptions): string[] {
+  const args = ["api"];
+  const method = options.method || "GET";
+  if (method !== "GET") {
+    args.push("--method", method);
+  }
+  args.push(apiPath);
+  for (const [key, value] of Object.entries(options.fields || {})) {
+    args.push("--field", `${key}=${value}`);
+  }
+  if (options.silent) {
+    args.push("--silent");
+  }
+  return args;
+}
+
+async function fetchGitHubApiCommand(
+  apiPath: string,
+  options: GitHubApiRequestOptions,
+  token: string,
+  timeout: number
+): Promise<CommandResult> {
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(`${GITHUB_API_URL}${apiPath}`, {
+      method: options.method || "GET",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        ...(options.fields ? { "Content-Type": "application/json" } : {})
+      },
+      body: options.fields ? JSON.stringify(options.fields) : undefined,
+      signal: controller.signal
+    });
+    const text = await response.text();
+    return {
+      exitCode: response.ok ? 0 : response.status,
+      stdout: response.ok && !options.silent ? text : "",
+      stderr: response.ok ? "" : cleanGitHubApiError(text) || `GitHub API failed with status ${response.status}.`
+    };
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: error instanceof Error ? error.message : "GitHub API request failed."
+    };
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+function cleanGitHubApiError(text: string): string | null {
+  try {
+    const parsed = JSON.parse(text);
+    if (isRecord(parsed)) {
+      return stringValue(parsed.message);
+    }
+  } catch {
+    // Fall through to raw text below.
+  }
+  return text.trim() || null;
 }
 
 function cleanCommandError(result: CommandResult): string | null {

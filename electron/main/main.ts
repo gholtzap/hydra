@@ -33,6 +33,9 @@ import type {
   GitHubCodespaceSessionRequest,
   GitHubCodespaceSessionTarget,
   GitHubBranchListResult,
+  GitHubDeviceAuthPollResult,
+  GitHubDeviceAuthStartResult,
+  GitHubNativeAuthStatus,
   GitHubRepositoryListResult,
   MarketplaceInspectResponse,
   MarketplaceInstallResponse,
@@ -330,6 +333,17 @@ const {
   refreshGitHubCliCodespaceScope: () => Promise<GitHubCliStatus>;
   signInGitHubCli: () => Promise<GitHubCliStatus>;
   validateCodespaceName: (value: unknown) => string;
+};
+const {
+  disconnectGitHubNativeAuth,
+  gitHubNativeAuthStatus,
+  pollGitHubDeviceAuth,
+  startGitHubDeviceAuth
+} = require("./github-native-auth") as {
+  disconnectGitHubNativeAuth: () => Promise<GitHubNativeAuthStatus>;
+  gitHubNativeAuthStatus: () => Promise<GitHubNativeAuthStatus>;
+  pollGitHubDeviceAuth: () => Promise<GitHubDeviceAuthPollResult>;
+  startGitHubDeviceAuth: () => Promise<GitHubDeviceAuthStartResult>;
 };
 const { startMcpServer } = require("./mcp-server") as {
   startMcpServer: (
@@ -1240,6 +1254,10 @@ class AppController {
     );
     ipcMain.handle("repo:buildAndRunApp", (_event, repoId) => this.buildAndRunApp(repoId));
     ipcMain.handle("github:cliStatus", () => this.getGitHubCliStatus());
+    ipcMain.handle("github:nativeAuthStatus", () => this.getGitHubNativeAuthStatus());
+    ipcMain.handle("github:startDeviceAuth", () => this.startGitHubDeviceAuth());
+    ipcMain.handle("github:pollDeviceAuth", () => this.pollGitHubDeviceAuth());
+    ipcMain.handle("github:disconnectNativeAuth", () => this.disconnectGitHubNativeAuth());
     ipcMain.handle("github:signInCli", () => this.signInGitHubCli());
     ipcMain.handle("github:refreshCodespaceScope", () => this.refreshGitHubCliCodespaceScope());
     ipcMain.handle("github:disconnectCli", () => this.disconnectGitHubCli());
@@ -2854,6 +2872,22 @@ class AppController {
 
   async getGitHubCliStatus(): Promise<GitHubCliStatus> {
     return githubCliStatus();
+  }
+
+  async getGitHubNativeAuthStatus(): Promise<GitHubNativeAuthStatus> {
+    return gitHubNativeAuthStatus();
+  }
+
+  async startGitHubDeviceAuth(): Promise<GitHubDeviceAuthStartResult> {
+    return startGitHubDeviceAuth();
+  }
+
+  async pollGitHubDeviceAuth(): Promise<GitHubDeviceAuthPollResult> {
+    return pollGitHubDeviceAuth();
+  }
+
+  async disconnectGitHubNativeAuth(): Promise<GitHubNativeAuthStatus> {
+    return disconnectGitHubNativeAuth();
   }
 
   async signInGitHubCli(): Promise<GitHubCliStatus> {

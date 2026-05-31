@@ -219,6 +219,32 @@ export type GitHubCliStatus = {
   error: string | null;
 };
 
+export type GitHubNativeAuthStatus = {
+  configured: boolean;
+  authenticated: boolean;
+  account: string | null;
+  scopes: string[];
+  error: string | null;
+};
+
+export type GitHubDeviceAuthStartResult = {
+  ok: boolean;
+  status: GitHubNativeAuthStatus;
+  verificationUri: string | null;
+  userCode: string | null;
+  expiresAt: string | null;
+  intervalSeconds: number | null;
+  error: string | null;
+};
+
+export type GitHubDeviceAuthPollResult = {
+  ok: boolean;
+  pending: boolean;
+  status: GitHubNativeAuthStatus;
+  intervalSeconds: number | null;
+  error: string | null;
+};
+
 export type GitHubCodespaceDefaults = {
   repository: string | null;
   branch: string | null;

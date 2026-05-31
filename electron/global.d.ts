@@ -23,6 +23,9 @@ import type {
   EphemeralToolOutputPayload,
   GitHubCliStatus,
   GitHubBranchListResult,
+  GitHubDeviceAuthPollResult,
+  GitHubDeviceAuthStartResult,
+  GitHubNativeAuthStatus,
   GitHubCodespaceDefaults,
   GitHubCodespaceLifecycleRequest,
   GitHubCodespaceListResult,
@@ -84,6 +87,10 @@ interface ClaudeWorkspaceApi {
   }) => Promise<RepoAppLaunchConfig | null>;
   buildAndRunApp: (repoId: string) => Promise<string | null>;
   getGitHubCliStatus: () => Promise<GitHubCliStatus>;
+  getGitHubNativeAuthStatus: () => Promise<GitHubNativeAuthStatus>;
+  startGitHubDeviceAuth: () => Promise<GitHubDeviceAuthStartResult>;
+  pollGitHubDeviceAuth: () => Promise<GitHubDeviceAuthPollResult>;
+  disconnectGitHubNativeAuth: () => Promise<GitHubNativeAuthStatus>;
   signInGitHubCli: () => Promise<GitHubCliStatus>;
   refreshGitHubCliCodespaceScope: () => Promise<GitHubCliStatus>;
   disconnectGitHubCli: () => Promise<GitHubCliStatus>;

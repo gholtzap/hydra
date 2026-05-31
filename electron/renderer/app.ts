@@ -14,6 +14,8 @@ import type {
   FileTreeNode as SharedFileTreeNode,
   GitHubBranchListItem,
   GitHubCliStatus,
+  GitHubDeviceAuthStartResult,
+  GitHubNativeAuthStatus,
   GitHubCodespaceDefaults,
   GitHubCodespaceLifecycleAction,
   GitHubCodespaceListItem,
@@ -167,6 +169,8 @@ type SessionSearchRenderState = {
 type CodespacesDialogState = {
   repoId: string | null;
   status: GitHubCliStatus | null;
+  nativeStatus: GitHubNativeAuthStatus | null;
+  deviceAuth: GitHubDeviceAuthStartResult | null;
   defaults: GitHubCodespaceDefaults | null;
   codespaces: GitHubCodespaceListItem[];
   machines: GitHubCodespaceMachine[];
@@ -464,6 +468,8 @@ const ui: UiState = {
   codespaces: {
     repoId: null,
     status: null,
+    nativeStatus: null,
+    deviceAuth: null,
     defaults: null,
     codespaces: [],
     machines: [],
@@ -6453,6 +6459,9 @@ async function handleClick(event) {
     case "sign-in-github-cli":
       await signInGitHubCliFromCodespaces();
       break;
+    case "sign-in-github-native":
+      await signInGitHubNativeFromCodespaces();
+      break;
     case "refresh-github-codespace-scope":
       await refreshGitHubCliCodespaceScopeFromCodespaces();
       break;
@@ -8121,6 +8130,8 @@ async function openCodespacesDialog(repoId: string | null) {
   ui.codespaces = {
     repoId,
     status: null,
+    nativeStatus: null,
+    deviceAuth: null,
     defaults: null,
     codespaces: [],
     machines: [],
@@ -8155,8 +8166,9 @@ async function refreshCodespacesDialog() {
   renderCodespacesDialog();
 
   try {
-    const [status, defaults, list, repositories, branches, machines] = await Promise.all([
+    const [status, nativeStatus, defaults, list, repositories, branches, machines] = await Promise.all([
       api.getGitHubCliStatus(),
+      api.getGitHubNativeAuthStatus(),
       api.getGitHubCodespaceDefaults(repoId),
       api.listGitHubCodespaces(repoId),
       api.listGitHubRepositories(),
@@ -8168,6 +8180,7 @@ async function refreshCodespacesDialog() {
       api.listGitHubCodespaceMachines(repoId)
     ]);
     ui.codespaces.status = status;
+    ui.codespaces.nativeStatus = nativeStatus;
     ui.codespaces.defaults = defaults;
     ui.codespaces.codespaces = list.codespaces;
     ui.codespaces.repositories = repositories.repositories;
@@ -8193,6 +8206,55 @@ async function refreshCodespacesDialog() {
 function closeCodespacesDialog() {
   if (codespacesDialog.open) {
     codespacesDialog.close();
+  }
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function signInGitHubNativeFromCodespaces() {
+  ui.codespaces.authLoading = true;
+  ui.codespaces.error = "";
+  ui.codespaces.deviceAuth = null;
+  renderCodespacesDialog();
+
+  try {
+    const start = await api.startGitHubDeviceAuth();
+    ui.codespaces.nativeStatus = start.status;
+    ui.codespaces.deviceAuth = start;
+    if (!start.ok || !start.verificationUri || !start.intervalSeconds) {
+      ui.codespaces.error = start.error || "GitHub sign-in failed.";
+      return;
+    }
+
+    await api.openExternalUrl({ scope: "github-url", url: start.verificationUri });
+    renderCodespacesDialog();
+
+    let intervalSeconds = start.intervalSeconds;
+    while (codespacesDialog.open) {
+      await wait(intervalSeconds * 1000);
+      const poll = await api.pollGitHubDeviceAuth();
+      ui.codespaces.nativeStatus = poll.status;
+      intervalSeconds = poll.intervalSeconds || intervalSeconds;
+      if (poll.pending) {
+        renderCodespacesDialog();
+        continue;
+      }
+
+      ui.codespaces.deviceAuth = null;
+      if (!poll.ok) {
+        ui.codespaces.error = poll.error || "GitHub sign-in failed.";
+      } else {
+        await refreshCodespacesDialog();
+      }
+      break;
+    }
+  } catch (error) {
+    ui.codespaces.error = error instanceof Error ? error.message : "GitHub sign-in failed.";
+  } finally {
+    ui.codespaces.authLoading = false;
+    renderCodespacesDialog();
   }
 }
 
@@ -8237,11 +8299,16 @@ async function disconnectGitHubCliFromCodespaces() {
   renderCodespacesDialog();
 
   try {
-    ui.codespaces.status = await api.disconnectGitHubCli();
+    if (ui.codespaces.nativeStatus?.authenticated) {
+      ui.codespaces.nativeStatus = await api.disconnectGitHubNativeAuth();
+    } else {
+      ui.codespaces.status = await api.disconnectGitHubCli();
+    }
+    ui.codespaces.deviceAuth = null;
     ui.codespaces.codespaces = [];
     ui.codespaces.selectedCodespaceName = "";
   } catch (error) {
-    ui.codespaces.error = error instanceof Error ? error.message : "Failed to sign out of GitHub CLI.";
+    ui.codespaces.error = error instanceof Error ? error.message : "Failed to sign out of GitHub.";
   } finally {
     ui.codespaces.submitting = false;
     renderCodespacesDialog();
@@ -9184,18 +9251,24 @@ function renderAppLaunchDialog() {
 function renderCodespacesDialog() {
   const repo = repoById(ui.codespaces.repoId || "");
   const status = ui.codespaces.status;
-  const isGitHubAuthenticated = !!status?.installed && !!status.authenticated;
-  const hasCodespaceScope = !status?.authenticated ||
-    status.scopes.length === 0 ||
-    status.scopes.includes("codespace");
+  const nativeStatus = ui.codespaces.nativeStatus;
+  const isNativeAuthenticated = !!nativeStatus?.authenticated;
+  const isCliAuthenticated = !!status?.installed && !!status.authenticated;
+  const isGitHubAuthenticated = isNativeAuthenticated || isCliAuthenticated;
+  const effectiveScopes = isNativeAuthenticated ? nativeStatus.scopes : status?.scopes || [];
+  const hasCodespaceScope = !isGitHubAuthenticated ||
+    effectiveScopes.length === 0 ||
+    effectiveScopes.includes("codespace");
   const canUseCodespaces = isGitHubAuthenticated && hasCodespaceScope;
-  const needsCodespaceScope = !!status?.authenticated && !hasCodespaceScope;
+  const needsCodespaceScope = isCliAuthenticated && !isNativeAuthenticated && !hasCodespaceScope;
   const selectedCodespace = ui.codespaces.codespaces.find(
     (codespace) => codespace.name === ui.codespaces.selectedCodespaceName
   );
   const statusText = !status
-    ? "Checking GitHub CLI..."
-    : !status.installed
+    ? "Checking GitHub..."
+    : isNativeAuthenticated
+      ? `Signed in with GitHub${nativeStatus?.account ? ` as ${nativeStatus.account}` : ""}.`
+      : !status.installed
       ? "GitHub CLI is not installed."
       : needsCodespaceScope
         ? "GitHub CLI is signed in, but needs the codespace scope."
@@ -9237,7 +9310,21 @@ function renderCodespacesDialog() {
         dom(
           "div",
           { className: "dialog-header-actions" },
-          !status?.authenticated
+          !isGitHubAuthenticated && nativeStatus?.configured
+            ? dom(
+                "button",
+                {
+                  className: "primary",
+                  attrs: {
+                    type: "button",
+                    "data-action": "sign-in-github-native",
+                    disabled: ui.codespaces.authLoading || ui.codespaces.loading
+                  }
+                },
+                ui.codespaces.authLoading ? "Signing In..." : "Sign In with GitHub"
+              )
+            : null,
+          !isGitHubAuthenticated && !nativeStatus?.configured
             ? dom(
                 "button",
                 {
@@ -9248,7 +9335,7 @@ function renderCodespacesDialog() {
                     disabled: ui.codespaces.authLoading || ui.codespaces.loading
                   }
                 },
-                ui.codespaces.authLoading ? "Signing In..." : "Sign In"
+                ui.codespaces.authLoading ? "Signing In..." : "Sign In with GitHub CLI"
               )
             : null,
           needsCodespaceScope
@@ -9270,7 +9357,7 @@ function renderCodespacesDialog() {
               attrs: {
                 type: "button",
                 "data-action": "disconnect-github-cli",
-                disabled: !status?.authenticated || ui.codespaces.submitting || ui.codespaces.authLoading
+                disabled: !isGitHubAuthenticated || ui.codespaces.submitting || ui.codespaces.authLoading
               }
             },
             "Disconnect"
@@ -9289,6 +9376,13 @@ function renderCodespacesDialog() {
       ),
       ui.codespaces.error
         ? dom("div", { className: "settings-warning-card" }, ui.codespaces.error)
+        : null,
+      ui.codespaces.deviceAuth?.ok && ui.codespaces.deviceAuth.userCode && ui.codespaces.deviceAuth.verificationUri
+        ? dom(
+            "div",
+            { className: "settings-warning-card" },
+            `Enter code ${ui.codespaces.deviceAuth.userCode} at ${ui.codespaces.deviceAuth.verificationUri}.`
+          )
         : null,
       dom(
         "datalist",

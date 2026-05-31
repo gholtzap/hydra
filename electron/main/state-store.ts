@@ -234,6 +234,11 @@ function normalizeRestoredSessions(sessions: SessionRecord[]): void {
 
   for (const session of sessions) {
     session.launchProfile = normalizeSessionLaunchProfile(session);
+    session.location = session.launchProfile === "githubCodespace" ? "github-codespace" : "local";
+    session.githubCodespaceTarget =
+      session.location === "github-codespace"
+        ? normalizeGitHubCodespaceTarget(session.githubCodespaceTarget)
+        : null;
     const startupAgentId = normalizeAgentId(session.startupAgentId, null);
     session.startupAgentId = startupAgentId || (session.launchesClaudeOnStart ? DEFAULT_AGENT_ID : null);
     session.launchesClaudeOnStart = !!session.startupAgentId;
@@ -265,7 +270,12 @@ function normalizeRestoredSessions(sessions: SessionRecord[]): void {
 
 function normalizeSessionLaunchProfile(session: SessionRecord): SessionLaunchProfile {
   const normalized = typeof session.launchProfile === "string" ? session.launchProfile.trim() : "";
-  if (normalized === "agent" || normalized === "shell" || normalized === "appLaunch") {
+  if (
+    normalized === "agent" ||
+    normalized === "shell" ||
+    normalized === "appLaunch" ||
+    normalized === "githubCodespace"
+  ) {
     return normalized;
   }
 
@@ -276,6 +286,30 @@ function normalizeSessionLaunchProfile(session: SessionRecord): SessionLaunchPro
   return typeof session.title === "string" && session.title.startsWith("App: ")
     ? "appLaunch"
     : "shell";
+}
+
+function normalizeGitHubCodespaceTarget(
+  value: SessionRecord["githubCodespaceTarget"]
+): SessionRecord["githubCodespaceTarget"] {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+
+  const name = typeof value.name === "string" ? value.name.trim() : "";
+  const repository = typeof value.repository === "string" ? value.repository.trim() : "";
+  const displayName = typeof value.displayName === "string" && value.displayName.trim()
+    ? value.displayName.trim()
+    : null;
+
+  if (!name || !repository) {
+    return null;
+  }
+
+  return {
+    name,
+    repository,
+    displayName
+  };
 }
 
 function normalizeRepos(repos: unknown): RepoRecord[] {

@@ -135,7 +135,14 @@ export type SessionStatus =
   | "idle";
 
 export type SessionRuntimeState = "live" | "stopped" | "launching";
-export type SessionLaunchProfile = "agent" | "shell" | "appLaunch";
+export type SessionLaunchProfile = "agent" | "shell" | "appLaunch" | "githubCodespace";
+export type SessionLocation = "local" | "github-codespace";
+
+export type GitHubCodespaceSessionTarget = {
+  name: string;
+  repository: string;
+  displayName: string | null;
+};
 
 export type SessionOrganizationPatch = {
   isPinned?: boolean;
@@ -176,6 +183,8 @@ export type SessionRecord = {
   repoID: string;
   title: string;
   launchProfile: SessionLaunchProfile;
+  location: SessionLocation;
+  githubCodespaceTarget: GitHubCodespaceSessionTarget | null;
   initialPrompt: string;
   launchesClaudeOnStart: boolean;
   startupAgentId: AgentId | null;
@@ -201,6 +210,52 @@ export type SessionRecord = {
 export type SessionSummary = Omit<SessionRecord, "sessionIconPath"> & {
   sessionIconUrl: string;
 };
+
+export type GitHubCliStatus = {
+  installed: boolean;
+  authenticated: boolean;
+  account: string | null;
+  scopes: string[];
+  error: string | null;
+};
+
+export type GitHubCodespaceDefaults = {
+  repository: string | null;
+  branch: string | null;
+  error: string | null;
+};
+
+export type GitHubCodespaceListItem = {
+  name: string;
+  displayName: string | null;
+  repository: string;
+  state: string;
+  machineName: string | null;
+  createdAt: string | null;
+  lastUsedAt: string | null;
+};
+
+export type GitHubCodespaceListResult = {
+  ok: boolean;
+  status: GitHubCliStatus;
+  codespaces: GitHubCodespaceListItem[];
+  error: string | null;
+};
+
+export type GitHubCodespaceSessionRequest =
+  | {
+      repoId: string;
+      mode: "existing";
+      codespaceName: string;
+    }
+  | {
+      repoId: string;
+      mode: "create";
+      repository: string;
+      branch: string;
+      machine?: string;
+      displayName?: string;
+    };
 
 export type AppPreferences = {
   defaultAgentId: AgentId;

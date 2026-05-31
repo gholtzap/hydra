@@ -12,6 +12,9 @@ import type {
   DiscordLinkCode,
   DiscordRelayStatus,
   FileTreeNode as SharedFileTreeNode,
+  GitHubCliStatus,
+  GitHubCodespaceDefaults,
+  GitHubCodespaceListItem,
   JsonObject,
   JsonValue,
   KeybindingAction,
@@ -155,6 +158,21 @@ type SessionSearchIndexedResult = {
 type SessionSearchRenderState = {
   filteredResults: Record<SessionSearchFilter, SessionSearchIndexedResult[]>;
   counts: Record<SessionSearchFilter, number>;
+};
+
+type CodespacesDialogState = {
+  repoId: string | null;
+  status: GitHubCliStatus | null;
+  defaults: GitHubCodespaceDefaults | null;
+  codespaces: GitHubCodespaceListItem[];
+  loading: boolean;
+  submitting: boolean;
+  error: string;
+  selectedCodespaceName: string;
+  repository: string;
+  branch: string;
+  machine: string;
+  displayName: string;
 };
 
 function createEphemeralToolOverlayState(): EphemeralToolOverlayState {
@@ -318,6 +336,7 @@ type UiState = {
   appLaunchBuildCommand: string;
   appLaunchRunCommand: string;
   appLaunchError: string;
+  codespaces: CodespacesDialogState;
   marketplaceResults: MarketplaceSkillSummary[];
   marketplaceSelectedId: string | null;
   marketplaceSelectedDetail: MarketplaceSkillDetails | null;
@@ -433,6 +452,20 @@ const ui: UiState = {
   appLaunchBuildCommand: "",
   appLaunchRunCommand: "",
   appLaunchError: "",
+  codespaces: {
+    repoId: null,
+    status: null,
+    defaults: null,
+    codespaces: [],
+    loading: false,
+    submitting: false,
+    error: "",
+    selectedCodespaceName: "",
+    repository: "",
+    branch: "main",
+    machine: "",
+    displayName: ""
+  },
   marketplaceResults: [] as MarketplaceSkillSummary[],
   marketplaceSelectedId: null as string | null,
   marketplaceSelectedDetail: null as MarketplaceSkillDetails | null,
@@ -513,6 +546,7 @@ const quickSwitcherDialog = document.getElementById("quick-switcher-dialog") as 
 const sessionSearchDialog = document.getElementById("session-search-dialog") as HTMLDialogElement;
 const commandPaletteDialog = document.getElementById("command-palette-dialog") as HTMLDialogElement;
 const appLaunchDialog = document.getElementById("app-launch-dialog") as HTMLDialogElement;
+const codespacesDialog = document.getElementById("codespaces-dialog") as HTMLDialogElement;
 const planReviewDialog = document.getElementById("plan-review-dialog") as HTMLDialogElement;
 const tokscaleDialog = document.getElementById("tokscale-dialog") as HTMLDialogElement;
 const lazygitDialog = document.getElementById("lazygit-dialog") as HTMLDialogElement;
@@ -1426,6 +1460,9 @@ api.onCommand(async ({ command, sessionId, repoId }) => {
     case "build-and-run-app":
       await runConfiguredApp(repoId || currentRepoId());
       break;
+    case "open-codespaces":
+      await openCodespacesDialog(repoId || currentRepoId());
+      break;
     case "configure-build-and-run-app":
       openAppLaunchDialog(repoId || currentRepoId());
       break;
@@ -1987,6 +2024,7 @@ function renderInbox() {
         </div>
         <div class="detail-actions">
           <button class="primary" data-action="open-launcher">New Session</button>
+          <button data-action="open-codespaces">Cloud Session</button>
           <button data-action="open-wiki" ${currentRepoId() ? "" : "disabled"}>Open Wiki</button>
           <button data-action="open-quick-switcher">Jump To</button>
         </div>
@@ -2026,6 +2064,7 @@ function renderRepoDetail(repo) {
           <button data-action="open-tokscale" data-repo-id="${repo.id}">Token Usage</button>
           <button data-action="open-wiki" data-repo-id="${repo.id}">Open Wiki</button>
           <button data-action="toggle-wiki" data-repo-id="${repo.id}">${repo.wikiEnabled ? "Disable Wiki" : "Enable Wiki"}</button>
+          <button data-action="open-codespaces" data-repo-id="${repo.id}">Cloud Session</button>
           <button class="primary" data-action="open-launcher" data-repo-id="${repo.id}">New Session</button>
         </div>
       </div>
@@ -3913,6 +3952,7 @@ function renderCommandPaletteDialog() {
     { id: "open-workspace", label: "Open Folder", action: "open-workspace" },
     { id: "create-project", label: "Create Folder", action: "create-project" },
     { id: "open-launcher", label: "New Session", action: "open-launcher" },
+    { id: "open-codespaces", label: "New Cloud Session", action: "open-codespaces" },
     { id: "build-and-run-app", label: "Build and Run App", action: "build-and-run-app" },
     { id: "configure-build-and-run-app", label: "Configure App Launch", action: "configure-build-and-run-app" },
     { id: "open-session-search", label: "Search Session Files", action: "open-session-search" },
@@ -6387,8 +6427,26 @@ async function handleClick(event) {
     case "open-launcher":
       await startDefaultAgentSession(target.dataset.repoId || currentRepoId());
       break;
+    case "open-codespaces":
+      await openCodespacesDialog(target.dataset.repoId || currentRepoId());
+      break;
     case "build-and-run-app":
       await runConfiguredApp(target.dataset.repoId || currentRepoId());
+      break;
+    case "refresh-codespaces":
+      await refreshCodespacesDialog();
+      break;
+    case "disconnect-github-cli":
+      await disconnectGitHubCliFromCodespaces();
+      break;
+    case "close-codespaces-dialog":
+      closeCodespacesDialog();
+      break;
+    case "open-existing-codespace-session":
+      await openExistingCodespaceSession();
+      break;
+    case "create-codespace-session":
+      await createCodespaceSession();
       break;
     case "configure-build-and-run-app":
       openAppLaunchDialog(target.dataset.repoId || currentRepoId());
@@ -7440,6 +7498,14 @@ async function handleKeyDown(event) {
     }
   }
 
+  if (keydownTarget instanceof HTMLInputElement && codespacesDialog.open) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      await createCodespaceSession();
+      return;
+    }
+  }
+
   if (sessionSearchDialog.open) {
     if (await handleSessionSearchKeyDown(event)) {
       return;
@@ -8005,6 +8071,172 @@ async function runConfiguredApp(repoId: string | null) {
   } catch (error) {
     ui.appLaunchError = error instanceof Error ? error.message : "Failed to build and run the app.";
     openAppLaunchDialog(repoId, { preserveInput: true });
+  }
+}
+
+async function openCodespacesDialog(repoId: string | null) {
+  if (!repoId) {
+    window.alert("Select a folder first.");
+    return;
+  }
+
+  ui.codespaces = {
+    repoId,
+    status: null,
+    defaults: null,
+    codespaces: [],
+    loading: true,
+    submitting: false,
+    error: "",
+    selectedCodespaceName: "",
+    repository: "",
+    branch: "main",
+    machine: "",
+    displayName: ""
+  };
+  renderCodespacesDialog();
+  if (!codespacesDialog.open) {
+    codespacesDialog.showModal();
+  }
+  await refreshCodespacesDialog();
+}
+
+async function refreshCodespacesDialog() {
+  const repoId = ui.codespaces.repoId;
+  if (!repoId) {
+    return;
+  }
+
+  ui.codespaces.loading = true;
+  ui.codespaces.error = "";
+  renderCodespacesDialog();
+
+  try {
+    const [status, defaults, list] = await Promise.all([
+      api.getGitHubCliStatus(),
+      api.getGitHubCodespaceDefaults(repoId),
+      api.listGitHubCodespaces(repoId)
+    ]);
+    ui.codespaces.status = status;
+    ui.codespaces.defaults = defaults;
+    ui.codespaces.codespaces = list.codespaces;
+    ui.codespaces.repository = ui.codespaces.repository || defaults.repository || "";
+    ui.codespaces.branch = ui.codespaces.branch || defaults.branch || "main";
+    ui.codespaces.error = list.ok ? defaults.error || "" : list.error || status.error || "";
+    if (!ui.codespaces.selectedCodespaceName && list.codespaces.length) {
+      ui.codespaces.selectedCodespaceName = list.codespaces[0].name;
+    }
+  } catch (error) {
+    ui.codespaces.error = error instanceof Error ? error.message : "Failed to load GitHub Codespaces.";
+  } finally {
+    ui.codespaces.loading = false;
+    renderCodespacesDialog();
+  }
+}
+
+function closeCodespacesDialog() {
+  if (codespacesDialog.open) {
+    codespacesDialog.close();
+  }
+}
+
+async function disconnectGitHubCliFromCodespaces() {
+  ui.codespaces.submitting = true;
+  ui.codespaces.error = "";
+  renderCodespacesDialog();
+
+  try {
+    ui.codespaces.status = await api.disconnectGitHubCli();
+    ui.codespaces.codespaces = [];
+    ui.codespaces.selectedCodespaceName = "";
+  } catch (error) {
+    ui.codespaces.error = error instanceof Error ? error.message : "Failed to sign out of GitHub CLI.";
+  } finally {
+    ui.codespaces.submitting = false;
+    renderCodespacesDialog();
+  }
+}
+
+function readCodespaceDialogFields() {
+  const repositoryInput = codespacesDialog.querySelector("#codespace-repository") as HTMLInputElement | null;
+  const branchInput = codespacesDialog.querySelector("#codespace-branch") as HTMLInputElement | null;
+  const machineInput = codespacesDialog.querySelector("#codespace-machine") as HTMLInputElement | null;
+  const displayNameInput = codespacesDialog.querySelector("#codespace-display-name") as HTMLInputElement | null;
+  const selectedInput = codespacesDialog.querySelector("#codespace-existing") as HTMLSelectElement | null;
+
+  ui.codespaces.repository = repositoryInput?.value.trim() || ui.codespaces.repository;
+  ui.codespaces.branch = branchInput?.value.trim() || ui.codespaces.branch;
+  ui.codespaces.machine = machineInput?.value.trim() || "";
+  ui.codespaces.displayName = displayNameInput?.value.trim() || "";
+  ui.codespaces.selectedCodespaceName = selectedInput?.value || ui.codespaces.selectedCodespaceName;
+}
+
+async function openExistingCodespaceSession() {
+  const repoId = ui.codespaces.repoId;
+  readCodespaceDialogFields();
+  if (!repoId || !ui.codespaces.selectedCodespaceName) {
+    ui.codespaces.error = "Choose a Codespace to open.";
+    renderCodespacesDialog();
+    return;
+  }
+
+  ui.codespaces.submitting = true;
+  ui.codespaces.error = "";
+  renderCodespacesDialog();
+
+  try {
+    const sessionId = await api.createGitHubCodespaceSession({
+      repoId,
+      mode: "existing",
+      codespaceName: ui.codespaces.selectedCodespaceName
+    });
+    if (sessionId) {
+      closeCodespacesDialog();
+      if (!sessionById(sessionId)) {
+        replaceState(await api.getState());
+      }
+      await selectSession(sessionId, "terminal");
+    }
+  } catch (error) {
+    ui.codespaces.error = error instanceof Error ? error.message : "Failed to open Codespace.";
+  } finally {
+    ui.codespaces.submitting = false;
+    renderCodespacesDialog();
+  }
+}
+
+async function createCodespaceSession() {
+  const repoId = ui.codespaces.repoId;
+  readCodespaceDialogFields();
+  if (!repoId) {
+    return;
+  }
+
+  ui.codespaces.submitting = true;
+  ui.codespaces.error = "";
+  renderCodespacesDialog();
+
+  try {
+    const sessionId = await api.createGitHubCodespaceSession({
+      repoId,
+      mode: "create",
+      repository: ui.codespaces.repository,
+      branch: ui.codespaces.branch,
+      machine: ui.codespaces.machine || undefined,
+      displayName: ui.codespaces.displayName || undefined
+    });
+    if (sessionId) {
+      closeCodespacesDialog();
+      if (!sessionById(sessionId)) {
+        replaceState(await api.getState());
+      }
+      await selectSession(sessionId, "terminal");
+    }
+  } catch (error) {
+    ui.codespaces.error = error instanceof Error ? error.message : "Failed to create Codespace.";
+  } finally {
+    ui.codespaces.submitting = false;
+    renderCodespacesDialog();
   }
 }
 
@@ -8777,6 +9009,209 @@ function renderAppLaunchDialog() {
             }
           },
           "Save and Run"
+        )
+      )
+    )
+  );
+}
+
+function renderCodespacesDialog() {
+  const repo = repoById(ui.codespaces.repoId || "");
+  const status = ui.codespaces.status;
+  const canUseCodespaces = !!status?.installed && !!status.authenticated;
+  const statusText = !status
+    ? "Checking GitHub CLI..."
+    : !status.installed
+      ? "GitHub CLI is not installed."
+      : status.authenticated
+        ? `Signed in${status.account ? ` as ${status.account}` : ""}.`
+        : status.error || "GitHub CLI is not authenticated.";
+  const existingDisabled =
+    ui.codespaces.loading ||
+    ui.codespaces.submitting ||
+    !canUseCodespaces ||
+    !ui.codespaces.codespaces.length;
+  const createDisabled =
+    ui.codespaces.loading ||
+    ui.codespaces.submitting ||
+    !canUseCodespaces ||
+    !ui.codespaces.repository ||
+    !ui.codespaces.branch;
+
+  replaceDomChildren(
+    codespacesDialog,
+    dom(
+      "form",
+      { className: "dialog-body codespaces-dialog-body", attrs: { method: "dialog" } },
+      dom(
+        "div",
+        { className: "dialog-header" },
+        dom(
+          "div",
+          {},
+          dom("div", { className: "eyebrow" }, "GitHub Codespaces"),
+          dom("h2", { className: "dialog-title" }, repo ? `Cloud Session for ${repo.name}` : "Cloud Session"),
+          dom("div", { className: "muted" }, statusText)
+        ),
+        dom(
+          "div",
+          { className: "dialog-header-actions" },
+          dom(
+            "button",
+            {
+              attrs: {
+                type: "button",
+                "data-action": "disconnect-github-cli",
+                disabled: !status?.authenticated || ui.codespaces.submitting
+              }
+            },
+            "Disconnect"
+          ),
+          dom(
+            "button",
+            {
+              attrs: {
+                type: "button",
+                "data-action": "close-codespaces-dialog"
+              }
+            },
+            "Close"
+          )
+        )
+      ),
+      ui.codespaces.error
+        ? dom("div", { className: "settings-warning-card" }, ui.codespaces.error)
+        : null,
+      dom(
+        "div",
+        { className: "codespaces-grid" },
+        dom(
+          "section",
+          { className: "dialog-panel" },
+          dom("div", { className: "row-title" }, "Existing Codespace"),
+          dom(
+            "label",
+            { className: "app-launch-field" },
+            dom("select", {
+              value: ui.codespaces.selectedCodespaceName,
+              attrs: {
+                id: "codespace-existing",
+                disabled: existingDisabled
+              }
+            },
+              ...ui.codespaces.codespaces.map((codespace) =>
+                dom(
+                  "option",
+                  {
+                    attrs: {
+                      value: codespace.name
+                    }
+                  },
+                  `${codespace.displayName || codespace.name} · ${codespace.repository} · ${codespace.state}`
+                )
+              )
+            )
+          ),
+          dom(
+            "div",
+            { className: "dialog-footer codespaces-panel-actions" },
+            dom(
+              "button",
+              {
+                attrs: {
+                  type: "button",
+                  "data-action": "refresh-codespaces",
+                  disabled: ui.codespaces.loading || ui.codespaces.submitting
+                }
+              },
+              "Refresh"
+            ),
+            dom(
+              "button",
+              {
+                className: "primary",
+                attrs: {
+                  type: "button",
+                  "data-action": "open-existing-codespace-session",
+                  disabled: existingDisabled
+                }
+              },
+              "Open Terminal"
+            )
+          )
+        ),
+        dom(
+          "section",
+          { className: "dialog-panel" },
+          dom("div", { className: "row-title" }, "Create Codespace"),
+          dom(
+            "label",
+            { className: "app-launch-field" },
+            dom("span", { className: "muted" }, "Repository"),
+            dom("input", {
+              value: ui.codespaces.repository,
+              attrs: {
+                id: "codespace-repository",
+                placeholder: "owner/repo",
+                disabled: ui.codespaces.loading || ui.codespaces.submitting
+              }
+            })
+          ),
+          dom(
+            "label",
+            { className: "app-launch-field" },
+            dom("span", { className: "muted" }, "Branch"),
+            dom("input", {
+              value: ui.codespaces.branch,
+              attrs: {
+                id: "codespace-branch",
+                placeholder: "main",
+                disabled: ui.codespaces.loading || ui.codespaces.submitting
+              }
+            })
+          ),
+          dom(
+            "label",
+            { className: "app-launch-field" },
+            dom("span", { className: "muted" }, "Machine"),
+            dom("input", {
+              value: ui.codespaces.machine,
+              attrs: {
+                id: "codespace-machine",
+                placeholder: "Optional",
+                disabled: ui.codespaces.loading || ui.codespaces.submitting
+              }
+            })
+          ),
+          dom(
+            "label",
+            { className: "app-launch-field" },
+            dom("span", { className: "muted" }, "Display Name"),
+            dom("input", {
+              value: ui.codespaces.displayName,
+              attrs: {
+                id: "codespace-display-name",
+                placeholder: "Optional",
+                disabled: ui.codespaces.loading || ui.codespaces.submitting
+              }
+            })
+          ),
+          dom(
+            "div",
+            { className: "dialog-footer codespaces-panel-actions" },
+            dom(
+              "button",
+              {
+                className: "primary",
+                attrs: {
+                  type: "button",
+                  "data-action": "create-codespace-session",
+                  disabled: createDisabled
+                }
+              },
+              ui.codespaces.submitting ? "Starting..." : "Create and Open"
+            )
+          )
         )
       )
     )
@@ -13773,6 +14208,7 @@ function isAnyDialogOpen() {
     sessionSearchDialog.open ||
     commandPaletteDialog.open ||
     appLaunchDialog.open ||
+    codespacesDialog.open ||
     planReviewDialog.open ||
     Object.values(EPHEMERAL_TOOL_DIALOGS).some((definition) => definition.dialog.open)
   );

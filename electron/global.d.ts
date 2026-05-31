@@ -21,6 +21,10 @@ import type {
   EphemeralToolExitPayload,
   EphemeralToolId,
   EphemeralToolOutputPayload,
+  GitHubCliStatus,
+  GitHubCodespaceDefaults,
+  GitHubCodespaceListResult,
+  GitHubCodespaceSessionRequest,
   KeybindingEventSnapshot,
   KeybindingLabels,
   KeybindingMap,
@@ -75,6 +79,11 @@ interface ClaudeWorkspaceApi {
     config: RepoAppLaunchConfig;
   }) => Promise<RepoAppLaunchConfig | null>;
   buildAndRunApp: (repoId: string) => Promise<string | null>;
+  getGitHubCliStatus: () => Promise<GitHubCliStatus>;
+  disconnectGitHubCli: () => Promise<GitHubCliStatus>;
+  getGitHubCodespaceDefaults: (repoId: string) => Promise<GitHubCodespaceDefaults>;
+  listGitHubCodespaces: (repoId: string | null) => Promise<GitHubCodespaceListResult>;
+  createGitHubCodespaceSession: (payload: GitHubCodespaceSessionRequest) => Promise<string | null>;
   readClipboardText: () => Promise<string>;
   writeClipboardText: (text: string) => Promise<void>;
   checkForUpdates: () => Promise<AppUpdateCheckResult>;

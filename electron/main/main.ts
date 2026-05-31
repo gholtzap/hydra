@@ -24,6 +24,12 @@ import type {
   EphemeralToolResizeRequest,
   EphemeralToolSessionRequest,
   FileTreeNode,
+  GitHubCliStatus,
+  GitHubCodespaceDefaults,
+  GitHubCodespaceListItem,
+  GitHubCodespaceListResult,
+  GitHubCodespaceSessionRequest,
+  GitHubCodespaceSessionTarget,
   MarketplaceInspectResponse,
   MarketplaceInstallResponse,
   MarketplaceSkillDetails,
@@ -285,6 +291,26 @@ const { mergeCommandPath, resolveCommandPath, resolveCommandPathSync } = require
   mergeCommandPath: (envPath?: string | null) => string;
   resolveCommandPath: (command: string, envPath?: string | null) => Promise<string | null>;
   resolveCommandPathSync: (command: string, envPath?: string | null) => string | null;
+};
+const {
+  createGitHubCodespace,
+  disconnectGitHubCli,
+  gitHubCodespaceDefaults,
+  githubCliStatus,
+  listGitHubCodespaces,
+  validateCodespaceName
+} = require("./github-codespaces") as {
+  createGitHubCodespace: (input: {
+    repository: string;
+    branch: string;
+    machine?: string;
+    displayName?: string;
+  }) => Promise<GitHubCodespaceListItem>;
+  disconnectGitHubCli: () => Promise<GitHubCliStatus>;
+  gitHubCodespaceDefaults: (repoPath: string) => Promise<GitHubCodespaceDefaults>;
+  githubCliStatus: () => Promise<GitHubCliStatus>;
+  listGitHubCodespaces: (repository?: string | null) => Promise<GitHubCodespaceListResult>;
+  validateCodespaceName: (value: unknown) => string;
 };
 const { startMcpServer } = require("./mcp-server") as {
   startMcpServer: (
@@ -1194,6 +1220,17 @@ class AppController {
       this.updateRepoAppLaunchConfig(payload?.repoId, payload?.config)
     );
     ipcMain.handle("repo:buildAndRunApp", (_event, repoId) => this.buildAndRunApp(repoId));
+    ipcMain.handle("github:cliStatus", () => this.getGitHubCliStatus());
+    ipcMain.handle("github:disconnectCli", () => this.disconnectGitHubCli());
+    ipcMain.handle("github:codespaceDefaults", (_event, repoId) =>
+      this.getGitHubCodespaceDefaults(repoId)
+    );
+    ipcMain.handle("github:codespaces", (_event, repoId) =>
+      this.listGitHubCodespacesForRepo(repoId)
+    );
+    ipcMain.handle("github:codespaceSession", (_event, payload) =>
+      this.createGitHubCodespaceSession(payload)
+    );
     ipcMain.handle("status:ports", () => inspectTrackedPorts());
     ipcMain.handle("settings:context", (_event, repoId) =>
       buildClaudeSettingsContext(this.repoById(repoId) || null)
@@ -2164,6 +2201,8 @@ class AppController {
       repoID: repoId,
       title: repo.name,
       launchProfile: "agent",
+      location: "local",
+      githubCodespaceTarget: null,
       initialPrompt,
       launchesClaudeOnStart: !!startupAgentId,
       startupAgentId,
@@ -2533,6 +2572,10 @@ class AppController {
         click: () => this.sendCommand("build-and-run-app", { repoId })
       },
       {
+        label: "Start Cloud Codespace",
+        click: () => this.sendCommand("open-codespaces", { repoId })
+      },
+      {
         label: "Configure App Launch",
         click: () => this.sendCommand("configure-build-and-run-app", { repoId })
       },
@@ -2616,6 +2659,8 @@ class AppController {
       repoID: repoId,
       title: repo.name,
       launchProfile: "agent",
+      location: "local",
+      githubCodespaceTarget: null,
       initialPrompt: "",
       launchesClaudeOnStart: true,
       startupAgentId,
@@ -2773,6 +2818,130 @@ class AppController {
     return sessionId;
   }
 
+  async getGitHubCliStatus(): Promise<GitHubCliStatus> {
+    return githubCliStatus();
+  }
+
+  async disconnectGitHubCli(): Promise<GitHubCliStatus> {
+    return disconnectGitHubCli();
+  }
+
+  async getGitHubCodespaceDefaults(repoId: string): Promise<GitHubCodespaceDefaults> {
+    const repo = this.repoById(repoId);
+    if (!repo) {
+      return {
+        repository: null,
+        branch: null,
+        error: "Select a project before starting a cloud session."
+      };
+    }
+
+    return gitHubCodespaceDefaults(repo.path);
+  }
+
+  async listGitHubCodespacesForRepo(repoId: string | null | undefined): Promise<GitHubCodespaceListResult> {
+    const repo = this.repoById(repoId);
+    const defaults = repo ? await gitHubCodespaceDefaults(repo.path) : null;
+    return listGitHubCodespaces(defaults?.repository || null);
+  }
+
+  async createGitHubCodespaceSession(
+    request: GitHubCodespaceSessionRequest
+  ): Promise<string | null> {
+    const repo = this.repoById(request?.repoId);
+    if (!repo) {
+      throw new Error("Select a project before starting a cloud session.");
+    }
+
+    const target =
+      request.mode === "existing"
+        ? await this.existingGitHubCodespaceTarget(request.codespaceName)
+        : await this.newGitHubCodespaceTarget(request);
+
+    return this.createCodespaceTerminalSession(repo, target);
+  }
+
+  private async existingGitHubCodespaceTarget(
+    codespaceName: string
+  ): Promise<GitHubCodespaceSessionTarget> {
+    const name = validateCodespaceName(codespaceName);
+    const codespaces = await listGitHubCodespaces(null);
+    if (!codespaces.ok) {
+      throw new Error(codespaces.error || "GitHub CLI could not list codespaces.");
+    }
+
+    const match = codespaces.codespaces.find((codespace) => codespace.name === name);
+    if (!match) {
+      throw new Error("Choose a valid GitHub Codespace.");
+    }
+
+    return {
+      name: match.name,
+      repository: match.repository,
+      displayName: match.displayName
+    };
+  }
+
+  private async newGitHubCodespaceTarget(
+    request: Extract<GitHubCodespaceSessionRequest, { mode: "create" }>
+  ): Promise<GitHubCodespaceSessionTarget> {
+    const created = await createGitHubCodespace({
+      repository: request.repository,
+      branch: request.branch,
+      machine: request.machine,
+      displayName: request.displayName
+    });
+
+    return {
+      name: created.name,
+      repository: created.repository,
+      displayName: created.displayName
+    };
+  }
+
+  private createCodespaceTerminalSession(
+    repo: RepoRecord,
+    target: GitHubCodespaceSessionTarget
+  ): string | null {
+    const sessionId = randomUUID();
+    const title = target.displayName || `Codespace: ${target.repository}`;
+    const session: SessionRecord = {
+      id: sessionId,
+      repoID: repo.id,
+      title,
+      launchProfile: "githubCodespace",
+      location: "github-codespace",
+      githubCodespaceTarget: target,
+      initialPrompt: "",
+      launchesClaudeOnStart: false,
+      startupAgentId: null,
+      claudeSessionId: null,
+      agentSessionId: null,
+      status: "running",
+      runtimeState: "live",
+      blocker: null,
+      unreadCount: 0,
+      createdAt: now(),
+      updatedAt: now(),
+      lastActivityAt: null,
+      stoppedAt: null,
+      launchCount: 1,
+      isPinned: false,
+      tagColor: null,
+      sessionIconPath: null,
+      sessionIconUpdatedAt: null,
+      transcript: "",
+      rawTranscript: ""
+    };
+
+    this.state.sessions.unshift(session);
+    this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(session.transcript));
+    this.launchRuntime(session, repo);
+    this.scheduleSave();
+    this.broadcastState();
+    return session.id;
+  }
+
   findReusableAppSession(repoId: string): SessionRecord | null {
     const repo = this.repoById(repoId);
     if (!repo) {
@@ -2820,6 +2989,31 @@ class AppController {
 
   launchRuntime(session: SessionRecord, repo: RepoRecord): void {
     this.cancelPendingAgentLaunch(session.id);
+    if (session.launchProfile === "githubCodespace") {
+      const target = session.githubCodespaceTarget;
+      const ghPath = resolveCommandPathSync("gh");
+      if (!target || !ghPath) {
+        const message =
+          "Hydra could not connect to this GitHub Codespace. Install GitHub CLI and authenticate with gh auth login.\r\n";
+        session.rawTranscript = trimRawTranscript(`${session.rawTranscript || ""}${message}`);
+        session.transcript = trimTranscript(this.terminalBuffer(session.id, session.transcript).consume(message));
+        session.runtimeState = "stopped";
+        session.status = "failed";
+        session.stoppedAt = now();
+        this.sendSessionOutput(session, message);
+        this.scheduleSave();
+        this.broadcastState();
+        return;
+      }
+
+      this.ptyHost.createSession({
+        sessionId: session.id,
+        cwd: repo.path,
+        command: [ghPath, "codespace", "ssh", "-c", target.name]
+      });
+      return;
+    }
+
     const appLaunchCommand =
       session.launchProfile === "appLaunch"
         ? resolvedAppLaunchCommand(repo)
@@ -3179,6 +3373,8 @@ class AppController {
       repoID: repoId,
       title: title || repo.name,
       launchProfile: "shell",
+      location: "local",
+      githubCodespaceTarget: null,
       initialPrompt: "",
       launchesClaudeOnStart: false,
       startupAgentId: null,
@@ -3224,6 +3420,8 @@ class AppController {
       repoID: repoId,
       title: title || `App: ${repo.name}`,
       launchProfile: "appLaunch",
+      location: "local",
+      githubCodespaceTarget: null,
       initialPrompt: "",
       launchesClaudeOnStart: false,
       startupAgentId: null,
@@ -3606,6 +3804,8 @@ function summarizeSession(session: SessionRecord): SessionSummary {
     repoID: session.repoID,
     title: session.title,
     launchProfile: session.launchProfile,
+    location: session.location,
+    githubCodespaceTarget: session.githubCodespaceTarget,
     initialPrompt: session.initialPrompt,
     launchesClaudeOnStart: session.launchesClaudeOnStart,
     startupAgentId: session.startupAgentId,

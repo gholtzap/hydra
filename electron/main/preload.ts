@@ -21,6 +21,10 @@ import type {
   EphemeralToolExitPayload,
   EphemeralToolId,
   EphemeralToolOutputPayload,
+  GitHubCliStatus,
+  GitHubCodespaceDefaults,
+  GitHubCodespaceListResult,
+  GitHubCodespaceSessionRequest,
   KeybindingEventSnapshot,
   KeybindingLabels,
   KeybindingMap,
@@ -287,6 +291,14 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     updateRepoAppLaunchConfig: (payload: RepoAppLaunchConfigRequest) =>
       invoke<RepoAppLaunchConfig | null>("repo:updateAppLaunchConfig", payload),
     buildAndRunApp: (repoId: string) => invoke<string | null>("repo:buildAndRunApp", repoId),
+    getGitHubCliStatus: () => invoke<GitHubCliStatus>("github:cliStatus"),
+    disconnectGitHubCli: () => invoke<GitHubCliStatus>("github:disconnectCli"),
+    getGitHubCodespaceDefaults: (repoId: string) =>
+      invoke<GitHubCodespaceDefaults>("github:codespaceDefaults", repoId),
+    listGitHubCodespaces: (repoId: string | null) =>
+      invoke<GitHubCodespaceListResult>("github:codespaces", repoId),
+    createGitHubCodespaceSession: (payload: GitHubCodespaceSessionRequest) =>
+      invoke<string | null>("github:codespaceSession", payload),
     readClipboardText: () => invoke<string>("clipboard:readText"),
     writeClipboardText: (text: string) => invoke<void>("clipboard:writeText", text),
     checkForUpdates: () => invoke<AppUpdateCheckResult>("app:checkForUpdates"),

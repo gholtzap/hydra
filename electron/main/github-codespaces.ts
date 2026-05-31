@@ -415,6 +415,78 @@ async function disconnectGitHubCli(): Promise<GitHubCliStatus> {
   return githubCliStatus();
 }
 
+async function signInGitHubCli(): Promise<GitHubCliStatus> {
+  const ghPath = resolveCommandPathSync("gh");
+  if (!ghPath) {
+    return {
+      installed: false,
+      authenticated: false,
+      account: null,
+      scopes: [],
+      error: "Install GitHub CLI, then sign in again."
+    };
+  }
+
+  const before = await githubCliStatus();
+  if (before.authenticated) {
+    return before;
+  }
+
+  const result = await runCommand(
+    ghPath,
+    [
+      "auth",
+      "login",
+      "--hostname",
+      "github.com",
+      "--web",
+      "--git-protocol",
+      "https",
+      "--skip-ssh-key",
+      "--scopes",
+      "codespace"
+    ],
+    180_000
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(cleanCommandError(result) || "GitHub CLI sign-in did not complete.");
+  }
+
+  return githubCliStatus();
+}
+
+async function refreshGitHubCliCodespaceScope(): Promise<GitHubCliStatus> {
+  const status = await githubCliStatus();
+  if (!status.installed || !status.authenticated) {
+    return signInGitHubCli();
+  }
+  if (hasCodespaceScope(status)) {
+    return status;
+  }
+
+  const ghPath = resolveCommandPathSync("gh");
+  if (!ghPath) {
+    return {
+      installed: false,
+      authenticated: false,
+      account: null,
+      scopes: [],
+      error: "Install GitHub CLI, then sign in again."
+    };
+  }
+
+  const result = await runCommand(
+    ghPath,
+    ["auth", "refresh", "--hostname", "github.com", "--scopes", "codespace"],
+    180_000
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(cleanCommandError(result) || "GitHub CLI scope refresh did not complete.");
+  }
+
+  return githubCliStatus();
+}
+
 async function manageGitHubCodespace(
   codespaceName: string,
   action: GitHubCodespaceLifecycleAction
@@ -756,5 +828,7 @@ module.exports = {
   listGitHubRepositories,
   manageGitHubCodespace,
   normalizeRepository,
+  refreshGitHubCliCodespaceScope,
+  signInGitHubCli,
   validateCodespaceName
 };

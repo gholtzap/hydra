@@ -174,6 +174,7 @@ type CodespacesDialogState = {
   branches: GitHubBranchListItem[];
   loading: boolean;
   optionsLoading: boolean;
+  authLoading: boolean;
   submitting: boolean;
   error: string;
   selectedCodespaceName: string;
@@ -470,6 +471,7 @@ const ui: UiState = {
     branches: [],
     loading: false,
     optionsLoading: false,
+    authLoading: false,
     submitting: false,
     error: "",
     selectedCodespaceName: "",
@@ -6448,6 +6450,12 @@ async function handleClick(event) {
     case "refresh-codespaces":
       await refreshCodespacesDialog();
       break;
+    case "sign-in-github-cli":
+      await signInGitHubCliFromCodespaces();
+      break;
+    case "refresh-github-codespace-scope":
+      await refreshGitHubCliCodespaceScopeFromCodespaces();
+      break;
     case "refresh-codespace-options":
       await refreshCodespaceOptionsForRepository();
       break;
@@ -8114,6 +8122,7 @@ async function openCodespacesDialog(repoId: string | null) {
     branches: [],
     loading: true,
     optionsLoading: false,
+    authLoading: false,
     submitting: false,
     error: "",
     selectedCodespaceName: "",
@@ -8178,6 +8187,41 @@ async function refreshCodespacesDialog() {
 function closeCodespacesDialog() {
   if (codespacesDialog.open) {
     codespacesDialog.close();
+  }
+}
+
+async function signInGitHubCliFromCodespaces() {
+  ui.codespaces.authLoading = true;
+  ui.codespaces.error = "";
+  renderCodespacesDialog();
+
+  try {
+    ui.codespaces.status = await api.signInGitHubCli();
+    if (ui.codespaces.status.authenticated) {
+      await refreshCodespacesDialog();
+    }
+  } catch (error) {
+    ui.codespaces.error = error instanceof Error ? error.message : "GitHub sign-in failed.";
+  } finally {
+    ui.codespaces.authLoading = false;
+    renderCodespacesDialog();
+  }
+}
+
+async function refreshGitHubCliCodespaceScopeFromCodespaces() {
+  ui.codespaces.authLoading = true;
+  ui.codespaces.error = "";
+  renderCodespacesDialog();
+
+  try {
+    ui.codespaces.status = await api.refreshGitHubCliCodespaceScope();
+    await refreshCodespacesDialog();
+  } catch (error) {
+    ui.codespaces.error =
+      error instanceof Error ? error.message : "GitHub scope refresh failed.";
+  } finally {
+    ui.codespaces.authLoading = false;
+    renderCodespacesDialog();
   }
 }
 
@@ -9128,7 +9172,12 @@ function renderAppLaunchDialog() {
 function renderCodespacesDialog() {
   const repo = repoById(ui.codespaces.repoId || "");
   const status = ui.codespaces.status;
-  const canUseCodespaces = !!status?.installed && !!status.authenticated;
+  const isGitHubAuthenticated = !!status?.installed && !!status.authenticated;
+  const hasCodespaceScope = !status?.authenticated ||
+    status.scopes.length === 0 ||
+    status.scopes.includes("codespace");
+  const canUseCodespaces = isGitHubAuthenticated && hasCodespaceScope;
+  const needsCodespaceScope = !!status?.authenticated && !hasCodespaceScope;
   const selectedCodespace = ui.codespaces.codespaces.find(
     (codespace) => codespace.name === ui.codespaces.selectedCodespaceName
   );
@@ -9136,6 +9185,8 @@ function renderCodespacesDialog() {
     ? "Checking GitHub CLI..."
     : !status.installed
       ? "GitHub CLI is not installed."
+      : needsCodespaceScope
+        ? "GitHub CLI is signed in, but needs the codespace scope."
       : status.authenticated
         ? `Signed in${status.account ? ` as ${status.account}` : ""}.`
         : status.error || "GitHub CLI is not authenticated.";
@@ -9174,13 +9225,40 @@ function renderCodespacesDialog() {
         dom(
           "div",
           { className: "dialog-header-actions" },
+          !status?.authenticated
+            ? dom(
+                "button",
+                {
+                  className: "primary",
+                  attrs: {
+                    type: "button",
+                    "data-action": "sign-in-github-cli",
+                    disabled: ui.codespaces.authLoading || ui.codespaces.loading
+                  }
+                },
+                ui.codespaces.authLoading ? "Signing In..." : "Sign In"
+              )
+            : null,
+          needsCodespaceScope
+            ? dom(
+                "button",
+                {
+                  attrs: {
+                    type: "button",
+                    "data-action": "refresh-github-codespace-scope",
+                    disabled: ui.codespaces.authLoading || ui.codespaces.loading
+                  }
+                },
+                ui.codespaces.authLoading ? "Refreshing..." : "Refresh Scope"
+              )
+            : null,
           dom(
             "button",
             {
               attrs: {
                 type: "button",
                 "data-action": "disconnect-github-cli",
-                disabled: !status?.authenticated || ui.codespaces.submitting
+                disabled: !status?.authenticated || ui.codespaces.submitting || ui.codespaces.authLoading
               }
             },
             "Disconnect"

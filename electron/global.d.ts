@@ -84,6 +84,8 @@ interface ClaudeWorkspaceApi {
   }) => Promise<RepoAppLaunchConfig | null>;
   buildAndRunApp: (repoId: string) => Promise<string | null>;
   getGitHubCliStatus: () => Promise<GitHubCliStatus>;
+  signInGitHubCli: () => Promise<GitHubCliStatus>;
+  refreshGitHubCliCodespaceScope: () => Promise<GitHubCliStatus>;
   disconnectGitHubCli: () => Promise<GitHubCliStatus>;
   getGitHubCodespaceDefaults: (repoId: string) => Promise<GitHubCodespaceDefaults>;
   listGitHubCodespaces: (repoId: string | null) => Promise<GitHubCodespaceListResult>;

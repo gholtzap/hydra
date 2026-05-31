@@ -296,6 +296,9 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
       invoke<RepoAppLaunchConfig | null>("repo:updateAppLaunchConfig", payload),
     buildAndRunApp: (repoId: string) => invoke<string | null>("repo:buildAndRunApp", repoId),
     getGitHubCliStatus: () => invoke<GitHubCliStatus>("github:cliStatus"),
+    signInGitHubCli: () => invoke<GitHubCliStatus>("github:signInCli"),
+    refreshGitHubCliCodespaceScope: () =>
+      invoke<GitHubCliStatus>("github:refreshCodespaceScope"),
     disconnectGitHubCli: () => invoke<GitHubCliStatus>("github:disconnectCli"),
     getGitHubCodespaceDefaults: (repoId: string) =>
       invoke<GitHubCodespaceDefaults>("github:codespaceDefaults", repoId),

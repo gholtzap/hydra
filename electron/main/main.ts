@@ -306,6 +306,8 @@ const {
   listGitHubCodespaceMachines,
   listGitHubRepositories,
   manageGitHubCodespace,
+  refreshGitHubCliCodespaceScope,
+  signInGitHubCli,
   validateCodespaceName
 } = require("./github-codespaces") as {
   createGitHubCodespace: (input: {
@@ -325,6 +327,8 @@ const {
     codespaceName: string,
     action: GitHubCodespaceLifecycleRequest["action"]
   ) => Promise<void>;
+  refreshGitHubCliCodespaceScope: () => Promise<GitHubCliStatus>;
+  signInGitHubCli: () => Promise<GitHubCliStatus>;
   validateCodespaceName: (value: unknown) => string;
 };
 const { startMcpServer } = require("./mcp-server") as {
@@ -1236,6 +1240,8 @@ class AppController {
     );
     ipcMain.handle("repo:buildAndRunApp", (_event, repoId) => this.buildAndRunApp(repoId));
     ipcMain.handle("github:cliStatus", () => this.getGitHubCliStatus());
+    ipcMain.handle("github:signInCli", () => this.signInGitHubCli());
+    ipcMain.handle("github:refreshCodespaceScope", () => this.refreshGitHubCliCodespaceScope());
     ipcMain.handle("github:disconnectCli", () => this.disconnectGitHubCli());
     ipcMain.handle("github:codespaceDefaults", (_event, repoId) =>
       this.getGitHubCodespaceDefaults(repoId)
@@ -2848,6 +2854,14 @@ class AppController {
 
   async getGitHubCliStatus(): Promise<GitHubCliStatus> {
     return githubCliStatus();
+  }
+
+  async signInGitHubCli(): Promise<GitHubCliStatus> {
+    return signInGitHubCli();
+  }
+
+  async refreshGitHubCliCodespaceScope(): Promise<GitHubCliStatus> {
+    return refreshGitHubCliCodespaceScope();
   }
 
   async disconnectGitHubCli(): Promise<GitHubCliStatus> {

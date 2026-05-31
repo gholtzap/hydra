@@ -26,8 +26,10 @@ import type {
   FileTreeNode,
   GitHubCliStatus,
   GitHubCodespaceDefaults,
+  GitHubCodespaceLifecycleRequest,
   GitHubCodespaceListItem,
   GitHubCodespaceListResult,
+  GitHubCodespaceMachineListResult,
   GitHubCodespaceSessionRequest,
   GitHubCodespaceSessionTarget,
   MarketplaceInspectResponse,
@@ -298,6 +300,8 @@ const {
   gitHubCodespaceDefaults,
   githubCliStatus,
   listGitHubCodespaces,
+  listGitHubCodespaceMachines,
+  manageGitHubCodespace,
   validateCodespaceName
 } = require("./github-codespaces") as {
   createGitHubCodespace: (input: {
@@ -310,6 +314,11 @@ const {
   gitHubCodespaceDefaults: (repoPath: string) => Promise<GitHubCodespaceDefaults>;
   githubCliStatus: () => Promise<GitHubCliStatus>;
   listGitHubCodespaces: (repository?: string | null) => Promise<GitHubCodespaceListResult>;
+  listGitHubCodespaceMachines: (repository: string) => Promise<GitHubCodespaceMachineListResult>;
+  manageGitHubCodespace: (
+    codespaceName: string,
+    action: GitHubCodespaceLifecycleRequest["action"]
+  ) => Promise<void>;
   validateCodespaceName: (value: unknown) => string;
 };
 const { startMcpServer } = require("./mcp-server") as {
@@ -1227,6 +1236,12 @@ class AppController {
     );
     ipcMain.handle("github:codespaces", (_event, repoId) =>
       this.listGitHubCodespacesForRepo(repoId)
+    );
+    ipcMain.handle("github:codespaceMachines", (_event, repoId) =>
+      this.listGitHubCodespaceMachinesForRepo(repoId)
+    );
+    ipcMain.handle("github:codespaceLifecycle", (_event, payload) =>
+      this.manageGitHubCodespace(payload)
     );
     ipcMain.handle("github:codespaceSession", (_event, payload) =>
       this.createGitHubCodespaceSession(payload)
@@ -2843,6 +2858,33 @@ class AppController {
     const repo = this.repoById(repoId);
     const defaults = repo ? await gitHubCodespaceDefaults(repo.path) : null;
     return listGitHubCodespaces(defaults?.repository || null);
+  }
+
+  async listGitHubCodespaceMachinesForRepo(
+    repoId: string | null | undefined
+  ): Promise<GitHubCodespaceMachineListResult> {
+    const repo = this.repoById(repoId);
+    const defaults = repo ? await gitHubCodespaceDefaults(repo.path) : null;
+    if (!defaults?.repository) {
+      const status = await githubCliStatus();
+      return {
+        ok: false,
+        status,
+        machines: [],
+        error: defaults?.error || "Set a GitHub origin remote or enter owner/repo manually."
+      };
+    }
+
+    return listGitHubCodespaceMachines(defaults.repository);
+  }
+
+  async manageGitHubCodespace(request: GitHubCodespaceLifecycleRequest): Promise<GitHubCodespaceListResult> {
+    if (!request || typeof request !== "object") {
+      throw new Error("Choose a valid GitHub Codespace action.");
+    }
+
+    await manageGitHubCodespace(request.codespaceName, request.action);
+    return listGitHubCodespaces(null);
   }
 
   async createGitHubCodespaceSession(

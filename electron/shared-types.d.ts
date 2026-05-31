@@ -235,11 +235,34 @@ export type GitHubCodespaceListItem = {
   lastUsedAt: string | null;
 };
 
+export type GitHubCodespaceMachine = {
+  name: string;
+  displayName: string;
+  operatingSystem: string | null;
+  storageBytes: number | null;
+  memoryBytes: number | null;
+  cpus: number | null;
+};
+
 export type GitHubCodespaceListResult = {
   ok: boolean;
   status: GitHubCliStatus;
   codespaces: GitHubCodespaceListItem[];
   error: string | null;
+};
+
+export type GitHubCodespaceMachineListResult = {
+  ok: boolean;
+  status: GitHubCliStatus;
+  machines: GitHubCodespaceMachine[];
+  error: string | null;
+};
+
+export type GitHubCodespaceLifecycleAction = "start" | "stop" | "delete";
+
+export type GitHubCodespaceLifecycleRequest = {
+  codespaceName: string;
+  action: GitHubCodespaceLifecycleAction;
 };
 
 export type GitHubCodespaceSessionRequest =

@@ -1,8 +1,11 @@
 import type {
   GitHubCliStatus,
   GitHubCodespaceDefaults,
+  GitHubCodespaceLifecycleAction,
   GitHubCodespaceListItem,
-  GitHubCodespaceListResult
+  GitHubCodespaceListResult,
+  GitHubCodespaceMachine,
+  GitHubCodespaceMachineListResult
 } from "../shared-types";
 import type { ExecFileException } from "node:child_process";
 
@@ -25,6 +28,19 @@ type RawCodespace = {
   machineName?: unknown;
   createdAt?: unknown;
   lastUsedAt?: unknown;
+};
+
+type RawMachine = {
+  name?: unknown;
+  display_name?: unknown;
+  displayName?: unknown;
+  operating_system?: unknown;
+  operatingSystem?: unknown;
+  storage_in_bytes?: unknown;
+  storageBytes?: unknown;
+  memory_in_bytes?: unknown;
+  memoryBytes?: unknown;
+  cpus?: unknown;
 };
 
 const GITHUB_REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -121,6 +137,62 @@ async function listGitHubCodespaces(repository?: string | null): Promise<GitHubC
     ok: true,
     status,
     codespaces: parseCodespaces(result.stdout),
+    error: null
+  };
+}
+
+async function listGitHubCodespaceMachines(
+  repository: string
+): Promise<GitHubCodespaceMachineListResult> {
+  const status = await githubCliStatus();
+  if (!status.installed || !status.authenticated) {
+    return {
+      ok: false,
+      status,
+      machines: [],
+      error: status.error
+    };
+  }
+  if (!hasCodespaceScope(status)) {
+    return {
+      ok: false,
+      status,
+      machines: [],
+      error: "GitHub CLI needs the codespace scope. Run gh auth refresh -h github.com -s codespace."
+    };
+  }
+
+  const ghPath = resolveCommandPathSync("gh");
+  if (!ghPath) {
+    return {
+      ok: false,
+      status,
+      machines: [],
+      error: "Install GitHub CLI, then run gh auth login."
+    };
+  }
+
+  const normalizedRepository = requireRepository(repository);
+  const [owner, repo] = normalizedRepository.split("/");
+  const result = await runCommand(
+    ghPath,
+    ["api", `/repos/${owner}/${repo}/codespaces/machines`],
+    30_000
+  );
+
+  if (result.exitCode !== 0) {
+    return {
+      ok: false,
+      status,
+      machines: [],
+      error: cleanCommandError(result) || "GitHub CLI could not list Codespaces machines."
+    };
+  }
+
+  return {
+    ok: true,
+    status,
+    machines: parseMachines(result.stdout),
     error: null
   };
 }
@@ -240,6 +312,44 @@ async function disconnectGitHubCli(): Promise<GitHubCliStatus> {
   return githubCliStatus();
 }
 
+async function manageGitHubCodespace(
+  codespaceName: string,
+  action: GitHubCodespaceLifecycleAction
+): Promise<void> {
+  const status = await githubCliStatus();
+  if (!status.installed || !status.authenticated) {
+    throw new Error(status.error || "Authenticate GitHub CLI with gh auth login.");
+  }
+  if (!hasCodespaceScope(status)) {
+    throw new Error("GitHub CLI needs the codespace scope. Run gh auth refresh -h github.com -s codespace.");
+  }
+
+  const ghPath = resolveCommandPathSync("gh");
+  if (!ghPath) {
+    throw new Error("Install GitHub CLI, then run gh auth login.");
+  }
+
+  const name = validateCodespaceName(codespaceName);
+  const args = codespaceLifecycleArgs(name, action);
+  const result = await runCommand(ghPath, args, 60_000);
+  if (result.exitCode !== 0) {
+    throw new Error(cleanCommandError(result) || `GitHub CLI could not ${action} the codespace.`);
+  }
+}
+
+function codespaceLifecycleArgs(name: string, action: GitHubCodespaceLifecycleAction): string[] {
+  if (action === "start") {
+    return ["api", "--method", "POST", `/user/codespaces/${encodeURIComponent(name)}/start`, "--silent"];
+  }
+  if (action === "stop") {
+    return ["codespace", "stop", "--codespace", name];
+  }
+  if (action === "delete") {
+    return ["codespace", "delete", "--codespace", name, "--force"];
+  }
+  throw new Error("Choose a valid GitHub Codespace action.");
+}
+
 function validateCodespaceName(value: unknown): string {
   const normalized = typeof value === "string" ? value.trim() : "";
   if (!CODESPACE_NAME_PATTERN.test(normalized)) {
@@ -354,6 +464,42 @@ function parseCodespaces(stdout: string): GitHubCodespaceListItem[] {
     .filter((value): value is GitHubCodespaceListItem => value !== null);
 }
 
+function parseMachines(stdout: string): GitHubCodespaceMachine[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+
+  const machineValues = isRecord(parsed) && Array.isArray(parsed.machines)
+    ? parsed.machines
+    : Array.isArray(parsed)
+      ? parsed
+      : [];
+
+  return machineValues
+    .map((value): GitHubCodespaceMachine | null => {
+      if (!isRecord(value)) {
+        return null;
+      }
+      const raw = value as RawMachine;
+      const name = stringValue(raw.name);
+      if (!name) {
+        return null;
+      }
+      return {
+        name,
+        displayName: stringValue(raw.display_name) || stringValue(raw.displayName) || name,
+        operatingSystem: stringValue(raw.operating_system) || stringValue(raw.operatingSystem),
+        storageBytes: numberValue(raw.storage_in_bytes) ?? numberValue(raw.storageBytes),
+        memoryBytes: numberValue(raw.memory_in_bytes) ?? numberValue(raw.memoryBytes),
+        cpus: numberValue(raw.cpus)
+      };
+    })
+    .filter((value): value is GitHubCodespaceMachine => value !== null);
+}
+
 function repositoryValue(value: unknown): string | null {
   if (typeof value === "string") {
     return normalizeRepository(value);
@@ -372,6 +518,10 @@ function repositoryValue(value: unknown): string | null {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -429,6 +579,8 @@ module.exports = {
   gitHubCodespaceDefaults,
   githubCliStatus,
   listGitHubCodespaces,
+  listGitHubCodespaceMachines,
+  manageGitHubCodespace,
   normalizeRepository,
   validateCodespaceName
 };

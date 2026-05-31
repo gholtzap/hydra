@@ -14,7 +14,9 @@ import type {
   FileTreeNode as SharedFileTreeNode,
   GitHubCliStatus,
   GitHubCodespaceDefaults,
+  GitHubCodespaceLifecycleAction,
   GitHubCodespaceListItem,
+  GitHubCodespaceMachine,
   JsonObject,
   JsonValue,
   KeybindingAction,
@@ -165,6 +167,7 @@ type CodespacesDialogState = {
   status: GitHubCliStatus | null;
   defaults: GitHubCodespaceDefaults | null;
   codespaces: GitHubCodespaceListItem[];
+  machines: GitHubCodespaceMachine[];
   loading: boolean;
   submitting: boolean;
   error: string;
@@ -457,6 +460,7 @@ const ui: UiState = {
     status: null,
     defaults: null,
     codespaces: [],
+    machines: [],
     loading: false,
     submitting: false,
     error: "",
@@ -6445,6 +6449,15 @@ async function handleClick(event) {
     case "open-existing-codespace-session":
       await openExistingCodespaceSession();
       break;
+    case "start-codespace":
+      await manageSelectedCodespace("start");
+      break;
+    case "stop-codespace":
+      await manageSelectedCodespace("stop");
+      break;
+    case "delete-codespace":
+      await manageSelectedCodespace("delete");
+      break;
     case "create-codespace-session":
       await createCodespaceSession();
       break;
@@ -8085,6 +8098,7 @@ async function openCodespacesDialog(repoId: string | null) {
     status: null,
     defaults: null,
     codespaces: [],
+    machines: [],
     loading: true,
     submitting: false,
     error: "",
@@ -8112,17 +8126,22 @@ async function refreshCodespacesDialog() {
   renderCodespacesDialog();
 
   try {
-    const [status, defaults, list] = await Promise.all([
+    const [status, defaults, list, machines] = await Promise.all([
       api.getGitHubCliStatus(),
       api.getGitHubCodespaceDefaults(repoId),
-      api.listGitHubCodespaces(repoId)
+      api.listGitHubCodespaces(repoId),
+      api.listGitHubCodespaceMachines(repoId)
     ]);
     ui.codespaces.status = status;
     ui.codespaces.defaults = defaults;
     ui.codespaces.codespaces = list.codespaces;
+    ui.codespaces.machines = machines.machines;
     ui.codespaces.repository = ui.codespaces.repository || defaults.repository || "";
     ui.codespaces.branch = ui.codespaces.branch || defaults.branch || "main";
-    ui.codespaces.error = list.ok ? defaults.error || "" : list.error || status.error || "";
+    ui.codespaces.error =
+      list.ok && machines.ok
+        ? defaults.error || ""
+        : list.error || machines.error || status.error || "";
     if (!ui.codespaces.selectedCodespaceName && list.codespaces.length) {
       ui.codespaces.selectedCodespaceName = list.codespaces[0].name;
     }
@@ -8160,7 +8179,7 @@ async function disconnectGitHubCliFromCodespaces() {
 function readCodespaceDialogFields() {
   const repositoryInput = codespacesDialog.querySelector("#codespace-repository") as HTMLInputElement | null;
   const branchInput = codespacesDialog.querySelector("#codespace-branch") as HTMLInputElement | null;
-  const machineInput = codespacesDialog.querySelector("#codespace-machine") as HTMLInputElement | null;
+  const machineInput = codespacesDialog.querySelector("#codespace-machine") as HTMLSelectElement | null;
   const displayNameInput = codespacesDialog.querySelector("#codespace-display-name") as HTMLInputElement | null;
   const selectedInput = codespacesDialog.querySelector("#codespace-existing") as HTMLSelectElement | null;
 
@@ -8199,6 +8218,40 @@ async function openExistingCodespaceSession() {
     }
   } catch (error) {
     ui.codespaces.error = error instanceof Error ? error.message : "Failed to open Codespace.";
+  } finally {
+    ui.codespaces.submitting = false;
+    renderCodespacesDialog();
+  }
+}
+
+async function manageSelectedCodespace(action: GitHubCodespaceLifecycleAction) {
+  readCodespaceDialogFields();
+  const codespaceName = ui.codespaces.selectedCodespaceName;
+  if (!codespaceName) {
+    ui.codespaces.error = "Choose a Codespace first.";
+    renderCodespacesDialog();
+    return;
+  }
+
+  if (action === "delete" && !window.confirm("Delete this GitHub Codespace?")) {
+    return;
+  }
+
+  ui.codespaces.submitting = true;
+  ui.codespaces.error = "";
+  renderCodespacesDialog();
+
+  try {
+    const result = await api.manageGitHubCodespace({ codespaceName, action });
+    ui.codespaces.status = result.status;
+    ui.codespaces.codespaces = result.codespaces;
+    if (!result.codespaces.some((codespace) => codespace.name === ui.codespaces.selectedCodespaceName)) {
+      ui.codespaces.selectedCodespaceName = result.codespaces[0]?.name || "";
+    }
+    ui.codespaces.error = result.error || "";
+  } catch (error) {
+    ui.codespaces.error =
+      error instanceof Error ? error.message : `Failed to ${action} GitHub Codespace.`;
   } finally {
     ui.codespaces.submitting = false;
     renderCodespacesDialog();
@@ -9019,6 +9072,9 @@ function renderCodespacesDialog() {
   const repo = repoById(ui.codespaces.repoId || "");
   const status = ui.codespaces.status;
   const canUseCodespaces = !!status?.installed && !!status.authenticated;
+  const selectedCodespace = ui.codespaces.codespaces.find(
+    (codespace) => codespace.name === ui.codespaces.selectedCodespaceName
+  );
   const statusText = !status
     ? "Checking GitHub CLI..."
     : !status.installed
@@ -9037,6 +9093,10 @@ function renderCodespacesDialog() {
     !canUseCodespaces ||
     !ui.codespaces.repository ||
     !ui.codespaces.branch;
+  const canManageSelected = !existingDisabled && !!selectedCodespace;
+  const selectedState = (selectedCodespace?.state || "").toLowerCase();
+  const startDisabled = !canManageSelected || selectedState === "available";
+  const stopDisabled = !canManageSelected || selectedState !== "available";
 
   replaceDomChildren(
     codespacesDialog,
@@ -9129,6 +9189,39 @@ function renderCodespacesDialog() {
             dom(
               "button",
               {
+                attrs: {
+                  type: "button",
+                  "data-action": "start-codespace",
+                  disabled: startDisabled
+                }
+              },
+              "Start"
+            ),
+            dom(
+              "button",
+              {
+                attrs: {
+                  type: "button",
+                  "data-action": "stop-codespace",
+                  disabled: stopDisabled
+                }
+              },
+              "Stop"
+            ),
+            dom(
+              "button",
+              {
+                attrs: {
+                  type: "button",
+                  "data-action": "delete-codespace",
+                  disabled: !canManageSelected || ui.codespaces.submitting
+                }
+              },
+              "Delete"
+            ),
+            dom(
+              "button",
+              {
                 className: "primary",
                 attrs: {
                   type: "button",
@@ -9174,14 +9267,26 @@ function renderCodespacesDialog() {
             "label",
             { className: "app-launch-field" },
             dom("span", { className: "muted" }, "Machine"),
-            dom("input", {
+            dom("select", {
               value: ui.codespaces.machine,
               attrs: {
                 id: "codespace-machine",
-                placeholder: "Optional",
                 disabled: ui.codespaces.loading || ui.codespaces.submitting
               }
-            })
+            },
+              dom("option", { attrs: { value: "" } }, "Automatic"),
+              ...ui.codespaces.machines.map((machine) =>
+                dom(
+                  "option",
+                  {
+                    attrs: {
+                      value: machine.name
+                    }
+                  },
+                  codespaceMachineLabel(machine)
+                )
+              )
+            )
           ),
           dom(
             "label",
@@ -9216,6 +9321,32 @@ function renderCodespacesDialog() {
       )
     )
   );
+}
+
+function codespaceMachineLabel(machine: GitHubCodespaceMachine): string {
+  const details = [
+    machine.cpus ? `${machine.cpus} CPU` : "",
+    machine.memoryBytes ? formatCodespaceBytes(machine.memoryBytes) : "",
+    machine.storageBytes ? `${formatCodespaceBytes(machine.storageBytes)} storage` : ""
+  ].filter(Boolean);
+
+  return details.length ? `${machine.displayName} (${details.join(", ")})` : machine.displayName;
+}
+
+function formatCodespaceBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "";
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let scaled = value;
+  let unitIndex = 0;
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${Math.round(scaled)} ${units[unitIndex]}`;
 }
 
 function openPlanReviewDialog(sessionId: string | null | undefined) {

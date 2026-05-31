@@ -23,7 +23,9 @@ import type {
   EphemeralToolOutputPayload,
   GitHubCliStatus,
   GitHubCodespaceDefaults,
+  GitHubCodespaceLifecycleRequest,
   GitHubCodespaceListResult,
+  GitHubCodespaceMachineListResult,
   GitHubCodespaceSessionRequest,
   KeybindingEventSnapshot,
   KeybindingLabels,
@@ -297,6 +299,10 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
       invoke<GitHubCodespaceDefaults>("github:codespaceDefaults", repoId),
     listGitHubCodespaces: (repoId: string | null) =>
       invoke<GitHubCodespaceListResult>("github:codespaces", repoId),
+    listGitHubCodespaceMachines: (repoId: string | null) =>
+      invoke<GitHubCodespaceMachineListResult>("github:codespaceMachines", repoId),
+    manageGitHubCodespace: (payload: GitHubCodespaceLifecycleRequest) =>
+      invoke<GitHubCodespaceListResult>("github:codespaceLifecycle", payload),
     createGitHubCodespaceSession: (payload: GitHubCodespaceSessionRequest) =>
       invoke<string | null>("github:codespaceSession", payload),
     readClipboardText: () => invoke<string>("clipboard:readText"),

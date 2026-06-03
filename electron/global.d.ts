@@ -190,6 +190,7 @@ interface ClaudeWorkspaceApi {
   authSignOut: () => Promise<void>;
   authGetSession: () => Promise<AuthSession | null>;
   authOpenPage: () => Promise<void>;
+  authContinueAsGuest: () => Promise<void>;
   requestPasswordReset: (email: string, redirectUrl: string) => Promise<AuthResult>;
   verifyTotp: (code: string) => Promise<AuthResult>;
   onAuthStateChanged: (callback: (session: AuthSession | null) => void) => Unsubscribe;

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Hydra — Sign In</title>
+    <title>Hydra - MCP Access</title>
     <style>
       *, *::before, *::after {
         box-sizing: border-box;
@@ -62,13 +62,44 @@
         font-weight: 600;
         color: var(--text);
         letter-spacing: -0.02em;
-        margin-bottom: 24px;
+        margin-bottom: 18px;
         text-align: center;
       }
 
       .logo span {
         color: var(--text-muted);
         font-weight: 400;
+      }
+
+      .intro {
+        margin-bottom: 18px;
+        text-align: center;
+      }
+
+      .intro h1 {
+        color: var(--text);
+        font-size: 18px;
+        font-weight: 600;
+        line-height: 1.25;
+        margin-bottom: 7px;
+      }
+
+      .intro p {
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+
+      .guest-section {
+        margin-bottom: 20px;
+        padding-bottom: 20px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .guest-note {
+        color: var(--text-muted);
+        font-size: 11px;
+        margin-top: 8px;
+        text-align: center;
       }
 
       /* Tabs */
@@ -273,6 +304,13 @@
         cursor: not-allowed;
       }
 
+      .auth-context {
+        color: var(--text-muted);
+        font-size: 12px;
+        margin: -6px 0 14px;
+        text-align: center;
+      }
+
       /* Status */
       .status {
         margin-top: 14px;
@@ -302,13 +340,26 @@
     <div class="card">
       <div class="logo">hydra</div>
 
+      <div class="intro">
+        <h1>MCP server access</h1>
+        <p>Use Hydra locally as a guest. Sign in only when you need Hydra MCP server access.</p>
+      </div>
+
+      <div class="guest-section">
+        <button class="btn" id="guest-btn">Continue as Guest</button>
+        <div class="guest-note">No auth session will be created.</div>
+        <div class="status" id="guest-status"></div>
+      </div>
+
       <div class="tabs">
         <button class="tab-btn active" data-tab="signin">Sign In</button>
         <button class="tab-btn" data-tab="signup">Sign Up</button>
       </div>
 
+      <div class="auth-context">Sign in or create an account for Hydra MCP server use.</div>
+
       <div class="oauth-card">
-        <div class="oauth-copy">Continue with a provider in your browser. Hydra will return automatically.</div>
+        <div class="oauth-copy">Continue with a provider in your browser for MCP access. Hydra will return automatically.</div>
         <div class="oauth-grid">
           <button class="oauth-btn" data-provider="google" aria-label="Continue with Google">
             <svg class="oauth-btn-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -428,6 +479,24 @@
         toggle.setAttribute("aria-label", isVisible ? "Hide password" : "Show password");
         toggle.setAttribute("aria-pressed", String(isVisible));
       }
+
+      const guestBtn = document.getElementById("guest-btn");
+      const guestStatus = document.getElementById("guest-status");
+
+      guestBtn.addEventListener("click", async function () {
+        setLoading(guestBtn, true, "Continue as Guest");
+        clearStatus(guestStatus);
+        try {
+          if (!window.claudeWorkspace || typeof window.claudeWorkspace.authContinueAsGuest !== "function") {
+            throw new Error("Guest mode is unavailable in this Hydra build.");
+          }
+
+          await window.claudeWorkspace.authContinueAsGuest();
+        } catch (err) {
+          showStatus(guestStatus, "error", (err && err.message) || "Unable to continue as guest.");
+          setLoading(guestBtn, false, "Continue as Guest");
+        }
+      });
 
       document.querySelectorAll("[data-password-toggle]").forEach(function (toggle) {
         const input = document.getElementById(toggle.dataset.passwordToggle);

@@ -4994,6 +4994,8 @@ function summarizeSession(session: SessionRecord): SessionSummary {
     sessionIconUrl: sessionIconUrl(session),
     sessionIconUpdatedAt: session.sessionIconUpdatedAt || null,
     parallelWorktree: session.parallelWorktree,
+    pinnedMessages: session.pinnedMessages || [],
+    notes: session.notes || "",
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     lastActivityAt: session.lastActivityAt,

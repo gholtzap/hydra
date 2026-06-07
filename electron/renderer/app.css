@@ -6313,3 +6313,298 @@ textarea {
   color: var(--text-muted);
   white-space: nowrap;
 }
+
+/* ── Context Panel ───────────────────────────────────────── */
+
+.session-detail-with-context {
+  display: flex;
+  flex: 1 1 0%;
+  min-height: 0;
+  min-width: 0;
+  gap: 0;
+}
+
+.session-detail-with-context > .session-workspace-detail {
+  flex: 1 1 0%;
+  min-width: 0;
+}
+
+.session-detail-with-context > .context-panel {
+  flex: 0 0 0px;
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    flex-basis 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    width 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 160ms ease;
+}
+
+.session-detail-with-context.context-panel-visible > .context-panel {
+  flex: 0 0 280px;
+  width: 280px;
+  min-width: 280px;
+  opacity: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.context-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.context-panel-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 4px 16px 0;
+  height: 100%;
+}
+
+/* ── Context sections ── */
+
+.context-section {
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: var(--workspace-toolbar-surface);
+  box-shadow: inset 0 0 0 1px var(--workspace-toolbar-border);
+}
+
+.context-section-notes {
+  flex: 1 1 0%;
+  display: flex;
+  flex-direction: column;
+  min-height: 120px;
+}
+
+.context-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.context-section-label {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  user-select: none;
+}
+
+.context-section-header .context-section-label {
+  margin-bottom: 0;
+}
+
+/* ── Environment rows ── */
+
+.context-env-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.context-env-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  line-height: 1.5;
+}
+
+.context-env-key {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  flex: none;
+}
+
+.context-env-value {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.context-env-branch {
+  color: var(--accent-2);
+}
+
+/* ── Add button ── */
+
+.context-add-btn {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 100ms ease;
+}
+
+.context-add-btn:hover {
+  background: var(--surface-active);
+  color: var(--text);
+}
+
+/* ── Pinned message list ── */
+
+.context-pin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 8px;
+}
+
+.context-pin-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 5px 4px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 80ms ease;
+  position: relative;
+}
+
+.context-pin-item:hover {
+  background: color-mix(in oklab, var(--surface-active) 50%, transparent);
+}
+
+.context-pin-checkbox {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  accent-color: var(--accent-2);
+  cursor: pointer;
+}
+
+.context-pin-text {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 450;
+  line-height: 1.35;
+  color: var(--text);
+  flex: 1 1 0%;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.context-pin-checked .context-pin-text {
+  text-decoration: line-through;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.context-pin-remove {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 80ms ease;
+}
+
+.context-pin-item:hover .context-pin-remove {
+  opacity: 1;
+}
+
+.context-pin-remove:hover {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+
+.context-pin-empty {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.6;
+  padding: 4px 0;
+  margin-top: 6px;
+  font-style: italic;
+}
+
+/* ── Notes textarea ── */
+
+.context-notes-textarea {
+  flex: 1 1 0%;
+  min-height: 64px;
+  width: 100%;
+  resize: none;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--text);
+  background: color-mix(in oklab, var(--field-bg) 60%, transparent);
+  outline: none;
+  transition: background 120ms ease;
+}
+
+.context-notes-textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 0.5;
+  font-style: italic;
+}
+
+.context-notes-textarea:focus {
+  background: color-mix(in oklab, var(--field-bg) 85%, transparent);
+  box-shadow: inset 0 0 0 1px var(--workspace-toolbar-border);
+}
+
+/* ── Active toggle state for toolbar button ── */
+
+.ws-action-btn-active {
+  background: color-mix(in oklab, var(--primary) 18%, var(--surface-active) 82%);
+  color: var(--text);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--primary) 30%, var(--workspace-toolbar-border) 70%);
+}
+
+.ws-action-btn-active:hover,
+.ws-action-btn-active:focus-visible {
+  background: color-mix(in oklab, var(--primary) 24%, var(--surface-active) 76%);
+}
+
+/* ── Context panel scrollbar ── */
+
+.context-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.context-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.context-panel::-webkit-scrollbar-thumb {
+  background: var(--terminal-scrollbar);
+  border-radius: 4px;
+}

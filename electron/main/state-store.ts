@@ -136,7 +136,7 @@ function migrateSnapshot(snapshot: unknown): StoredAppState {
         pinnedMessages: [],
         notes: "",
         ...(isPlainObject(session) ? session : {})
-      })) as SessionRecord[]
+      })) as unknown as SessionRecord[]
     : [];
 
   return {

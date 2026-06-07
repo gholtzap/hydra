@@ -11,7 +11,8 @@ import type {
   SessionRecord,
   SessionTagColor,
   StoredAppState,
-  VoiceConfig
+  VoiceConfig,
+  WorktreeChangeStats
 } from "../shared-types";
 
 const fs = require("node:fs");
@@ -316,10 +317,33 @@ function emptySessionParallelWorktree(): SessionParallelWorktreeMetadata {
     worktreePath: null,
     branch: null,
     changedFiles: [],
+    changeStats: emptyWorktreeChangeStats(),
     overlapSessionIds: [],
     promptInjectedAt: null,
     lastEventAt: null,
     lastError: null
+  };
+}
+
+function emptyWorktreeChangeStats(): WorktreeChangeStats {
+  return {
+    files: 0,
+    additions: 0,
+    deletions: 0
+  };
+}
+
+function normalizeWorktreeChangeStats(value: unknown, changedFiles: string[] = []): WorktreeChangeStats {
+  const safeValue = isPlainObject(value) ? value : {};
+  const normalizeCount = (count: unknown) => {
+    const numeric = typeof count === "number" ? count : Number(count);
+    return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 0;
+  };
+
+  return {
+    files: normalizeCount(safeValue.files) || changedFiles.length,
+    additions: normalizeCount(safeValue.additions),
+    deletions: normalizeCount(safeValue.deletions)
   };
 }
 
@@ -348,6 +372,8 @@ function normalizeSessionParallelWorktreeMetadata(value: unknown): SessionParall
           ? "awaiting_agent"
           : "inactive";
 
+  const changedFiles = normalizeStringList(value.changedFiles);
+
   return {
     mode,
     lifecycleState,
@@ -355,7 +381,8 @@ function normalizeSessionParallelWorktreeMetadata(value: unknown): SessionParall
     landingBranch: normalizeBranchName(value.landingBranch),
     worktreePath: typeof value.worktreePath === "string" && value.worktreePath ? value.worktreePath : null,
     branch: normalizeBranchName(value.branch),
-    changedFiles: normalizeStringList(value.changedFiles),
+    changedFiles,
+    changeStats: normalizeWorktreeChangeStats(value.changeStats, changedFiles),
     overlapSessionIds: normalizeStringList(value.overlapSessionIds),
     promptInjectedAt:
       typeof value.promptInjectedAt === "string" && value.promptInjectedAt ? value.promptInjectedAt : null,

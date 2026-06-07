@@ -190,6 +190,12 @@ export type ParallelWorktreeDisplayState =
   | "overlap_warning"
   | "cleanup_pending";
 
+export type WorktreeChangeStats = {
+  files: number;
+  additions: number;
+  deletions: number;
+};
+
 export type SessionParallelWorktreeMetadata = {
   mode: ParallelWorktreeSessionMode;
   lifecycleState: ParallelWorktreeLifecycleState;
@@ -198,6 +204,7 @@ export type SessionParallelWorktreeMetadata = {
   worktreePath: string | null;
   branch: string | null;
   changedFiles: string[];
+  changeStats: WorktreeChangeStats;
   overlapSessionIds: string[];
   promptInjectedAt: string | null;
   lastEventAt: string | null;

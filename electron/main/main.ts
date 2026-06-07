@@ -51,6 +51,7 @@ import type {
   SessionTagColor,
   StoredAppState,
   TrackedPortStatus,
+  WorktreeChangeStats,
   WorktreeCloseAction,
   WorktreeDeleteRequest,
   WorktreeRenameRequest,
@@ -276,7 +277,7 @@ const {
   deleteWorktreeSync,
   fastForwardWorktreeToBranchSync,
   listBranchesSync,
-  listChangedFiles,
+  listWorktreeChanges,
   readCurrentBranch,
   readCurrentBranchSync,
   validateWorktreePath,
@@ -298,7 +299,10 @@ const {
     targetBranch: string
   ) => { ok: boolean; stdout: string; stderr: string; exitCode: number };
   listBranchesSync: (repoPath: string) => string[];
-  listChangedFiles: (repoPath: string, baseBranch: string) => Promise<string[]>;
+  listWorktreeChanges: (
+    repoPath: string,
+    baseBranch: string
+  ) => Promise<{ files: string[]; stats: WorktreeChangeStats }>;
   readCurrentBranch: (repoPath: string) => Promise<string | null>;
   readCurrentBranchSync: (repoPath: string) => string | null;
   validateWorktreePath: (repoPath: string, candidatePath: string) => Promise<boolean>;
@@ -2374,6 +2378,7 @@ class AppController {
       worktreePath: mode === "shared" ? repo.path : null,
       branch: null,
       changedFiles: [],
+      changeStats: { files: 0, additions: 0, deletions: 0 },
       overlapSessionIds: [],
       promptInjectedAt: null,
       lastEventAt: null,
@@ -3811,6 +3816,11 @@ class AppController {
       return;
     }
 
+    const emptyChangeSummary = () => ({
+      files: [] as string[],
+      stats: { files: 0, additions: 0, deletions: 0 } as WorktreeChangeStats
+    });
+
     const changedFilePairs = await Promise.all(
       candidateSessions.map(async (session) => {
         const targetPath =
@@ -3819,7 +3829,7 @@ class AppController {
             : session.parallelWorktree.worktreePath;
         const baseBranch = session.parallelWorktree.baseBranch || this.effectiveRepoParallelWorktreeSettings(repo).baseBranch;
         if (!targetPath || !baseBranch) {
-          return [session.id, [] as string[]] as const;
+          return [session.id, emptyChangeSummary()] as const;
         }
 
         if (session.parallelWorktree.mode === "isolated") {
@@ -3831,31 +3841,36 @@ class AppController {
               session.parallelWorktree.lastEventAt = now();
               changed = true;
             }
-            return [session.id, [] as string[]] as const;
+            return [session.id, emptyChangeSummary()] as const;
           }
         }
 
-        const nextChangedFiles = await listChangedFiles(targetPath, baseBranch);
-        return [session.id, nextChangedFiles] as const;
+        const nextChanges = await listWorktreeChanges(targetPath, baseBranch);
+        return [session.id, nextChanges] as const;
       })
     );
 
-    const changedFilesBySessionId = new Map<string, string[]>(changedFilePairs);
+    const changesBySessionId = new Map<string, { files: string[]; stats: WorktreeChangeStats }>(changedFilePairs);
 
     for (const session of candidateSessions) {
-      const nextChangedFiles = changedFilesBySessionId.get(session.id) || [];
+      const nextChanges = changesBySessionId.get(session.id) || emptyChangeSummary();
+      const nextChangedFiles = nextChanges.files;
       if (!sameStringList(session.parallelWorktree.changedFiles, nextChangedFiles)) {
         session.parallelWorktree.changedFiles = nextChangedFiles;
+        changed = true;
+      }
+      if (!sameWorktreeChangeStats(session.parallelWorktree.changeStats, nextChanges.stats)) {
+        session.parallelWorktree.changeStats = nextChanges.stats;
         changed = true;
       }
     }
 
     for (const session of candidateSessions) {
-      const currentFiles = new Set(changedFilesBySessionId.get(session.id) || []);
+      const currentFiles = new Set(changesBySessionId.get(session.id)?.files || []);
       const overlappingSessionIds = candidateSessions
         .filter((candidate) => candidate.id !== session.id)
         .filter((candidate) =>
-          (changedFilesBySessionId.get(candidate.id) || []).some((filePath) => currentFiles.has(filePath))
+          (changesBySessionId.get(candidate.id)?.files || []).some((filePath) => currentFiles.has(filePath))
         )
         .map((candidate) => candidate.id)
         .sort((left, right) => left.localeCompare(right));
@@ -4972,6 +4987,17 @@ function sameStringList(left: string[], right: string[]): boolean {
   }
 
   return left.every((value, index) => value === right[index]);
+}
+
+function sameWorktreeChangeStats(
+  left: WorktreeChangeStats | null | undefined,
+  right: WorktreeChangeStats | null | undefined
+): boolean {
+  return (
+    (left?.files || 0) === (right?.files || 0) &&
+    (left?.additions || 0) === (right?.additions || 0) &&
+    (left?.deletions || 0) === (right?.deletions || 0)
+  );
 }
 
 function summarizeSession(session: SessionRecord): SessionSummary {

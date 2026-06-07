@@ -34,6 +34,8 @@ import type {
 } from "../shared-types";
 
 const api = window.claudeWorkspace;
+let layoutTransitionTimer: ReturnType<typeof setTimeout> | null = null;
+let layoutTransitionFitRaf: number | null = null;
 let sessionSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let sessionSearchRenderStateCache: {
   results: SessionSearchResult[];
@@ -3036,6 +3038,9 @@ function updateSessionWorkspaceToolbar() {
         attrs: {
           "data-action": "select-session-pane",
           "data-session-id": s.id,
+          "data-drag-session-id": s.id,
+          "data-drag-source": "tab",
+          draggable: "true",
           type: "button",
           title: s.title
         }
@@ -3052,6 +3057,7 @@ function updateSessionWorkspaceToolbar() {
           attrs: {
             "data-action": "remove-session-pane",
             "data-session-id": s.id,
+            "data-no-drag": "true",
             type: "button",
             "aria-label": "Close tab",
             title: "Close tab"
@@ -3785,13 +3791,13 @@ function mountSessionWorkspaceTerminals(layout: WorkspaceLayoutNode) {
       api.resizeSession(session.id, size.cols, size.rows);
     });
 
-    let resizeRaf = 0;
     const resizeObserver = new ResizeObserver(() => {
-      // Debounce via rAF so CSS transitions (e.g. context panel open/close)
-      // produce a single fit at the end rather than one per animation frame,
-      // which prevents terminal flickering across multiple panes.
-      cancelAnimationFrame(resizeRaf);
-      resizeRaf = requestAnimationFrame(() => fitAddon.fit());
+      // During layout transitions, skip observer storms. The transition
+      // scheduler performs a small number of batched fits instead.
+      if (layoutTransitionTimer !== null) {
+        return;
+      }
+      requestTerminalFit();
     });
     resizeObserver.observe(shellElement);
 
@@ -3911,6 +3917,42 @@ function activeTerminalMount() {
   }
 
   return ui.terminalMounts.get(ui.selection.id) || null;
+}
+
+/** Fit all mounted terminals to their containers in a single pass. */
+function fitAllTerminals() {
+  for (const mount of ui.terminalMounts.values()) {
+    mount.fitAddon.fit();
+  }
+}
+
+function requestTerminalFit() {
+  if (layoutTransitionFitRaf !== null) {
+    return;
+  }
+
+  layoutTransitionFitRaf = window.requestAnimationFrame(() => {
+    layoutTransitionFitRaf = null;
+    fitAllTerminals();
+  });
+}
+
+/**
+ * Suppress ResizeObserver-driven fit storms during a layout transition while
+ * still fitting xterm early enough that prompt text does not briefly overrun
+ * the resized pane.
+ */
+function suppressTerminalFitsDuring(ms: number) {
+  if (layoutTransitionTimer !== null) {
+    clearTimeout(layoutTransitionTimer);
+  }
+
+  requestTerminalFit();
+  window.setTimeout(requestTerminalFit, Math.max(0, Math.floor(ms / 2)));
+  layoutTransitionTimer = setTimeout(() => {
+    layoutTransitionTimer = null;
+    requestTerminalFit();
+  }, ms);
 }
 
 function renderInboxCard(session) {
@@ -7266,7 +7308,10 @@ function handlePointerMove(event: PointerEvent) {
   newSizes[handleIndex] = Math.max(minSize, startSizes[handleIndex] + deltaRatio);
   newSizes[handleIndex + 1] = Math.max(minSize, startSizes[handleIndex + 1] - deltaRatio);
 
-  if (splitContainer) applySizesToDOM(splitContainer, newSizes);
+  if (splitContainer) {
+    applySizesToDOM(splitContainer, newSizes);
+    requestTerminalFit();
+  }
 
   const layout = state.preferences.sessionWorkspaceLayout as WorkspaceLayoutNode | null;
   const node = splitNodeByPath(layout, splitPath);
@@ -7328,9 +7373,7 @@ function handlePointerUp(event: PointerEvent) {
 
   setStoredSessionWorkspaceLayout(state.preferences.sessionWorkspaceLayout as WorkspaceLayoutNode | null);
 
-  for (const mount of ui.terminalMounts.values()) {
-    mount.fitAddon.fit();
-  }
+  requestTerminalFit();
 }
 
 function applySizesToDOM(container: HTMLElement, sizes: number[]) {
@@ -8553,7 +8596,11 @@ function updateContextPanel(session: SessionSummary | null) {
 
   const wrapper = panel.closest(".session-detail-with-context") as HTMLElement | null;
   if (wrapper) {
+    const wasVisible = wrapper.classList.contains("context-panel-visible");
     wrapper.classList.toggle("context-panel-visible", ui.contextPanelOpen);
+    if (wasVisible !== ui.contextPanelOpen) {
+      suppressTerminalFitsDuring(250);
+    }
   }
 
   if (!ui.contextPanelOpen || !session) {
@@ -14013,7 +14060,13 @@ function toggleSidebarProjectDrawer(repoId) {
     return;
   }
 
+  const wasExpanded = !!expandedSidebarRepo();
   ui.sidebarExpandedRepoId = ui.sidebarExpandedRepoId === repoId ? null : repoId;
+  const isExpanded = !!expandedSidebarRepo();
+  // Suppress terminal fits when the sidebar width changes between compact and expanded widths.
+  if (wasExpanded !== isExpanded) {
+    suppressTerminalFitsDuring(180);
+  }
   renderSidebar();
 }
 
@@ -14027,6 +14080,7 @@ function collapseSidebarProjectDrawer(repoId = null) {
   }
 
   ui.sidebarExpandedRepoId = null;
+  suppressTerminalFitsDuring(180);
   renderSidebar();
 }
 
@@ -14040,6 +14094,7 @@ function collapseSidebarChrome() {
   }
 
   ui.sidebarCollapsed = true;
+  suppressTerminalFitsDuring(180);
   syncSectionFocusUi({ preserveCurrentFocus: true });
 }
 
@@ -14049,6 +14104,7 @@ function expandSidebarChrome() {
   }
 
   ui.sidebarCollapsed = false;
+  suppressTerminalFitsDuring(180);
   syncSectionFocusUi({ preserveCurrentFocus: true });
 }
 

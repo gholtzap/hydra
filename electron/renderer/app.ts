@@ -15,6 +15,7 @@ import type {
   KeybindingEventSnapshot,
   KeybindingLabels,
   KeybindingMap,
+  PinnedMessage,
   RepoAppLaunchConfig,
   RepoParallelWorktreeLedgerEntry,
   RepoParallelWorktreeSettings,
@@ -384,6 +385,7 @@ type UiState = {
   voiceInstallLog: string[];
   voiceLiveUserText: string;
   voiceLiveBotText: string;
+  contextPanelOpen: boolean;
 };
 
 const ui: UiState = {
@@ -497,7 +499,8 @@ const ui: UiState = {
   voiceTranscript: [] as { role: "user" | "bot" | "system"; text: string; time: string }[],
   voiceInstallLog: [] as string[],
   voiceLiveUserText: "",
-  voiceLiveBotText: ""
+  voiceLiveBotText: "",
+  contextPanelOpen: false
 };
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
@@ -2831,16 +2834,21 @@ function renderSessionDetail(session) {
     replaceDomChildren(
       detailElement,
       dom(
-        "section",
-        { className: "session-workspace-detail" },
-        dom("div", { attrs: { id: "session-workspace-toolbar" } }),
+        "div",
+        { className: "session-detail-with-context" },
         dom(
-          "div",
-          { className: "session-workspace-canvas", attrs: { id: "session-workspace-canvas" } },
-          layout
-            ? renderSessionWorkspaceLayoutNode(layout)
-            : emptyStateElement("Drag a session here to start a workspace layout.")
-        )
+          "section",
+          { className: "session-workspace-detail" },
+          dom("div", { attrs: { id: "session-workspace-toolbar" } }),
+          dom(
+            "div",
+            { className: "session-workspace-canvas", attrs: { id: "session-workspace-canvas" } },
+            layout
+              ? renderSessionWorkspaceLayoutNode(layout)
+              : emptyStateElement("Drag a session here to start a workspace layout.")
+          )
+        ),
+        dom("aside", { className: "context-panel", attrs: { id: "context-panel" } })
       )
     );
     ui.workspaceStructureSignature = signature;
@@ -2850,6 +2858,7 @@ function renderSessionDetail(session) {
   }
 
   updateSessionWorkspaceToolbar();
+  updateContextPanel(session);
   updateAllSessionPanes();
   updateSessionDropUi();
   syncSectionFocusUi();
@@ -3060,6 +3069,19 @@ function updateSessionWorkspaceToolbar() {
             },
             renderSessionChromeIconElement("grid")
           )
+        ),
+        dom(
+          "button",
+          {
+            className: classNames("ws-action-btn ws-action-btn-icon", ui.contextPanelOpen ? "ws-action-btn-active" : undefined),
+            attrs: {
+              "data-action": "toggle-context-panel",
+              "aria-label": "Toggle context panel",
+              title: "Context panel",
+              type: "button"
+            }
+          },
+          renderSessionChromeIconElement("context-panel")
         ),
         dom(
           "button",
@@ -6711,6 +6733,15 @@ async function handleClick(event) {
     case "toggle-session-pin":
       await toggleSessionPin(target.dataset.sessionId);
       break;
+    case "toggle-context-panel":
+      toggleContextPanel();
+      break;
+    case "add-pinned-message":
+      await addPinnedMessage(target.dataset.sessionId);
+      break;
+    case "remove-pinned-message":
+      await removePinnedMessage(target.dataset.sessionId, target.dataset.pinId);
+      break;
     case "import-session-icon":
       await importSessionIcon(target.dataset.sessionId);
       break;
@@ -7758,6 +7789,11 @@ async function handleInput(event) {
     return;
   }
 
+  if (target.id === "context-notes-input" && target instanceof HTMLTextAreaElement) {
+    handleContextNotesInput(target);
+    return;
+  }
+
   switch (target.id) {
     case "quick-switcher-query":
       ui.quickSwitcherQuery = target.value;
@@ -7882,6 +7918,12 @@ function handleFocusIn(event: FocusEvent) {
 async function handleChange(event) {
   const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
   if (!target) {
+    return;
+  }
+
+  // Handle pinned message checkbox toggle
+  if (target.dataset.action === "toggle-pinned-message" && target instanceof HTMLInputElement) {
+    await togglePinnedMessage(target.dataset.sessionId, target.dataset.pinId);
     return;
   }
 
@@ -8382,6 +8424,262 @@ async function refreshPortStatus() {
   if (ui.selection.type === "status") {
     renderPortStatusDetail();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Context Panel — pinned messages + notes
+// ---------------------------------------------------------------------------
+
+function updateContextPanel(session: SessionSummary | null) {
+  const panel = document.getElementById("context-panel");
+  if (!panel) {
+    return;
+  }
+
+  const wrapper = panel.closest(".session-detail-with-context") as HTMLElement | null;
+  if (wrapper) {
+    wrapper.classList.toggle("context-panel-visible", ui.contextPanelOpen);
+  }
+
+  if (!ui.contextPanelOpen || !session) {
+    panel.removeAttribute("data-sig");
+    replaceDomChildren(panel);
+    return;
+  }
+
+  const repo = repoById(session.repoID);
+  const pins = session.pinnedMessages || [];
+  const notes = session.notes || "";
+  const worktreeInfo = parallelWorktreeSummary(session);
+  const branch = session.parallelWorktree?.branch || session.parallelWorktree?.baseBranch || "";
+
+  const sig = `${session.id}|${pins.length}|${pins.map((p) => `${p.id}:${p.checked}`).join(",")}|${notes.length}|${branch}|${worktreeInfo}`;
+  if (panel.dataset.sig === sig) {
+    return;
+  }
+  panel.dataset.sig = sig;
+
+  replaceDomChildren(
+    panel,
+    dom(
+      "div",
+      { className: "context-panel-inner" },
+      // ── Environment section ──
+      dom(
+        "div",
+        { className: "context-section" },
+        dom("div", { className: "context-section-label" }, "Environment"),
+        dom(
+          "div",
+          { className: "context-env-list" },
+          dom(
+            "div",
+            { className: "context-env-row" },
+            dom("span", { className: "context-env-key" }, "Changes"),
+            dom(
+              "span",
+              { className: "context-env-value" },
+              session.parallelWorktree?.changedFiles?.length
+                ? `${session.parallelWorktree.changedFiles.length} file${session.parallelWorktree.changedFiles.length === 1 ? "" : "s"}`
+                : "None"
+            )
+          ),
+          dom(
+            "div",
+            { className: "context-env-row" },
+            dom("span", { className: "context-env-key" }, "Worktree"),
+            dom(
+              "span",
+              { className: "context-env-value" },
+              session.parallelWorktree?.mode === "disabled" ? "Shared" : "Isolated"
+            )
+          ),
+          branch
+            ? dom(
+                "div",
+                { className: "context-env-row" },
+                dom("span", { className: "context-env-key" }, "Branch"),
+                dom("span", { className: "context-env-value context-env-branch" }, branch)
+              )
+            : null,
+          repo
+            ? dom(
+                "div",
+                { className: "context-env-row" },
+                dom("span", { className: "context-env-key" }, "Folder"),
+                dom(
+                  "span",
+                  { className: "context-env-value", attrs: { title: repo.path } },
+                  repo.name
+                )
+              )
+            : null
+        )
+      ),
+      // ── Pinned Messages section ──
+      dom(
+        "div",
+        { className: "context-section" },
+        dom(
+          "div",
+          { className: "context-section-header" },
+          dom("div", { className: "context-section-label" }, "Pinned Messages"),
+          dom(
+            "button",
+            {
+              className: "context-add-btn",
+              attrs: {
+                type: "button",
+                "data-action": "add-pinned-message",
+                "data-session-id": session.id,
+                "aria-label": "Add pinned message",
+                title: "Pin a message"
+              }
+            },
+            "+"
+          )
+        ),
+        pins.length > 0
+          ? dom(
+              "div",
+              { className: "context-pin-list" },
+              ...pins.map((pin) =>
+                dom(
+                  "label",
+                  {
+                    className: classNames("context-pin-item", pin.checked ? "context-pin-checked" : undefined),
+                    attrs: { "data-pin-id": pin.id }
+                  },
+                  dom("input", {
+                    className: "context-pin-checkbox",
+                    attrs: {
+                      type: "checkbox",
+                      "data-action": "toggle-pinned-message",
+                      "data-session-id": session.id,
+                      "data-pin-id": pin.id,
+                      ...(pin.checked ? { checked: true } : {})
+                    }
+                  }),
+                  dom("span", { className: "context-pin-text" }, pin.text),
+                  dom(
+                    "button",
+                    {
+                      className: "context-pin-remove",
+                      attrs: {
+                        type: "button",
+                        "data-action": "remove-pinned-message",
+                        "data-session-id": session.id,
+                        "data-pin-id": pin.id,
+                        "aria-label": "Remove",
+                        title: "Remove"
+                      }
+                    },
+                    "\u00d7"
+                  )
+                )
+              )
+            )
+          : dom("div", { className: "context-pin-empty" }, "No pinned messages yet.")
+      ),
+      // ── Notes section ──
+      dom(
+        "div",
+        { className: "context-section context-section-notes" },
+        dom("div", { className: "context-section-label" }, "Notes"),
+        dom("textarea", {
+          className: "context-notes-textarea",
+          value: notes,
+          attrs: {
+            id: "context-notes-input",
+            placeholder: "Type here",
+            "data-session-id": session.id,
+            rows: "5",
+            spellcheck: "false"
+          }
+        })
+      )
+    )
+  );
+}
+
+function toggleContextPanel() {
+  ui.contextPanelOpen = !ui.contextPanelOpen;
+  const session = currentActiveSession();
+  if (session) {
+    updateContextPanel(session);
+    updateSessionWorkspaceToolbar();
+  }
+}
+
+function currentActiveSession(): SessionSummary | null {
+  if (ui.selection.type !== "session") {
+    return null;
+  }
+  return sessionById(ui.selection.id);
+}
+
+async function addPinnedMessage(sessionId: string | null | undefined) {
+  if (!sessionId) {
+    return;
+  }
+  const session = sessionById(sessionId);
+  if (!session) {
+    return;
+  }
+  const text = window.prompt("Pin a message:");
+  if (!text || !text.trim()) {
+    return;
+  }
+  const pin: PinnedMessage = {
+    id: crypto.randomUUID(),
+    text: text.trim(),
+    checked: false,
+    createdAt: new Date().toISOString()
+  };
+  const nextPins = [...(session.pinnedMessages || []), pin];
+  await api.updateSessionOrganization(sessionId, { pinnedMessages: nextPins });
+}
+
+async function removePinnedMessage(sessionId: string | null | undefined, pinId: string | null | undefined) {
+  if (!sessionId || !pinId) {
+    return;
+  }
+  const session = sessionById(sessionId);
+  if (!session) {
+    return;
+  }
+  const nextPins = (session.pinnedMessages || []).filter((p) => p.id !== pinId);
+  await api.updateSessionOrganization(sessionId, { pinnedMessages: nextPins });
+}
+
+async function togglePinnedMessage(sessionId: string | null | undefined, pinId: string | null | undefined) {
+  if (!sessionId || !pinId) {
+    return;
+  }
+  const session = sessionById(sessionId);
+  if (!session) {
+    return;
+  }
+  const nextPins = (session.pinnedMessages || []).map((p) =>
+    p.id === pinId ? { ...p, checked: !p.checked } : p
+  );
+  await api.updateSessionOrganization(sessionId, { pinnedMessages: nextPins });
+}
+
+let contextNotesSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function handleContextNotesInput(target: HTMLTextAreaElement) {
+  const sessionId = target.dataset.sessionId;
+  if (!sessionId) {
+    return;
+  }
+  if (contextNotesSaveTimer !== null) {
+    clearTimeout(contextNotesSaveTimer);
+  }
+  contextNotesSaveTimer = setTimeout(() => {
+    contextNotesSaveTimer = null;
+    void api.updateSessionOrganization(sessionId, { notes: target.value });
+  }, 400);
 }
 
 function syncPortStatusPolling() {
@@ -13951,7 +14249,8 @@ type SessionChromeIconKind =
   | "more"
   | "rename"
   | "close"
-  | "toolbar";
+  | "toolbar"
+  | "context-panel";
 
 function renderSessionChromeIcon(kind: SessionChromeIconKind): string {
   switch (kind) {
@@ -14001,6 +14300,16 @@ function renderSessionChromeIcon(kind: SessionChromeIconKind): string {
       return `
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M4.25 4.25 11.75 11.75M11.75 4.25 4.25 11.75" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>
+        </svg>
+      `;
+    case "context-panel":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <line x1="9.5" y1="2.5" x2="9.5" y2="13.5" stroke="currentColor" stroke-width="1.2"/>
+          <line x1="11" y1="5.5" x2="13" y2="5.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+          <line x1="11" y1="7.5" x2="13" y2="7.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+          <line x1="11" y1="9.5" x2="12.5" y2="9.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
         </svg>
       `;
     case "more":

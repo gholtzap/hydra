@@ -133,6 +133,8 @@ function migrateSnapshot(snapshot: unknown): StoredAppState {
         sessionIconPath: null,
         sessionIconUpdatedAt: null,
         parallelWorktree: emptySessionParallelWorktree(),
+        pinnedMessages: [],
+        notes: "",
         ...(isPlainObject(session) ? session : {})
       })) as SessionRecord[]
     : [];

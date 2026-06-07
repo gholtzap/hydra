@@ -2675,6 +2675,8 @@ class AppController {
         repo,
         startupAgentId ? this.initialParallelWorktreeModeForNewSession(repo, sessionId) : "disabled"
       ),
+      pinnedMessages: [],
+      notes: "",
       transcript: "",
       rawTranscript: ""
     };
@@ -2763,6 +2765,19 @@ class AppController {
       const nextRepoID = typeof patch.repoID === "string" ? patch.repoID : "";
       if (nextRepoID && this.repoById(nextRepoID) && session.repoID !== nextRepoID) {
         session.repoID = nextRepoID;
+        changed = true;
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, "pinnedMessages")) {
+      session.pinnedMessages = Array.isArray(patch.pinnedMessages) ? patch.pinnedMessages : [];
+      changed = true;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, "notes")) {
+      const nextNotes = typeof patch.notes === "string" ? patch.notes : "";
+      if (session.notes !== nextNotes) {
+        session.notes = nextNotes;
         changed = true;
       }
     }
@@ -3159,6 +3174,8 @@ class AppController {
         repo,
         this.initialParallelWorktreeModeForNewSession(repo, sessionId)
       ),
+      pinnedMessages: [],
+      notes: "",
       transcript: "",
       rawTranscript: ""
     };
@@ -3508,6 +3525,8 @@ class AppController {
         branch,
         lastEventAt: now()
       }),
+      pinnedMessages: [],
+      notes: "",
       transcript: "",
       rawTranscript: ""
     };
@@ -4326,6 +4345,8 @@ class AppController {
       sessionIconPath: null,
       sessionIconUpdatedAt: null,
       parallelWorktree: emptyParallelWorktreeMetadata(),
+      pinnedMessages: [],
+      notes: "",
       transcript: "",
       rawTranscript: ""
     };
@@ -4372,6 +4393,8 @@ class AppController {
       sessionIconPath: null,
       sessionIconUpdatedAt: null,
       parallelWorktree: emptyParallelWorktreeMetadata(),
+      pinnedMessages: [],
+      notes: "",
       transcript: "",
       rawTranscript: ""
     };

@@ -138,10 +138,19 @@ export type SessionStatus =
 export type SessionRuntimeState = "live" | "stopped" | "launching";
 export type SessionLaunchProfile = "agent" | "shell" | "appLaunch";
 
+export type PinnedMessage = {
+  id: string;
+  text: string;
+  checked: boolean;
+  createdAt: string;
+};
+
 export type SessionOrganizationPatch = {
   isPinned?: boolean;
   tagColor?: SessionTagColor | null;
   repoID?: string;
+  pinnedMessages?: PinnedMessage[];
+  notes?: string;
 };
 
 export type RepoParallelWorktreeSettings = {
@@ -261,6 +270,8 @@ export type SessionRecord = {
   sessionIconPath: string | null;
   sessionIconUpdatedAt: string | null;
   parallelWorktree: SessionParallelWorktreeMetadata;
+  pinnedMessages: PinnedMessage[];
+  notes: string;
   transcript: string;
   rawTranscript: string;
 };

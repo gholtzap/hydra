@@ -7697,6 +7697,20 @@ async function handleKeyDown(event) {
     return;
   }
 
+  // Cmd+1 through Cmd+9 to switch session panes
+  if (event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+    const digit = event.key >= "1" && event.key <= "9" ? parseInt(event.key, 10) : 0;
+    if (digit > 0 && ui.selection.type === "session") {
+      const visibleIds = workspaceVisibleSessionIds();
+      const targetIndex = digit - 1;
+      if (targetIndex < visibleIds.length) {
+        event.preventDefault();
+        await activateVisibleSession(visibleIds[targetIndex], "terminal");
+        return;
+      }
+    }
+  }
+
   if (await handleAppShortcut(event)) {
     return;
   }

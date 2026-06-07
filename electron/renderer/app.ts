@@ -7552,6 +7552,21 @@ function handleDragOver(event: DragEvent) {
   }
 
   const target = event.target as HTMLElement | null;
+
+  // Tab-bar reorder: detect drag over a .ws-tab
+  const tab = target?.closest(".ws-tab") as HTMLElement | null;
+  const tabSessionId = tab?.dataset.sessionId;
+  if (tab && tabSessionId && tabSessionId !== ui.draggingSessionId) {
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "move";
+    }
+    ui.dragTargetSessionId = tabSessionId;
+    ui.dragTargetZone = "center";
+    updateSessionDropUi();
+    return;
+  }
+
   const pane = target?.closest(".session-pane") as HTMLElement | null;
   const targetSessionId = pane?.dataset.sessionId;
 
@@ -7582,6 +7597,17 @@ function handleDrop(event: DragEvent) {
   }
 
   const target = event.target as HTMLElement | null;
+
+  // Tab-bar reorder: detect drop on a .ws-tab
+  const tab = target?.closest(".ws-tab") as HTMLElement | null;
+  const tabSessionId = tab?.dataset.sessionId;
+  if (tab && tabSessionId && tabSessionId !== ui.draggingSessionId) {
+    event.preventDefault();
+    applySessionWorkspaceDrop(ui.draggingSessionId, tabSessionId, "center");
+    clearSessionDragState();
+    return;
+  }
+
   const pane = target?.closest(".session-pane") as HTMLElement | null;
   const targetSessionId = pane?.dataset.sessionId;
 

@@ -1491,18 +1491,11 @@ textarea {
 }
 
 #detail.navbar-collapsed .session-workspace-detail {
-  gap: 6px;
+  gap: 0;
 }
 
-#detail.navbar-collapsed #session-workspace-toolbar {
-  max-height: 0;
-  overflow: hidden;
-}
-
-#detail.navbar-collapsed #session-workspace-toolbar .ws-toolbar {
-  transform: translateY(calc(-100% - 8px));
-  opacity: 0;
-  pointer-events: none;
+#detail.navbar-collapsed #session-workspace-toolbar .ws-tab-bar-actions {
+  display: none;
 }
 
 .ws-toolbar-info {

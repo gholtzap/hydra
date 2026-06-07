@@ -1452,13 +1452,13 @@ textarea {
 .session-workspace-detail {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
   min-height: 0;
   min-width: 0;
   flex: 1 1 0%;
   overflow: visible;
-  padding: 8px;
-  border-radius: 20px;
+  padding: 0;
+  border-radius: 0;
   background: var(--workspace-backdrop);
 }
 
@@ -1491,18 +1491,11 @@ textarea {
 }
 
 #detail.navbar-collapsed .session-workspace-detail {
-  gap: 6px;
+  gap: 0;
 }
 
-#detail.navbar-collapsed #session-workspace-toolbar {
-  max-height: 0;
-  overflow: hidden;
-}
-
-#detail.navbar-collapsed #session-workspace-toolbar .ws-toolbar {
-  transform: translateY(calc(-100% - 8px));
-  opacity: 0;
-  pointer-events: none;
+#detail.navbar-collapsed #session-workspace-toolbar .ws-tab-bar-actions {
+  display: none;
 }
 
 .ws-toolbar-info {
@@ -1626,6 +1619,12 @@ textarea {
 .ws-layout-btn:hover {
   background: color-mix(in oklab, var(--surface-active) 92%, transparent);
   color: var(--text);
+}
+
+.ws-layout-btn-active {
+  background: color-mix(in oklab, var(--accent) 22%, transparent);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 30%, transparent);
 }
 
 .ws-layout-btn:disabled {
@@ -1800,15 +1799,181 @@ textarea {
   display: inline;
 }
 
+/* ── Tab bar ───────────────────────────────────── */
+
+.ws-tab-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  min-height: 36px;
+  flex: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  background: var(--workspace-backdrop);
+  border-bottom: 1px solid var(--workspace-separator);
+  padding: 0 4px;
+}
+
+.ws-tab-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.ws-tab-bar-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.ws-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  min-width: 0;
+  max-width: 200px;
+  flex: 0 1 auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+  transition: background 100ms ease, color 100ms ease;
+  border-top: 2px solid transparent;
+  user-select: none;
+}
+
+.ws-tab[draggable="true"] {
+  cursor: grab;
+}
+
+.ws-tab[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.ws-tab:hover {
+  background: color-mix(in oklab, var(--surface-soft) 60%, transparent);
+  color: var(--text);
+}
+
+.ws-tab-drop-target {
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  border-top-color: var(--accent);
+  color: var(--text);
+}
+
+.ws-tab-active {
+  color: var(--text);
+  font-weight: 650;
+  background: color-mix(in oklab, var(--surface-active) 44%, transparent);
+  border-top-color: var(--accent);
+}
+
+.ws-tab-active::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--terminal-background);
+}
+
+.ws-tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: none;
+  background: currentColor;
+  opacity: 0.7;
+}
+
+.ws-tab-active .ws-tab-dot {
+  opacity: 1;
+}
+
+.ws-tab-dot-running {
+  background: var(--status-live-fg);
+}
+
+.ws-tab-dot-needs_input,
+.ws-tab-dot-blocked,
+.ws-tab-dot-failed {
+  background: var(--status-danger-fg);
+}
+
+.ws-tab-dot-done,
+.ws-tab-dot-idle {
+  background: var(--status-muted-fg);
+}
+
+.ws-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.ws-tab-shortcut {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  opacity: 0.5;
+  flex: none;
+  font-weight: 500;
+}
+
+.ws-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  flex: none;
+  opacity: 0;
+  transition: opacity 80ms ease, background 80ms ease;
+}
+
+.ws-tab:hover .ws-tab-close,
+.ws-tab-active .ws-tab-close {
+  opacity: 0.6;
+}
+
+.ws-tab-close:hover {
+  opacity: 1;
+  background: color-mix(in oklab, var(--status-danger-bg) 80%, transparent);
+  color: var(--status-danger-fg);
+}
+
+.ws-tab-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 0 4px;
+}
+
 .session-workspace-canvas {
   flex: 1 1 0%;
   min-height: 0;
   min-width: 0;
   display: flex;
-  padding: 2px;
-  border-radius: 18px;
-  background: color-mix(in oklab, var(--workspace-toolbar-surface) 48%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--workspace-separator) 80%, transparent);
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
   overflow: hidden;
 }
 
@@ -1897,9 +2062,9 @@ textarea {
 
 .pane-resize-handle::after {
   content: '';
-  border-radius: 999px;
+  border-radius: 0;
   background: var(--workspace-separator);
-  opacity: 0.78;
+  opacity: 1;
   transition: background 100ms ease, opacity 100ms ease, transform 100ms ease;
 }
 
@@ -1937,66 +2102,51 @@ textarea {
 .session-pane {
   position: relative;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
-  border-radius: 14px;
+  border-radius: 0;
   border: 0;
-  background: color-mix(in oklab, var(--terminal-background) 96%, var(--surface-soft) 4%);
-  box-shadow: var(--workspace-pane-shadow);
+  background: var(--terminal-background);
+  box-shadow: none;
   overflow: hidden;
 }
 
 .session-pane::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  box-shadow: inset 0 0 0 1px var(--workspace-pane-outline);
-  pointer-events: none;
-  z-index: 1;
+  content: none;
 }
 
 .session-workspace-detail .session-pane:not(.session-pane-active) {
-  opacity: var(--workspace-pane-inactive-opacity);
-  filter: saturate(0.82);
+  opacity: 0.88;
 }
 
 .session-workspace-detail .session-pane:not(.session-pane-active) .pane-bar,
 .session-workspace-detail .session-pane:not(.session-pane-active) .session-pane-main {
-  opacity: 0.92;
+  opacity: 1;
 }
 
 .session-workspace-detail .session-pane:not(.session-pane-active) .session-pane-terminal-wrap {
-  opacity: var(--workspace-pane-inactive-terminal-opacity);
+  opacity: 0.92;
 }
 
 .session-workspace-detail .session-pane:hover,
 .session-workspace-detail .session-pane:focus-within {
-  opacity: 0.92;
-  filter: none;
+  opacity: 1;
 }
 
 .session-pane-pinned {
-  box-shadow:
-    var(--workspace-pane-shadow),
-    0 0 0 1px color-mix(in oklab, var(--accent-2) 16%, transparent);
+  box-shadow: none;
 }
 
 .session-pane-pinned::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-top: 1px solid color-mix(in oklab, var(--accent-2) 42%, transparent);
-  pointer-events: none;
-  z-index: 1;
+  content: none;
 }
 
 .session-pane-active {
   opacity: 1;
   filter: none;
-  transform: translateY(-1px);
-  box-shadow: var(--workspace-pane-active-shadow);
+  transform: none;
+  box-shadow: none;
 }
 
 .session-pane-active .pane-bar,
@@ -2006,9 +2156,7 @@ textarea {
 }
 
 .session-pane-focused {
-  box-shadow:
-    var(--workspace-pane-active-shadow),
-    0 0 0 1px color-mix(in oklab, var(--ring) 30%, transparent);
+  box-shadow: none;
 }
 
 .session-pane-main {
@@ -2016,7 +2164,7 @@ textarea {
   flex-direction: column;
   gap: 0;
   padding: 0;
-  background: var(--workspace-terminal-overlay);
+  background: transparent;
 }
 
 .session-pane-main.section-focused,
@@ -2037,16 +2185,10 @@ textarea {
   z-index: 1;
 }
 
-/* ── Compact pane header bar ───────────────────── */
+/* ── Compact pane header bar (hidden in tab-bar mode) ── */
 
 .pane-bar {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 10px 7px;
-  cursor: grab;
-  user-select: none;
+  display: none;
 }
 
 .pane-bar:active {
@@ -2732,6 +2874,78 @@ textarea {
   background: var(--terminal-background);
 }
 
+/* ── Per-pane bottom status bar ────────────────── */
+
+.pane-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 10px;
+  min-height: 26px;
+  flex: none;
+  background: color-mix(in oklab, var(--terminal-background) 80%, var(--surface-soft) 20%);
+  border-top: 1px solid var(--workspace-separator);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.pane-status-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pane-status-bar-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: none;
+}
+
+.pane-status-bar-dot-running {
+  background: var(--status-live-fg);
+}
+
+.pane-status-bar-dot-needs_input,
+.pane-status-bar-dot-blocked,
+.pane-status-bar-dot-failed {
+  background: var(--status-danger-fg);
+}
+
+.pane-status-bar-dot-done,
+.pane-status-bar-dot-idle {
+  background: var(--status-muted-fg);
+}
+
+.pane-status-bar-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pane-status-bar-status {
+  white-space: nowrap;
+  flex: none;
+}
+
+.pane-status-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  opacity: 0.65;
+}
+
 .session-pane-terminal-wrap-paused {
   background: color-mix(in oklab, var(--terminal-background) 88%, var(--warn-bg));
 }
@@ -2739,7 +2953,10 @@ textarea {
 .session-terminal-shell {
   width: 100%;
   height: 100%;
+  min-width: 0;
   min-height: 100px;
+  max-width: 100%;
+  overflow: hidden;
   background: var(--terminal-background);
   padding: 10px 12px;
 }
@@ -2747,6 +2964,17 @@ textarea {
 .session-terminal {
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.session-terminal-shell .xterm,
+.session-terminal-shell .xterm-screen {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .terminal-paused-notice {
@@ -6313,3 +6541,4 @@ textarea {
   color: var(--text-muted);
   white-space: nowrap;
 }
+

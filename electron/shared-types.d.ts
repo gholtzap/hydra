@@ -55,7 +55,8 @@ export type KeybindingAction =
   | "navigate-section-right"
   | "navigate-section-up"
   | "navigate-section-down"
-  | "end-session";
+  | "end-session"
+  | "pin-terminal-selection";
 
 export type KeybindingMap = Record<KeybindingAction, string>;
 export type KeybindingOverrides = Partial<KeybindingMap>;
@@ -138,10 +139,20 @@ export type SessionStatus =
 export type SessionRuntimeState = "live" | "stopped" | "launching";
 export type SessionLaunchProfile = "agent" | "shell" | "appLaunch";
 
+export type PinnedMessage = {
+  id: string;
+  text: string;
+  checked: boolean;
+  createdAt: string;
+  line?: number;
+};
+
 export type SessionOrganizationPatch = {
   isPinned?: boolean;
   tagColor?: SessionTagColor | null;
   repoID?: string;
+  pinnedMessages?: PinnedMessage[];
+  notes?: string;
 };
 
 export type RepoParallelWorktreeSettings = {
@@ -179,6 +190,12 @@ export type ParallelWorktreeDisplayState =
   | "overlap_warning"
   | "cleanup_pending";
 
+export type WorktreeChangeStats = {
+  files: number;
+  additions: number;
+  deletions: number;
+};
+
 export type SessionParallelWorktreeMetadata = {
   mode: ParallelWorktreeSessionMode;
   lifecycleState: ParallelWorktreeLifecycleState;
@@ -187,6 +204,7 @@ export type SessionParallelWorktreeMetadata = {
   worktreePath: string | null;
   branch: string | null;
   changedFiles: string[];
+  changeStats: WorktreeChangeStats;
   overlapSessionIds: string[];
   promptInjectedAt: string | null;
   lastEventAt: string | null;
@@ -261,6 +279,8 @@ export type SessionRecord = {
   sessionIconPath: string | null;
   sessionIconUpdatedAt: string | null;
   parallelWorktree: SessionParallelWorktreeMetadata;
+  pinnedMessages: PinnedMessage[];
+  notes: string;
   transcript: string;
   rawTranscript: string;
 };

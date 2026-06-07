@@ -1,3 +1,5 @@
+import type { WorktreeChangeStats } from "../shared-types";
+
 const { execFile, spawnSync } = require("node:child_process") as typeof import("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -12,6 +14,11 @@ type GitExecResult = {
 type ListedWorktree = {
   path: string;
   branch: string | null;
+};
+
+type WorktreeChangeSummary = {
+  files: string[];
+  stats: WorktreeChangeStats;
 };
 
 async function runGit(args: string[], cwd: string): Promise<GitExecResult> {
@@ -108,18 +115,85 @@ function hasUntrackedFilesSync(repoPath: string): boolean {
     .some((line) => line.startsWith("?? "));
 }
 
-async function listChangedFiles(repoPath: string, baseBranch: string): Promise<string[]> {
+function parseNumstat(stdout: string): WorktreeChangeStats {
+  const stats: WorktreeChangeStats = {
+    files: 0,
+    additions: 0,
+    deletions: 0
+  };
+
+  for (const line of stdout.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    const [additions, deletions] = line.split(/\t/);
+    stats.files += 1;
+    if (additions !== "-") {
+      const count = Number(additions);
+      if (Number.isFinite(count) && count > 0) {
+        stats.additions += count;
+      }
+    }
+    if (deletions !== "-") {
+      const count = Number(deletions);
+      if (Number.isFinite(count) && count > 0) {
+        stats.deletions += count;
+      }
+    }
+  }
+
+  return stats;
+}
+
+function addChangeStats(target: WorktreeChangeStats, next: WorktreeChangeStats): void {
+  target.files += next.files;
+  target.additions += next.additions;
+  target.deletions += next.deletions;
+}
+
+async function countUntrackedFileAdditions(repoPath: string, filePath: string): Promise<number> {
+  try {
+    const absolutePath = path.resolve(repoPath, filePath);
+    const stat = await fs.promises.stat(absolutePath);
+    if (!stat.isFile() || stat.size > 1024 * 1024) {
+      return 0;
+    }
+
+    const content = await fs.promises.readFile(absolutePath, "utf8");
+    if (!content) {
+      return 0;
+    }
+
+    const lines = content.split(/\r?\n/);
+    return content.endsWith("\n") ? lines.length - 1 : lines.length;
+  } catch {
+    return 0;
+  }
+}
+
+async function listWorktreeChanges(repoPath: string, baseBranch: string): Promise<WorktreeChangeSummary> {
   const fileSet = new Set<string>();
   const trimmedBaseBranch = typeof baseBranch === "string" ? baseBranch.trim() : "";
+  const stats: WorktreeChangeStats = {
+    files: 0,
+    additions: 0,
+    deletions: 0
+  };
 
   const commands: string[][] = [
-    ["diff", "--name-only", "--diff-filter=ACMR"],
-    ["diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+    ["diff", "--name-only", "--diff-filter=ACMRD"],
+    ["diff", "--cached", "--name-only", "--diff-filter=ACMRD"],
     ["ls-files", "--others", "--exclude-standard"]
+  ];
+  const numstatCommands: string[][] = [
+    ["diff", "--numstat", "--diff-filter=ACMRD"],
+    ["diff", "--cached", "--numstat", "--diff-filter=ACMRD"]
   ];
 
   if (trimmedBaseBranch) {
-    commands.unshift(["diff", "--name-only", "--diff-filter=ACMR", `${trimmedBaseBranch}...HEAD`]);
+    commands.unshift(["diff", "--name-only", "--diff-filter=ACMRD", `${trimmedBaseBranch}...HEAD`]);
+    numstatCommands.unshift(["diff", "--numstat", "--diff-filter=ACMRD", `${trimmedBaseBranch}...HEAD`]);
   }
 
   const results = await Promise.all(commands.map((args) => runGit(args, repoPath)));
@@ -136,7 +210,31 @@ async function listChangedFiles(repoPath: string, baseBranch: string): Promise<s
     }
   }
 
-  return [...fileSet].sort((left, right) => left.localeCompare(right));
+  const numstatResults = await Promise.all(numstatCommands.map((args) => runGit(args, repoPath)));
+  for (const result of numstatResults) {
+    if (result.ok) {
+      addChangeStats(stats, parseNumstat(result.stdout));
+    }
+  }
+
+  const untrackedFiles = results[results.length - 1]?.ok
+    ? results[results.length - 1].stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => !!line)
+    : [];
+  if (untrackedFiles.length) {
+    stats.files += untrackedFiles.length;
+    const additions = await Promise.all(
+      untrackedFiles.map((filePath) => countUntrackedFileAdditions(repoPath, filePath))
+    );
+    stats.additions += additions.reduce((sum, count) => sum + count, 0);
+  }
+
+  const files = [...fileSet].sort((left, right) => left.localeCompare(right));
+  stats.files = files.length || stats.files;
+
+  return { files, stats };
 }
 
 async function readCurrentBranch(repoPath: string): Promise<string | null> {
@@ -345,7 +443,7 @@ module.exports = {
   fastForwardWorktreeToBranchSync,
   hasUntrackedFilesSync,
   listBranchesSync,
-  listChangedFiles,
+  listWorktreeChanges,
   listGitWorktrees,
   listGitWorktreesSync,
   readCurrentBranch,

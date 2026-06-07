@@ -34,7 +34,8 @@ export const DEFAULT_KEYBINDINGS: KeybindingMap = {
   "navigate-section-right": "CmdOrCtrl+ArrowRight",
   "navigate-section-up": "CmdOrCtrl+ArrowUp",
   "navigate-section-down": "CmdOrCtrl+ArrowDown",
-  "end-session": "CmdOrCtrl+W"
+  "end-session": "CmdOrCtrl+W",
+  "pin-terminal-selection": "CmdOrCtrl+Shift+M"
 };
 
 export const KEYBINDING_LABELS: KeybindingLabels = {
@@ -55,7 +56,8 @@ export const KEYBINDING_LABELS: KeybindingLabels = {
   "navigate-section-right": "Navigate Section Right",
   "navigate-section-up": "Navigate Session Up",
   "navigate-section-down": "Navigate Session Down",
-  "end-session": "End Session"
+  "end-session": "End Session",
+  "pin-terminal-selection": "Pin Terminal Selection"
 };
 
 /** Merge defaults with user overrides. */

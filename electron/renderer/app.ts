@@ -15,6 +15,7 @@ import type {
   KeybindingEventSnapshot,
   KeybindingLabels,
   KeybindingMap,
+  PinnedMessage,
   RepoAppLaunchConfig,
   RepoParallelWorktreeLedgerEntry,
   RepoParallelWorktreeSettings,
@@ -26,6 +27,7 @@ import type {
   TrackedPortStatus,
   VoiceCallState,
   VoiceConfig,
+  WorktreeChangeStats,
   WorktreeCloseAction,
   WikiContext,
   WikiTreeNode as SharedWikiTreeNode,
@@ -33,6 +35,8 @@ import type {
 } from "../shared-types";
 
 const api = window.claudeWorkspace;
+let layoutTransitionTimer: ReturnType<typeof setTimeout> | null = null;
+let layoutTransitionFitRaf: number | null = null;
 let sessionSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let sessionSearchRenderStateCache: {
   results: SessionSearchResult[];
@@ -384,6 +388,8 @@ type UiState = {
   voiceInstallLog: string[];
   voiceLiveUserText: string;
   voiceLiveBotText: string;
+  workspaceFocusMode: boolean;
+  workspacePreFocusLayout: WorkspaceLayoutNode | null;
 };
 
 const ui: UiState = {
@@ -497,7 +503,9 @@ const ui: UiState = {
   voiceTranscript: [] as { role: "user" | "bot" | "system"; text: string; time: string }[],
   voiceInstallLog: [] as string[],
   voiceLiveUserText: "",
-  voiceLiveBotText: ""
+  voiceLiveBotText: "",
+  workspaceFocusMode: false,
+  workspacePreFocusLayout: null as WorkspaceLayoutNode | null
 };
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
@@ -2955,8 +2963,39 @@ function renderSessionPane(sessionId) {
         dom("div", { className: "session-terminal", attrs: { "data-session-id": session.id } })
       ),
       dom("div", { className: "session-pane-paused-notice" })
+    ),
+    dom(
+      "div",
+      { className: "pane-status-bar" },
+      dom(
+        "div",
+        { className: "pane-status-bar-left" },
+        dom("span", { className: classNames("pane-status-bar-dot", `pane-status-bar-dot-${session.status}`) }),
+        dom("span", { className: "pane-status-bar-title" }, session.title),
+        dom("span", { className: "pane-status-bar-status" }, statusLabel(session.status))
+      ),
+      dom("div", { className: "pane-status-bar-right" })
     )
   );
+}
+
+function updateSessionPaneStatusBar(session) {
+  const pane = sessionPaneElement(session.id);
+  if (!pane) return;
+  const bar = pane.querySelector(".pane-status-bar") as HTMLElement | null;
+  if (!bar) return;
+  const sig = `${session.title}|${session.status}`;
+  if (bar.dataset.sig === sig) return;
+  bar.dataset.sig = sig;
+  const left = bar.querySelector(".pane-status-bar-left");
+  if (left) {
+    replaceDomChildren(
+      left,
+      dom("span", { className: classNames("pane-status-bar-dot", `pane-status-bar-dot-${session.status}`) }),
+      dom("span", { className: "pane-status-bar-title" }, session.title),
+      dom("span", { className: "pane-status-bar-status" }, statusLabel(session.status))
+    );
+  }
 }
 
 function updateSessionWorkspaceToolbar() {
@@ -2972,51 +3011,76 @@ function updateSessionWorkspaceToolbar() {
   }
 
   const repo = repoById(session.repoID);
-  const visibleSessionCount = workspaceVisibleSessionIds().length;
-  const worktreeStateId = sessionParallelWorktreeDisplayState(session);
-  const worktreeSummaryText = parallelWorktreeSummary(session);
+  // In focus mode, show tabs for all sessions from the pre-focus layout
+  const visibleIds = ui.workspaceFocusMode && ui.workspacePreFocusLayout
+    ? collectWorkspaceSessionIds(ui.workspacePreFocusLayout).filter((id) => sessionById(id))
+    : workspaceVisibleSessionIds();
+  const visibleSessionCount = visibleIds.length;
 
-  const sig = `${session.id}|${session.title}|${session.runtimeState}|${visibleSessionCount}|${repo?.id}|${session.isPinned}|${session.tagColor || ""}|${session.sessionIconUrl || ""}|${session.sessionIconUpdatedAt || ""}|${worktreeStateId || ""}|${worktreeSummaryText}`;
+  const tabSigs = visibleIds.map((id) => {
+    const s = sessionById(id);
+    return s ? `${s.id}:${s.title}:${s.status}:${s.tagColor || ""}` : id;
+  });
+  const sig = `tabs|${session.id}|${tabSigs.join(",")}|${visibleSessionCount}|${repo?.id}|${ui.workspaceFocusMode}`;
   if (toolbar.dataset.sig === sig) {
     return;
   }
   toolbar.dataset.sig = sig;
 
+  const tabElements = visibleIds.map((id, index) => {
+    const s = sessionById(id);
+    if (!s) return null;
+    const isActive = selectionMatches("session", s.id);
+    return dom(
+      "button",
+      {
+        className: classNames("ws-tab", isActive ? "ws-tab-active" : undefined),
+        attrs: {
+          "data-action": "select-session-pane",
+          "data-session-id": s.id,
+          "data-drag-session-id": s.id,
+          "data-drag-source": "tab",
+          draggable: "true",
+          type: "button",
+          title: s.title
+        }
+      },
+      dom("span", { className: classNames("ws-tab-dot", `ws-tab-dot-${s.status}`) }),
+      dom("span", { className: "ws-tab-label" }, s.title),
+      index < 9
+        ? dom("span", { className: "ws-tab-shortcut" }, `\u2318${index + 1}`)
+        : null,
+      dom(
+        "button",
+        {
+          className: "ws-tab-close",
+          attrs: {
+            "data-action": "remove-session-pane",
+            "data-session-id": s.id,
+            "data-no-drag": "true",
+            type: "button",
+            "aria-label": "Close tab",
+            title: "Close tab"
+          }
+        },
+        "\u00d7"
+      )
+    );
+  });
+
   replaceDomChildren(
     toolbar,
     dom(
       "div",
-      { className: "ws-toolbar" },
+      { className: "ws-tab-bar" },
       dom(
         "div",
-        { className: "ws-toolbar-info" },
-        renderSessionVisualElement(session, "session-visual-toolbar", { includePlaceholder: true }),
-        dom(
-          "div",
-          { className: "ws-toolbar-copy" },
-          dom("span", { className: "ws-toolbar-title" }, session.title),
-          dom(
-            "div",
-            { className: "ws-toolbar-meta-row" },
-            dom("span", { className: "ws-toolbar-repo" }, repo?.name || "Unknown"),
-            dom("span", { className: "ws-toolbar-sep", attrs: { "aria-hidden": "true" } }, "\u2022"),
-            dom(
-              "span",
-              { className: "ws-toolbar-meta" },
-              `${visibleSessionCount} ${pluralize(visibleSessionCount, "pane", "panes")}`
-            ),
-            worktreeStateId
-              ? dom("span", { className: "ws-toolbar-worktree-state" }, parallelWorktreeStateLabel(worktreeStateId))
-              : null,
-            worktreeSummaryText
-              ? dom("span", { className: "ws-toolbar-worktree-copy" }, worktreeSummaryText)
-              : null
-          )
-        )
+        { className: "ws-tab-bar-tabs" },
+        ...tabElements
       ),
       dom(
         "div",
-        { className: "ws-toolbar-actions" },
+        { className: "ws-tab-bar-actions" },
         dom(
           "div",
           { className: "ws-layout-group", attrs: { role: "group", "aria-label": "Layout" } },
@@ -3059,6 +3123,20 @@ function updateSessionWorkspaceToolbar() {
               }
             },
             renderSessionChromeIconElement("grid")
+          ),
+          dom(
+            "button",
+            {
+              className: classNames("ws-layout-btn", ui.workspaceFocusMode ? "ws-layout-btn-active" : undefined),
+              attrs: {
+                "data-action": "workspace-layout-focus",
+                "aria-label": "Focus on active session",
+                title: "Focus",
+                type: "button",
+                disabled: visibleSessionCount > 1 ? undefined : true
+              }
+            },
+            renderSessionChromeIconElement("focus")
           )
         ),
         dom(
@@ -3294,6 +3372,8 @@ function updateSessionPane(session) {
     pausedNotice.dataset.sig = pausedSig;
     replaceDomChildren(pausedNotice, renderPausedSessionNotice(session));
   }
+
+  updateSessionPaneStatusBar(session);
 }
 
 function renderSessionPaneHeader(session, isRenaming: boolean) {
@@ -3713,7 +3793,12 @@ function mountSessionWorkspaceTerminals(layout: WorkspaceLayoutNode) {
     });
 
     const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
+      // During layout transitions, skip observer storms. The transition
+      // scheduler performs a small number of batched fits instead.
+      if (layoutTransitionTimer !== null) {
+        return;
+      }
+      requestTerminalFit();
     });
     resizeObserver.observe(shellElement);
 
@@ -3833,6 +3918,42 @@ function activeTerminalMount() {
   }
 
   return ui.terminalMounts.get(ui.selection.id) || null;
+}
+
+/** Fit all mounted terminals to their containers in a single pass. */
+function fitAllTerminals() {
+  for (const mount of ui.terminalMounts.values()) {
+    mount.fitAddon.fit();
+  }
+}
+
+function requestTerminalFit() {
+  if (layoutTransitionFitRaf !== null) {
+    return;
+  }
+
+  layoutTransitionFitRaf = window.requestAnimationFrame(() => {
+    layoutTransitionFitRaf = null;
+    fitAllTerminals();
+  });
+}
+
+/**
+ * Suppress ResizeObserver-driven fit storms during a layout transition while
+ * still fitting xterm early enough that prompt text does not briefly overrun
+ * the resized pane.
+ */
+function suppressTerminalFitsDuring(ms: number) {
+  if (layoutTransitionTimer !== null) {
+    clearTimeout(layoutTransitionTimer);
+  }
+
+  requestTerminalFit();
+  window.setTimeout(requestTerminalFit, Math.max(0, Math.floor(ms / 2)));
+  layoutTransitionTimer = setTimeout(() => {
+    layoutTransitionTimer = null;
+    requestTerminalFit();
+  }, ms);
 }
 
 function renderInboxCard(session) {
@@ -6532,6 +6653,15 @@ async function handleClick(event) {
       break;
     }
     case "select-session-pane":
+      if (ui.workspaceFocusMode && target.dataset.sessionId) {
+        setStoredSessionWorkspaceLayout(createWorkspaceLeaf(target.dataset.sessionId));
+        ui.selection = { type: "session", id: target.dataset.sessionId };
+        ui.mainListSessionId = target.dataset.sessionId;
+        await api.setFocusedSession(target.dataset.sessionId);
+        renderSidebar();
+        renderDetail();
+        break;
+      }
       await activateVisibleSession(target.dataset.sessionId, "main");
       break;
     case "collapse-sidebar-project":
@@ -6711,6 +6841,8 @@ async function handleClick(event) {
     case "toggle-session-pin":
       await toggleSessionPin(target.dataset.sessionId);
       break;
+    case "toggle-context-panel":
+      break;
     case "import-session-icon":
       await importSessionIcon(target.dataset.sessionId);
       break;
@@ -6789,6 +6921,9 @@ async function handleClick(event) {
       break;
     case "workspace-layout-grid":
       applyWorkspacePreset("grid");
+      break;
+    case "workspace-layout-focus":
+      toggleWorkspaceFocusMode();
       break;
     case "switch-session":
       quickSwitcherDialog.close();
@@ -7172,7 +7307,10 @@ function handlePointerMove(event: PointerEvent) {
   newSizes[handleIndex] = Math.max(minSize, startSizes[handleIndex] + deltaRatio);
   newSizes[handleIndex + 1] = Math.max(minSize, startSizes[handleIndex + 1] - deltaRatio);
 
-  if (splitContainer) applySizesToDOM(splitContainer, newSizes);
+  if (splitContainer) {
+    applySizesToDOM(splitContainer, newSizes);
+    requestTerminalFit();
+  }
 
   const layout = state.preferences.sessionWorkspaceLayout as WorkspaceLayoutNode | null;
   const node = splitNodeByPath(layout, splitPath);
@@ -7234,9 +7372,7 @@ function handlePointerUp(event: PointerEvent) {
 
   setStoredSessionWorkspaceLayout(state.preferences.sessionWorkspaceLayout as WorkspaceLayoutNode | null);
 
-  for (const mount of ui.terminalMounts.values()) {
-    mount.fitAddon.fit();
-  }
+  requestTerminalFit();
 }
 
 function applySizesToDOM(container: HTMLElement, sizes: number[]) {
@@ -7415,6 +7551,21 @@ function handleDragOver(event: DragEvent) {
   }
 
   const target = event.target as HTMLElement | null;
+
+  // Tab-bar reorder: detect drag over a .ws-tab
+  const tab = target?.closest(".ws-tab") as HTMLElement | null;
+  const tabSessionId = tab?.dataset.sessionId;
+  if (tab && tabSessionId && tabSessionId !== ui.draggingSessionId) {
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "move";
+    }
+    ui.dragTargetSessionId = tabSessionId;
+    ui.dragTargetZone = "center";
+    updateSessionDropUi();
+    return;
+  }
+
   const pane = target?.closest(".session-pane") as HTMLElement | null;
   const targetSessionId = pane?.dataset.sessionId;
 
@@ -7445,6 +7596,17 @@ function handleDrop(event: DragEvent) {
   }
 
   const target = event.target as HTMLElement | null;
+
+  // Tab-bar reorder: detect drop on a .ws-tab
+  const tab = target?.closest(".ws-tab") as HTMLElement | null;
+  const tabSessionId = tab?.dataset.sessionId;
+  if (tab && tabSessionId && tabSessionId !== ui.draggingSessionId) {
+    event.preventDefault();
+    applySessionWorkspaceDrop(ui.draggingSessionId, tabSessionId, "center");
+    clearSessionDragState();
+    return;
+  }
+
   const pane = target?.closest(".session-pane") as HTMLElement | null;
   const targetSessionId = pane?.dataset.sessionId;
 
@@ -7615,6 +7777,35 @@ async function handleKeyDown(event) {
     return;
   }
 
+  // Cmd+1 through Cmd+9 to switch session panes
+  if (event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+    const digit = event.key >= "1" && event.key <= "9" ? parseInt(event.key, 10) : 0;
+    if (digit > 0 && ui.selection.type === "session") {
+      const visibleIds = ui.workspaceFocusMode && ui.workspacePreFocusLayout
+        ? collectWorkspaceSessionIds(ui.workspacePreFocusLayout).filter((id) => sessionById(id))
+        : workspaceVisibleSessionIds();
+      const targetIndex = digit - 1;
+      if (targetIndex < visibleIds.length) {
+        event.preventDefault();
+        if (ui.workspaceFocusMode) {
+          setStoredSessionWorkspaceLayout(createWorkspaceLeaf(visibleIds[targetIndex]));
+          ui.selection = { type: "session", id: visibleIds[targetIndex] };
+          ui.mainListSessionId = visibleIds[targetIndex];
+          await api.setFocusedSession(visibleIds[targetIndex]);
+          renderSidebar();
+          renderDetail();
+        } else {
+          await activateVisibleSession(visibleIds[targetIndex], "terminal");
+        }
+        return;
+      }
+    }
+  }
+
+  if (await handleGlobalShortcut(event)) {
+    return;
+  }
+
   if (await handleAppShortcut(event)) {
     return;
   }
@@ -7747,6 +7938,10 @@ async function handleAppShortcut(event) {
   return false;
 }
 
+async function handleGlobalShortcut(_event) {
+  return false;
+}
+
 async function handleInput(event) {
   const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
   if (!target) {
@@ -7757,6 +7952,7 @@ async function handleInput(event) {
     handleSettingsFieldInput(target);
     return;
   }
+
 
   switch (target.id) {
     case "quick-switcher-query":
@@ -7823,8 +8019,9 @@ function rerenderDialogInput(
 }
 
 async function handleFocusOut(event: FocusEvent) {
-  const target = event.target as HTMLInputElement | null;
-  if (target?.dataset.sessionRenameInput !== "true") {
+  const target = event.target as HTMLElement | null;
+
+  if (!(target instanceof HTMLInputElement) || target.dataset.sessionRenameInput !== "true") {
     return;
   }
 
@@ -7884,6 +8081,7 @@ async function handleChange(event) {
   if (!target) {
     return;
   }
+
 
   if (target.id === "pref-theme-appearance") {
     const themePreferences = themePreferencesFromState();
@@ -8296,6 +8494,30 @@ async function activateVisibleSession(
 }
 
 async function hideSessionPane(sessionId) {
+  // In focus mode, also remove from the saved pre-focus layout
+  if (ui.workspaceFocusMode && ui.workspacePreFocusLayout) {
+    ui.workspacePreFocusLayout = removeSessionFromLayout(ui.workspacePreFocusLayout, sessionId);
+    const remaining = collectWorkspaceSessionIds(ui.workspacePreFocusLayout);
+    if (remaining.length <= 1) {
+      ui.workspaceFocusMode = false;
+      ui.workspacePreFocusLayout = null;
+    }
+    if (ui.selection.type === "session" && ui.selection.id === sessionId) {
+      const nextId = remaining.find((id) => id !== sessionId) || remaining[0];
+      if (nextId) {
+        setStoredSessionWorkspaceLayout(
+          ui.workspaceFocusMode ? createWorkspaceLeaf(nextId) : ui.workspacePreFocusLayout
+        );
+        ui.selection = { type: "session", id: nextId };
+        ui.mainListSessionId = nextId;
+        await api.setFocusedSession(nextId);
+        renderSidebar();
+        renderDetail();
+        return;
+      }
+    }
+  }
+
   if (ui.selection.type === "session" && ui.selection.id === sessionId) {
     const nextVisibleSessionId = nextVisibleSessionIdAfterRemoving(sessionId);
     // Move selection first so ensureValidSelection cannot auto-restore the
@@ -8349,6 +8571,38 @@ function applyWorkspacePreset(preset: "columns" | "stack" | "grid") {
       break;
   }
 
+  ui.workspaceFocusMode = false;
+  ui.workspacePreFocusLayout = null;
+  renderDetail();
+}
+
+function toggleWorkspaceFocusMode() {
+  if (ui.selection.type !== "session") {
+    return;
+  }
+
+  if (ui.workspaceFocusMode) {
+    // Restore pre-focus layout
+    if (ui.workspacePreFocusLayout) {
+      setStoredSessionWorkspaceLayout(ui.workspacePreFocusLayout);
+    }
+    ui.workspaceFocusMode = false;
+    ui.workspacePreFocusLayout = null;
+    renderDetail();
+    return;
+  }
+
+  const sessionIds = workspaceVisibleSessionIds();
+  if (sessionIds.length <= 1) {
+    return;
+  }
+
+  // Save current layout before focusing
+  ui.workspacePreFocusLayout = workspaceLayoutIndex.normalized;
+  ui.workspaceFocusMode = true;
+
+  // Show only the active session
+  setStoredSessionWorkspaceLayout(createWorkspaceLeaf(ui.selection.id));
   renderDetail();
 }
 
@@ -8382,6 +8636,14 @@ async function refreshPortStatus() {
   if (ui.selection.type === "status") {
     renderPortStatusDetail();
   }
+}
+
+
+function currentActiveSession(): SessionSummary | null {
+  if (ui.selection.type !== "session") {
+    return null;
+  }
+  return sessionById(ui.selection.id);
 }
 
 function syncPortStatusPolling() {
@@ -12773,6 +13035,16 @@ function updateSessionDropUi() {
       label.textContent = "";
     }
   }
+
+  // Highlight target tab during drag
+  const tabs = detailElement.querySelectorAll(".ws-tab");
+  for (const tab of tabs) {
+    const sessionId = (tab as HTMLElement).dataset.sessionId;
+    tab.classList.toggle(
+      "ws-tab-drop-target",
+      !!(sessionId && sessionId === ui.dragTargetSessionId && ui.dragTargetZone)
+    );
+  }
 }
 
 function workspaceDropLabel(
@@ -13456,7 +13728,13 @@ function toggleSidebarProjectDrawer(repoId) {
     return;
   }
 
+  const wasExpanded = !!expandedSidebarRepo();
   ui.sidebarExpandedRepoId = ui.sidebarExpandedRepoId === repoId ? null : repoId;
+  const isExpanded = !!expandedSidebarRepo();
+  // Suppress terminal fits when the sidebar width changes between compact and expanded widths.
+  if (wasExpanded !== isExpanded) {
+    suppressTerminalFitsDuring(180);
+  }
   renderSidebar();
 }
 
@@ -13470,6 +13748,7 @@ function collapseSidebarProjectDrawer(repoId = null) {
   }
 
   ui.sidebarExpandedRepoId = null;
+  suppressTerminalFitsDuring(180);
   renderSidebar();
 }
 
@@ -13483,6 +13762,7 @@ function collapseSidebarChrome() {
   }
 
   ui.sidebarCollapsed = true;
+  suppressTerminalFitsDuring(180);
   syncSectionFocusUi({ preserveCurrentFocus: true });
 }
 
@@ -13492,6 +13772,7 @@ function expandSidebarChrome() {
   }
 
   ui.sidebarCollapsed = false;
+  suppressTerminalFitsDuring(180);
   syncSectionFocusUi({ preserveCurrentFocus: true });
 }
 
@@ -13947,6 +14228,7 @@ type SessionChromeIconKind =
   | "columns"
   | "stack"
   | "grid"
+  | "focus"
   | "plus"
   | "more"
   | "rename"
@@ -13976,6 +14258,13 @@ function renderSessionChromeIcon(kind: SessionChromeIconKind): string {
           <rect x="9" y="2.5" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
           <rect x="2.25" y="9.25" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
           <rect x="9" y="9.25" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        </svg>
+      `;
+    case "focus":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="3" y="3" width="10" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <rect x="5.5" y="5.5" width="5" height="5" rx="0.75" fill="currentColor" opacity="0.5"/>
         </svg>
       `;
     case "plus":
@@ -14633,6 +14922,14 @@ function markTerminalLineKillHandled(event) {
 
 function terminalLineKillHandled(event) {
   return !!(event as KeyboardEvent & { __claudeWorkspaceTerminalLineKillHandled?: boolean }).__claudeWorkspaceTerminalLineKillHandled;
+}
+
+function markTerminalPinHandled(event) {
+  (event as KeyboardEvent & { __claudeWorkspaceTerminalPinHandled?: boolean }).__claudeWorkspaceTerminalPinHandled = true;
+}
+
+function terminalPinHandled(event) {
+  return !!(event as KeyboardEvent & { __claudeWorkspaceTerminalPinHandled?: boolean }).__claudeWorkspaceTerminalPinHandled;
 }
 
 function isTerminalCopyShortcut(event) {

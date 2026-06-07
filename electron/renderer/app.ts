@@ -3785,8 +3785,13 @@ function mountSessionWorkspaceTerminals(layout: WorkspaceLayoutNode) {
       api.resizeSession(session.id, size.cols, size.rows);
     });
 
+    let resizeRaf = 0;
     const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
+      // Debounce via rAF so CSS transitions (e.g. context panel open/close)
+      // produce a single fit at the end rather than one per animation frame,
+      // which prevents terminal flickering across multiple panes.
+      cancelAnimationFrame(resizeRaf);
+      resizeRaf = requestAnimationFrame(() => fitAddon.fit());
     });
     resizeObserver.observe(shellElement);
 
@@ -7924,8 +7929,22 @@ function rerenderDialogInput(
 }
 
 async function handleFocusOut(event: FocusEvent) {
-  const target = event.target as HTMLInputElement | null;
-  if (target?.dataset.sessionRenameInput !== "true") {
+  const target = event.target as HTMLElement | null;
+
+  // When focus leaves the context panel, refresh it so any skipped DOM
+  // updates (deferred while the panel was focused) get applied.
+  if (target?.closest(".context-panel") && !(event.relatedTarget as HTMLElement | null)?.closest(".context-panel")) {
+    const session = currentActiveSession();
+    if (session) {
+      const panel = document.getElementById("context-panel");
+      if (panel) {
+        panel.removeAttribute("data-sig");
+      }
+      updateContextPanel(session);
+    }
+  }
+
+  if (!(target instanceof HTMLInputElement) || target.dataset.sessionRenameInput !== "true") {
     return;
   }
 
@@ -8520,6 +8539,15 @@ function updateContextPanel(session: SessionSummary | null) {
 
   const sig = `${session.id}|${pins.length}|${pins.map((p) => `${p.id}:${p.checked}`).join(",")}|${notes.length}|${branch}|${worktreeInfo}`;
   if (panel.dataset.sig === sig) {
+    return;
+  }
+
+  // Don't rebuild the DOM while the user is interacting with the panel (e.g.
+  // typing in the notes textarea). The rebuild would destroy the active element
+  // and lose cursor position / in-progress text. Update the signature so we
+  // don't re-check stale state once the user blurs.
+  if (document.activeElement?.closest(".context-panel")) {
+    panel.dataset.sig = sig;
     return;
   }
   panel.dataset.sig = sig;
@@ -13667,7 +13695,11 @@ function syncSectionFocusUi(options: { preserveCurrentFocus?: boolean } = {}) {
   }
 
   // Keep inline session renames stable while live session updates refresh the chrome.
-  if (isAnyDialogOpen() || options.preserveCurrentFocus || ui.renamingSessionId) {
+  // Also preserve focus when the user is interacting with the context panel (e.g. typing
+  // in the notes textarea) — otherwise periodic state broadcasts steal focus back to the
+  // terminal/main section.
+  const activeInContextPanel = document.activeElement?.closest(".context-panel") !== null;
+  if (isAnyDialogOpen() || options.preserveCurrentFocus || ui.renamingSessionId || activeInContextPanel) {
     return;
   }
 

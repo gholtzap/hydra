@@ -6869,6 +6869,9 @@ async function handleClick(event) {
     case "add-pinned-message":
       await addPinnedMessage(target.dataset.sessionId);
       break;
+    case "toggle-pinned-message":
+      await togglePinnedMessage(target.dataset.sessionId, target.dataset.pinId);
+      break;
     case "jump-pinned-message":
       if (target.dataset.sessionId && target.dataset.pinId) {
         event.preventDefault();
@@ -8785,20 +8788,17 @@ function renderContextChangeNodes(session: SessionSummary): HTMLElement[] {
   const metadata = session.parallelWorktree;
   const files = metadata?.changedFiles || [];
   const stats = worktreeChangeStats(session);
-  const isTracked = !!metadata && metadata.mode !== "disabled";
   const hasChanges = stats.files > 0 || stats.additions > 0 || stats.deletions > 0 || files.length > 0;
 
-  const summary = !isTracked
-    ? dom("span", { className: "context-env-value" }, "Not tracked")
-    : hasChanges
-      ? dom(
-          "span",
-          { className: "context-env-value context-change-summary" },
-          `${stats.files || files.length} file${(stats.files || files.length) === 1 ? "" : "s"}`,
-          dom("span", { className: "context-change-additions" }, `+${stats.additions}`),
-          dom("span", { className: "context-change-deletions" }, `-${stats.deletions}`)
-        )
-      : dom("span", { className: "context-env-value" }, "None");
+  const summary = hasChanges
+    ? dom(
+        "span",
+        { className: "context-env-value context-change-summary" },
+        `${stats.files || files.length} file${(stats.files || files.length) === 1 ? "" : "s"}`,
+        dom("span", { className: "context-change-additions" }, `+${stats.additions}`),
+        dom("span", { className: "context-change-deletions" }, `-${stats.deletions}`)
+      )
+    : dom("span", { className: "context-env-value" }, "None");
 
   const nodes = [
     dom(
@@ -8865,11 +8865,12 @@ function updateContextPanel(session: SessionSummary | null) {
     return;
   }
 
-  // Don't rebuild the DOM while the user is interacting with the panel (e.g.
-  // typing in the notes textarea). The rebuild would destroy the active element
-  // and lose cursor position / in-progress text. Update the signature so we
-  // don't re-check stale state once the user blurs.
-  if (document.activeElement?.closest(".context-panel")) {
+  // Don't rebuild the DOM while the user is typing in the notes textarea.
+  // The rebuild would destroy the active element and lose cursor position /
+  // in-progress text. Only skip for textareas — buttons and checkboxes should
+  // allow immediate re-renders.
+  const activeInPanel = document.activeElement?.closest(".context-panel");
+  if (activeInPanel && document.activeElement instanceof HTMLTextAreaElement) {
     panel.dataset.sig = sig;
     return;
   }
@@ -9082,6 +9083,9 @@ async function addPinnedMessage(sessionId: string | null | undefined) {
     createdAt: new Date().toISOString()
   };
   const nextPins = [...(session.pinnedMessages || []), pin];
+  session.pinnedMessages = nextPins;
+  updateContextPanel(session);
+  scrollPinListToBottom(pin.id);
   await api.updateSessionOrganization(sessionId, { pinnedMessages: nextPins });
 }
 
@@ -9094,6 +9098,8 @@ async function removePinnedMessage(sessionId: string | null | undefined, pinId: 
     return;
   }
   const nextPins = (session.pinnedMessages || []).filter((p) => p.id !== pinId);
+  session.pinnedMessages = nextPins;
+  updateContextPanel(session);
   await api.updateSessionOrganization(sessionId, { pinnedMessages: nextPins });
 }
 
@@ -9108,6 +9114,8 @@ async function togglePinnedMessage(sessionId: string | null | undefined, pinId: 
   const nextPins = (session.pinnedMessages || []).map((p) =>
     p.id === pinId ? { ...p, checked: !p.checked } : p
   );
+  session.pinnedMessages = nextPins;
+  updateContextPanel(session);
   await api.updateSessionOrganization(sessionId, { pinnedMessages: nextPins });
 }
 
@@ -9203,6 +9211,21 @@ function jumpToPinnedMessage(sessionId: string, pinId: string) {
     }
     terminalPinFlashSessionId = null;
   }, 1600);
+}
+
+function scrollPinListToBottom(pinId?: string) {
+  const list = document.querySelector(".context-pin-list");
+  if (!list) {
+    return;
+  }
+  if (pinId) {
+    const pinEl = list.querySelector(`[data-pin-id="${CSS.escape(pinId)}"]`);
+    if (pinEl) {
+      pinEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      return;
+    }
+  }
+  list.scrollTop = list.scrollHeight;
 }
 
 let contextNotesSaveTimer: ReturnType<typeof setTimeout> | null = null;

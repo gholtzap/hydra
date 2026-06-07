@@ -493,3 +493,21 @@
 **Fix:** (1) Added `activeInContextPanel` check to `syncSectionFocusUi()` — if `document.activeElement` is inside `.context-panel`, skip `focusCurrentSectionElement()`. (2) In `updateContextPanel()`, if `document.activeElement` is inside `.context-panel`, update the signature (to prevent stale re-checks) but skip the DOM rebuild. Added a `focusout` handler that clears the signature and re-runs `updateContextPanel()` when focus leaves the panel, ensuring deferred updates are applied. (3) Wrapped the `ResizeObserver` callback in `requestAnimationFrame` with cancellation — consecutive resize events coalesce into a single fit at the end of the frame, eliminating per-frame terminal reflows during the CSS transition.
 
 **Where:** `electron/renderer/app.ts` (`syncSectionFocusUi`, `updateContextPanel`, `handleFocusOut`, `mountSessionWorkspaceTerminals`).
+
+## Context panel: active-element guard too broad, blocking all interactive re-renders
+
+**Root cause:** `updateContextPanel()` had a guard at line 8872 that skipped DOM rebuilds whenever `document.activeElement` was inside `.context-panel`. This was designed to preserve cursor position while typing in the notes textarea, but it also fired when clicking buttons or checkboxes inside the panel. When the user clicked the "+" button (add pin), a checkbox (toggle pin), or the "×" button (remove pin), the clicked element became `document.activeElement`. The immediate `updateContextPanel()` call detected focus inside the panel and skipped the rebuild, updating only the signature. The subsequent `onSessionUpdated` event from the IPC round-trip also called `updateContextPanel`, but now the signature already matched (updated in the skipped call), so it returned at the signature-equality check. Result: the panel NEVER re-rendered after any click interaction inside it.
+
+**Fix:** Narrowed the guard from `document.activeElement?.closest(".context-panel")` to `document.activeElement instanceof HTMLTextAreaElement` inside the panel. Only textarea focus (notes editing) skips the rebuild; buttons, checkboxes, and other interactive elements allow immediate re-renders.
+
+**Additionally:** (1) Added `toggle-pinned-message` to the click handler's switch/case — it was only handled in the `change` event handler, but `handleClick`'s `event.preventDefault()` on line 6640 prevented the checkbox from toggling, so the `change` event never fired. (2) Added optimistic local state updates: `addPinnedMessage`, `removePinnedMessage`, and `togglePinnedMessage` now mutate `session.pinnedMessages` in-place and call `updateContextPanel()` before the IPC round-trip, giving immediate visual feedback. (3) Added `scrollPinListToBottom()` to auto-scroll the pin list to show newly added pins.
+
+**Where:** `electron/renderer/app.ts` (`updateContextPanel`, `handleClick`, `addPinnedMessage`, `removePinnedMessage`, `togglePinnedMessage`, `scrollPinListToBottom`).
+
+## Right sidebar changes: "Not tracked" for non-worktree sessions
+
+**Root cause:** `refreshRepoParallelWorktreeState()` filtered `candidateSessions` to only `launchProfile === "agent"` AND `mode !== "disabled"`. Shell sessions, appLaunch sessions, and agent sessions without worktree enabled were excluded from change stat gathering entirely. The renderer's `renderContextChangeNodes()` then checked `isTracked = !!metadata && metadata.mode !== "disabled"` — any session with `mode === "disabled"` showed "Not tracked" instead of actual git diff stats.
+
+**Fix:** (1) Removed the `launchProfile === "agent"` and `mode !== "disabled"` filters from `candidateSessions` so all repo sessions get change stats. (2) For non-isolated sessions, default `targetPath` to `repo.path` instead of only for `mode === "shared"`. (3) Removed the `isTracked` gate in the renderer — always show change stats (additions/deletions) or "None".
+
+**Where:** `electron/main/main.ts` (`refreshRepoParallelWorktreeState`), `electron/renderer/app.ts` (`renderContextChangeNodes`).

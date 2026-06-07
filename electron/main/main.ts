@@ -3756,9 +3756,7 @@ class AppController {
     }
 
     this.flushQueuedSessionLaunch(sessionId);
-    if (session.launchProfile === "agent") {
-      this.scheduleParallelWorktreeRefresh(session.repoID);
-    }
+    this.scheduleParallelWorktreeRefresh(session.repoID);
   }
 
   scheduleParallelWorktreeRefresh(repoId: string): void {
@@ -3804,9 +3802,7 @@ class AppController {
     }
 
     const candidateSessions = this.state.sessions.filter((session) =>
-      session.repoID === repoId &&
-      session.launchProfile === "agent" &&
-      session.parallelWorktree.mode !== "disabled"
+      session.repoID === repoId
     );
     if (!candidateSessions.length) {
       if (changed) {
@@ -3824,9 +3820,9 @@ class AppController {
     const changedFilePairs = await Promise.all(
       candidateSessions.map(async (session) => {
         const targetPath =
-          session.parallelWorktree.mode === "shared"
-            ? repo.path
-            : session.parallelWorktree.worktreePath;
+          session.parallelWorktree.mode === "isolated"
+            ? session.parallelWorktree.worktreePath
+            : repo.path;
         const baseBranch = session.parallelWorktree.baseBranch || this.effectiveRepoParallelWorktreeSettings(repo).baseBranch;
         if (!targetPath || !baseBranch) {
           return [session.id, emptyChangeSummary()] as const;

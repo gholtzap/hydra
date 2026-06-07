@@ -7863,12 +7863,16 @@ async function handleGlobalShortcut(event) {
   if (isAnyDialogOpen()) {
     return false;
   }
-  if (isEditableTarget(event.target as HTMLElement | null)) {
-    return false;
-  }
   const kb = getKeybindings();
   if (matchesAccelerator(event, kb["pin-terminal-selection"])) {
+    if (terminalPinHandled(event)) {
+      return true;
+    }
+    if (isEditableTarget(event.target as HTMLElement | null) && !isTerminalKeyboardTarget(event.target)) {
+      return false;
+    }
     event.preventDefault();
+    markTerminalPinHandled(event);
     await pinActiveTerminalSelection();
     return true;
   }
@@ -8843,17 +8847,17 @@ function getActiveTerminalSelection(): { text: string; line: number } | null {
   return { text: trimmed, line };
 }
 
-async function pinActiveTerminalSelection() {
+async function pinActiveTerminalSelection(): Promise<boolean> {
   if (isAnyDialogOpen()) {
-    return;
+    return false;
   }
   const session = currentActiveSession();
   if (!session) {
-    return;
+    return false;
   }
   const selection = getActiveTerminalSelection();
   if (!selection) {
-    return;
+    return false;
   }
   const pin: PinnedMessage = {
     id: crypto.randomUUID(),
@@ -8864,6 +8868,12 @@ async function pinActiveTerminalSelection() {
   };
   const nextPins = [...(session.pinnedMessages || []), pin];
   await api.updateSessionOrganization(session.id, { pinnedMessages: nextPins });
+  if (!ui.contextPanelOpen) {
+    ui.contextPanelOpen = true;
+  }
+  updateContextPanel(session);
+  updateSessionWorkspaceToolbar();
+  return true;
 }
 
 let terminalPinFlashTimer: ReturnType<typeof setTimeout> | null = null;
@@ -14823,6 +14833,15 @@ function handleTerminalCustomKeyEvent(event) {
     return true;
   }
 
+  const kb = getKeybindings();
+  if (matchesAccelerator(event, kb["pin-terminal-selection"])) {
+    if (!terminalPinHandled(event)) {
+      markTerminalPinHandled(event);
+      void pinActiveTerminalSelection();
+    }
+    return false;
+  }
+
   if (isTerminalLineKillShortcut(event)) {
     if (terminalLineKillHandled(event)) {
       return false;
@@ -15191,6 +15210,14 @@ function markTerminalLineKillHandled(event) {
 
 function terminalLineKillHandled(event) {
   return !!(event as KeyboardEvent & { __claudeWorkspaceTerminalLineKillHandled?: boolean }).__claudeWorkspaceTerminalLineKillHandled;
+}
+
+function markTerminalPinHandled(event) {
+  (event as KeyboardEvent & { __claudeWorkspaceTerminalPinHandled?: boolean }).__claudeWorkspaceTerminalPinHandled = true;
+}
+
+function terminalPinHandled(event) {
+  return !!(event as KeyboardEvent & { __claudeWorkspaceTerminalPinHandled?: boolean }).__claudeWorkspaceTerminalPinHandled;
 }
 
 function isTerminalCopyShortcut(event) {

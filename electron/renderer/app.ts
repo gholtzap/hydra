@@ -388,7 +388,6 @@ type UiState = {
   voiceInstallLog: string[];
   voiceLiveUserText: string;
   voiceLiveBotText: string;
-  contextPanelOpen: boolean;
   workspaceFocusMode: boolean;
   workspacePreFocusLayout: WorkspaceLayoutNode | null;
 };
@@ -505,7 +504,6 @@ const ui: UiState = {
   voiceInstallLog: [] as string[],
   voiceLiveUserText: "",
   voiceLiveBotText: "",
-  contextPanelOpen: false,
   workspaceFocusMode: false,
   workspacePreFocusLayout: null as WorkspaceLayoutNode | null
 };
@@ -1322,7 +1320,6 @@ api.onSessionUpdated((payload) => {
 
   if (ui.selection.type === "session" && isSessionVisible(session.id)) {
     updateSessionWorkspaceToolbar();
-    updateContextPanel(session);
     updateSessionPane(session);
     syncSessionTerminalLiveState(session);
   } else if (ui.selection.type !== "session") {
@@ -2842,21 +2839,16 @@ function renderSessionDetail(session) {
     replaceDomChildren(
       detailElement,
       dom(
-        "div",
-        { className: "session-detail-with-context" },
+        "section",
+        { className: "session-workspace-detail" },
+        dom("div", { attrs: { id: "session-workspace-toolbar" } }),
         dom(
-          "section",
-          { className: "session-workspace-detail" },
-          dom("div", { attrs: { id: "session-workspace-toolbar" } }),
-          dom(
-            "div",
-            { className: "session-workspace-canvas", attrs: { id: "session-workspace-canvas" } },
-            layout
-              ? renderSessionWorkspaceLayoutNode(layout)
-              : emptyStateElement("Drag a session here to start a workspace layout.")
-          )
-        ),
-        dom("aside", { className: "context-panel", attrs: { id: "context-panel" } })
+          "div",
+          { className: "session-workspace-canvas", attrs: { id: "session-workspace-canvas" } },
+          layout
+            ? renderSessionWorkspaceLayoutNode(layout)
+            : emptyStateElement("Drag a session here to start a workspace layout.")
+        )
       )
     );
     ui.workspaceStructureSignature = signature;
@@ -2866,7 +2858,6 @@ function renderSessionDetail(session) {
   }
 
   updateSessionWorkspaceToolbar();
-  updateContextPanel(session);
   updateAllSessionPanes();
   updateSessionDropUi();
   syncSectionFocusUi();
@@ -3030,7 +3021,7 @@ function updateSessionWorkspaceToolbar() {
     const s = sessionById(id);
     return s ? `${s.id}:${s.title}:${s.status}:${s.tagColor || ""}` : id;
   });
-  const sig = `tabs|${session.id}|${tabSigs.join(",")}|${visibleSessionCount}|${repo?.id}|${ui.contextPanelOpen}|${ui.workspaceFocusMode}`;
+  const sig = `tabs|${session.id}|${tabSigs.join(",")}|${visibleSessionCount}|${repo?.id}|${ui.workspaceFocusMode}`;
   if (toolbar.dataset.sig === sig) {
     return;
   }
@@ -3147,19 +3138,6 @@ function updateSessionWorkspaceToolbar() {
             },
             renderSessionChromeIconElement("focus")
           )
-        ),
-        dom(
-          "button",
-          {
-            className: classNames("ws-action-btn ws-action-btn-icon", ui.contextPanelOpen ? "ws-action-btn-active" : undefined),
-            attrs: {
-              "data-action": "toggle-context-panel",
-              "aria-label": "Toggle context panel",
-              title: "Context panel",
-              type: "button"
-            }
-          },
-          renderSessionChromeIconElement("context-panel")
         ),
         dom(
           "button",
@@ -6864,23 +6842,6 @@ async function handleClick(event) {
       await toggleSessionPin(target.dataset.sessionId);
       break;
     case "toggle-context-panel":
-      toggleContextPanel();
-      break;
-    case "add-pinned-message":
-      await addPinnedMessage(target.dataset.sessionId);
-      break;
-    case "toggle-pinned-message":
-      await togglePinnedMessage(target.dataset.sessionId, target.dataset.pinId);
-      break;
-    case "jump-pinned-message":
-      if (target.dataset.sessionId && target.dataset.pinId) {
-        event.preventDefault();
-        event.stopPropagation();
-        jumpToPinnedMessage(target.dataset.sessionId, target.dataset.pinId);
-      }
-      return;
-    case "remove-pinned-message":
-      await removePinnedMessage(target.dataset.sessionId, target.dataset.pinId);
       break;
     case "import-session-icon":
       await importSessionIcon(target.dataset.sessionId);
@@ -7977,23 +7938,7 @@ async function handleAppShortcut(event) {
   return false;
 }
 
-async function handleGlobalShortcut(event) {
-  if (isAnyDialogOpen()) {
-    return false;
-  }
-  const kb = getKeybindings();
-  if (matchesAccelerator(event, kb["pin-terminal-selection"])) {
-    if (terminalPinHandled(event)) {
-      return true;
-    }
-    if (isEditableTarget(event.target as HTMLElement | null) && !isTerminalKeyboardTarget(event.target)) {
-      return false;
-    }
-    event.preventDefault();
-    markTerminalPinHandled(event);
-    await pinActiveTerminalSelection();
-    return true;
-  }
+async function handleGlobalShortcut(_event) {
   return false;
 }
 
@@ -8008,10 +7953,6 @@ async function handleInput(event) {
     return;
   }
 
-  if (target.id === "context-notes-input" && target instanceof HTMLTextAreaElement) {
-    handleContextNotesInput(target);
-    return;
-  }
 
   switch (target.id) {
     case "quick-switcher-query":
@@ -8080,19 +8021,6 @@ function rerenderDialogInput(
 async function handleFocusOut(event: FocusEvent) {
   const target = event.target as HTMLElement | null;
 
-  // When focus leaves the context panel, refresh it so any skipped DOM
-  // updates (deferred while the panel was focused) get applied.
-  if (target?.closest(".context-panel") && !(event.relatedTarget as HTMLElement | null)?.closest(".context-panel")) {
-    const session = currentActiveSession();
-    if (session) {
-      const panel = document.getElementById("context-panel");
-      if (panel) {
-        panel.removeAttribute("data-sig");
-      }
-      updateContextPanel(session);
-    }
-  }
-
   if (!(target instanceof HTMLInputElement) || target.dataset.sessionRenameInput !== "true") {
     return;
   }
@@ -8154,11 +8082,6 @@ async function handleChange(event) {
     return;
   }
 
-  // Handle pinned message checkbox toggle
-  if (target.dataset.action === "toggle-pinned-message" && target instanceof HTMLInputElement) {
-    await togglePinnedMessage(target.dataset.sessionId, target.dataset.pinId);
-    return;
-  }
 
   if (target.id === "pref-theme-appearance") {
     const themePreferences = themePreferencesFromState();
@@ -8715,537 +8638,12 @@ async function refreshPortStatus() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Context Panel — pinned messages + notes
-// ---------------------------------------------------------------------------
-
-function worktreeChangeStats(session: SessionSummary): WorktreeChangeStats {
-  const files = session.parallelWorktree?.changedFiles || [];
-  const stats = session.parallelWorktree?.changeStats;
-  return {
-    files: stats?.files || files.length,
-    additions: stats?.additions || 0,
-    deletions: stats?.deletions || 0
-  };
-}
-
-function contextPanelSignature(session: SessionSummary, pins: PinnedMessage[], notes: string) {
-  const metadata = session.parallelWorktree;
-  const stats = worktreeChangeStats(session);
-  const pinSignature = pins
-    .map((pin) => `${pin.id}:${pin.checked ? "1" : "0"}:${pin.line ?? "-"}:${hashSeed(pin.text)}`)
-    .join(",");
-  const changedFiles = metadata?.changedFiles || [];
-
-  return [
-    session.id,
-    pinSignature,
-    `${notes.length}:${hashSeed(notes)}`,
-    metadata?.mode || "",
-    metadata?.lifecycleState || "",
-    metadata?.worktreePath || "",
-    metadata?.branch || "",
-    metadata?.baseBranch || "",
-    metadata?.landingBranch || "",
-    metadata?.lastError || "",
-    changedFiles.join("\0"),
-    `${stats.files}:${stats.additions}:${stats.deletions}`
-  ].join("|");
-}
-
-function branchLeafLabel(branch: string | null | undefined) {
-  const normalized = String(branch || "").trim();
-  if (!normalized) {
-    return "";
-  }
-  const parts = normalized.split("/").filter(Boolean);
-  return parts[parts.length - 1] || normalized;
-}
-
-function contextWorktreeLabel(session: SessionSummary, repo: RepoSnapshot | null | undefined) {
-  const metadata = session.parallelWorktree;
-  if (!metadata || metadata.mode === "disabled") {
-    return {
-      label: repo?.name || "Repo checkout",
-      title: repo?.path || ""
-    };
-  }
-
-  const pathValue = metadata.worktreePath || (metadata.mode === "shared" ? repo?.path : null);
-  const label =
-    (pathValue ? pathLabel(pathValue) : "") ||
-    branchLeafLabel(metadata.branch) ||
-    (metadata.mode === "shared" ? repo?.name : "") ||
-    parallelWorktreeStateLabel(sessionParallelWorktreeDisplayState(session));
-
-  return {
-    label: label || "Worktree",
-    title: pathValue || metadata.branch || repo?.path || ""
-  };
-}
-
-function renderContextChangeNodes(session: SessionSummary): HTMLElement[] {
-  const metadata = session.parallelWorktree;
-  const files = metadata?.changedFiles || [];
-  const stats = worktreeChangeStats(session);
-  const hasChanges = stats.files > 0 || stats.additions > 0 || stats.deletions > 0 || files.length > 0;
-
-  const summary = hasChanges
-    ? dom(
-        "span",
-        { className: "context-env-value context-change-summary" },
-        `${stats.files || files.length} file${(stats.files || files.length) === 1 ? "" : "s"}`,
-        dom("span", { className: "context-change-additions" }, `+${stats.additions}`),
-        dom("span", { className: "context-change-deletions" }, `-${stats.deletions}`)
-      )
-    : dom("span", { className: "context-env-value" }, "None");
-
-  const nodes = [
-    dom(
-      "div",
-      { className: "context-env-row" },
-      dom("span", { className: "context-env-key" }, "Changes"),
-      summary
-    )
-  ];
-
-  if (files.length) {
-    nodes.push(
-      dom(
-        "div",
-        { className: "context-change-file-list" },
-        ...files.slice(0, 6).map((filePath) =>
-          dom("span", { className: "mono context-change-file", attrs: { title: filePath } }, filePath)
-        ),
-        files.length > 6 ? dom("span", { className: "context-change-file-more" }, `+${files.length - 6} more`) : null
-      )
-    );
-  }
-
-  return nodes;
-}
-
-function renderContextNotesPreview(markdown: string, repoId: string | null | undefined) {
-  if (!markdown.trim()) {
-    return `<p class="muted">No notes yet.</p>`;
-  }
-
-  return renderMarkdownDocument(markdown, { kind: "plain", repoId: repoId || null });
-}
-
-function updateContextPanel(session: SessionSummary | null) {
-  const panel = document.getElementById("context-panel");
-  if (!panel) {
-    return;
-  }
-
-  const wrapper = panel.closest(".session-detail-with-context") as HTMLElement | null;
-  if (wrapper) {
-    const wasVisible = wrapper.classList.contains("context-panel-visible");
-    wrapper.classList.toggle("context-panel-visible", ui.contextPanelOpen);
-    if (wasVisible !== ui.contextPanelOpen) {
-      suppressTerminalFitsDuring(250);
-    }
-  }
-
-  if (!ui.contextPanelOpen || !session) {
-    panel.removeAttribute("data-sig");
-    replaceDomChildren(panel);
-    return;
-  }
-
-  const repo = repoById(session.repoID);
-  const pins = session.pinnedMessages || [];
-  const notes = session.notes || "";
-  const worktreeLabel = contextWorktreeLabel(session, repo);
-  const branch = session.parallelWorktree?.branch || session.parallelWorktree?.baseBranch || "";
-
-  const sig = contextPanelSignature(session, pins, notes);
-  if (panel.dataset.sig === sig) {
-    return;
-  }
-
-  // Don't rebuild the DOM while the user is typing in the notes textarea.
-  // The rebuild would destroy the active element and lose cursor position /
-  // in-progress text. Only skip for textareas — buttons and checkboxes should
-  // allow immediate re-renders.
-  const activeInPanel = document.activeElement?.closest(".context-panel");
-  if (activeInPanel && document.activeElement instanceof HTMLTextAreaElement) {
-    panel.dataset.sig = sig;
-    return;
-  }
-  panel.dataset.sig = sig;
-
-  replaceDomChildren(
-    panel,
-    dom(
-      "div",
-      { className: "context-panel-inner" },
-      // ── Environment section ──
-      dom(
-        "div",
-        { className: "context-section" },
-        dom("div", { className: "context-section-label" }, "Environment"),
-        dom(
-          "div",
-          { className: "context-env-list" },
-          ...renderContextChangeNodes(session),
-          dom(
-            "div",
-            { className: "context-env-row" },
-            dom("span", { className: "context-env-key" }, "Worktree"),
-            dom(
-              "span",
-              { className: "context-env-value", attrs: { title: worktreeLabel.title } },
-              worktreeLabel.label
-            )
-          ),
-          branch
-            ? dom(
-                "div",
-                { className: "context-env-row" },
-                dom("span", { className: "context-env-key" }, "Branch"),
-                dom("span", { className: "context-env-value context-env-branch" }, branch)
-              )
-            : null,
-          repo
-            ? dom(
-                "div",
-                { className: "context-env-row" },
-                dom("span", { className: "context-env-key" }, "Folder"),
-                dom(
-                  "span",
-                  { className: "context-env-value", attrs: { title: repo.path } },
-                  repo.name
-                )
-              )
-            : null
-        )
-      ),
-      // ── Pinned Messages section ──
-      dom(
-        "div",
-        { className: "context-section" },
-        dom(
-          "div",
-          { className: "context-section-header" },
-          dom("div", { className: "context-section-label" }, "Pinned Messages"),
-          dom(
-            "button",
-            {
-              className: "context-add-btn",
-              attrs: {
-                type: "button",
-                "data-action": "add-pinned-message",
-                "data-session-id": session.id,
-                "aria-label": "Add pinned message",
-                title: "Pin a message"
-              }
-            },
-            "+"
-          )
-        ),
-        pins.length > 0
-          ? dom(
-              "div",
-              { className: "context-pin-list" },
-              ...pins.map((pin) => {
-                const isJumpable = typeof pin.line === "number";
-                return dom(
-                  "label",
-                  {
-                    className: classNames(
-                      "context-pin-item",
-                      pin.checked ? "context-pin-checked" : undefined,
-                      isJumpable ? "context-pin-jumpable" : undefined
-                    ),
-                    attrs: { "data-pin-id": pin.id }
-                  },
-                  dom("input", {
-                    className: "context-pin-checkbox",
-                    attrs: {
-                      type: "checkbox",
-                      "data-action": "toggle-pinned-message",
-                      "data-session-id": session.id,
-                      "data-pin-id": pin.id,
-                      ...(pin.checked ? { checked: true } : {})
-                    }
-                  }),
-                  dom(
-                    "span",
-                    {
-                      className: "context-pin-text",
-                      attrs: isJumpable
-                        ? {
-                            role: "button",
-                            tabindex: "0",
-                            "data-action": "jump-pinned-message",
-                            "data-session-id": session.id,
-                            "data-pin-id": pin.id,
-                            title: "Jump to source line"
-                          }
-                        : undefined
-                    },
-                    pin.text
-                  ),
-                  isJumpable
-                    ? dom(
-                        "span",
-                        {
-                          className: "context-pin-jump-icon",
-                          attrs: {
-                            "data-action": "jump-pinned-message",
-                            "data-session-id": session.id,
-                            "data-pin-id": pin.id,
-                            "aria-hidden": "true",
-                            title: "Jump to source line"
-                          }
-                        },
-                        "\u2197"
-                      )
-                    : null,
-                  dom(
-                    "button",
-                    {
-                      className: "context-pin-remove",
-                      attrs: {
-                        type: "button",
-                        "data-action": "remove-pinned-message",
-                        "data-session-id": session.id,
-                        "data-pin-id": pin.id,
-                        "aria-label": "Remove",
-                        title: "Remove"
-                      }
-                    },
-                    "\u00d7"
-                  )
-                );
-              })
-            )
-          : dom("div", { className: "context-pin-empty" }, "No pinned messages yet.")
-      ),
-      // ── Notes section ──
-      dom(
-        "div",
-        { className: "context-section context-section-notes" },
-        dom("div", { className: "context-section-label" }, "Notes"),
-        trustedElement<HTMLDivElement>(
-          `<div id="context-notes-preview" class="context-notes-preview markdown-body">${renderContextNotesPreview(notes, session.repoID)}</div>`
-        ),
-        dom("textarea", {
-          className: "context-notes-textarea",
-          value: notes,
-          attrs: {
-            id: "context-notes-input",
-            placeholder: "Type here",
-            "data-session-id": session.id,
-            rows: "5",
-            spellcheck: "false"
-          }
-        })
-      )
-    )
-  );
-}
-
-function toggleContextPanel() {
-  ui.contextPanelOpen = !ui.contextPanelOpen;
-  const session = currentActiveSession();
-  if (session) {
-    updateContextPanel(session);
-    updateSessionWorkspaceToolbar();
-  }
-}
 
 function currentActiveSession(): SessionSummary | null {
   if (ui.selection.type !== "session") {
     return null;
   }
   return sessionById(ui.selection.id);
-}
-
-async function addPinnedMessage(sessionId: string | null | undefined) {
-  if (!sessionId) {
-    return;
-  }
-  const session = sessionById(sessionId);
-  if (!session) {
-    return;
-  }
-  const text = window.prompt("Pin a message:");
-  if (!text || !text.trim()) {
-    return;
-  }
-  const pin: PinnedMessage = {
-    id: crypto.randomUUID(),
-    text: text.trim(),
-    checked: false,
-    createdAt: new Date().toISOString()
-  };
-  const nextPins = [...(session.pinnedMessages || []), pin];
-  session.pinnedMessages = nextPins;
-  updateContextPanel(session);
-  scrollPinListToBottom(pin.id);
-  await api.updateSessionOrganization(sessionId, { pinnedMessages: nextPins });
-}
-
-async function removePinnedMessage(sessionId: string | null | undefined, pinId: string | null | undefined) {
-  if (!sessionId || !pinId) {
-    return;
-  }
-  const session = sessionById(sessionId);
-  if (!session) {
-    return;
-  }
-  const nextPins = (session.pinnedMessages || []).filter((p) => p.id !== pinId);
-  session.pinnedMessages = nextPins;
-  updateContextPanel(session);
-  await api.updateSessionOrganization(sessionId, { pinnedMessages: nextPins });
-}
-
-async function togglePinnedMessage(sessionId: string | null | undefined, pinId: string | null | undefined) {
-  if (!sessionId || !pinId) {
-    return;
-  }
-  const session = sessionById(sessionId);
-  if (!session) {
-    return;
-  }
-  const nextPins = (session.pinnedMessages || []).map((p) =>
-    p.id === pinId ? { ...p, checked: !p.checked } : p
-  );
-  session.pinnedMessages = nextPins;
-  updateContextPanel(session);
-  await api.updateSessionOrganization(sessionId, { pinnedMessages: nextPins });
-}
-
-function getActiveTerminalSelection(): { text: string; line: number } | null {
-  const mount = activeTerminalMount();
-  if (!mount) {
-    return null;
-  }
-  const text = mount.terminal.getSelection?.() || "";
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const position = mount.terminal.getSelectionPosition?.();
-  const buffer = mount.terminal.buffer;
-  if (!position || !buffer) {
-    return { text: trimmed, line: -1 };
-  }
-  const startY = position.start.y;
-  const line = startY + buffer.active.viewportY;
-  return { text: trimmed, line };
-}
-
-async function pinActiveTerminalSelection(): Promise<boolean> {
-  if (isAnyDialogOpen()) {
-    return false;
-  }
-  const session = currentActiveSession();
-  if (!session) {
-    return false;
-  }
-  const selection = getActiveTerminalSelection();
-  if (!selection) {
-    return false;
-  }
-  const pin: PinnedMessage = {
-    id: crypto.randomUUID(),
-    text: selection.text,
-    checked: false,
-    createdAt: new Date().toISOString(),
-    line: selection.line >= 0 ? selection.line : undefined
-  };
-  const nextPins = [...(session.pinnedMessages || []), pin];
-  await api.updateSessionOrganization(session.id, { pinnedMessages: nextPins });
-  if (!ui.contextPanelOpen) {
-    ui.contextPanelOpen = true;
-  }
-  updateContextPanel(session);
-  updateSessionWorkspaceToolbar();
-  return true;
-}
-
-let terminalPinFlashTimer: ReturnType<typeof setTimeout> | null = null;
-let terminalPinFlashSessionId: string | null = null;
-
-function jumpToPinnedMessage(sessionId: string, pinId: string) {
-  const session = sessionById(sessionId);
-  const pin = session?.pinnedMessages?.find((p) => p.id === pinId);
-  if (!session || !pin || pin.line === undefined) {
-    return;
-  }
-  if (ui.selection.type !== "session" || ui.selection.id !== sessionId) {
-    void selectSession(sessionId, "terminal");
-  }
-  const mount = ui.terminalMounts.get(sessionId);
-  if (!mount) {
-    return;
-  }
-  if (typeof mount.terminal.scrollToLine === "function") {
-    mount.terminal.scrollToLine(pin.line);
-  }
-  const buffer = mount.terminal.buffer;
-  if (typeof mount.terminal.select === "function" && buffer) {
-    const lineText = buffer.active.getLine(pin.line)?.translateToString(true) ?? "";
-    const cols = mount.terminal.cols || 80;
-    const length = Math.max(0, Math.min(lineText.length, cols));
-    if (length > 0) {
-      mount.terminal.select(0, pin.line, length);
-    } else {
-      mount.terminal.select(0, pin.line, 1);
-    }
-  }
-  if (terminalPinFlashTimer !== null) {
-    clearTimeout(terminalPinFlashTimer);
-    terminalPinFlashTimer = null;
-  }
-  terminalPinFlashSessionId = sessionId;
-  terminalPinFlashTimer = setTimeout(() => {
-    terminalPinFlashTimer = null;
-    if (terminalPinFlashSessionId === sessionId) {
-      const live = ui.terminalMounts.get(sessionId);
-      live?.terminal.clearSelection?.();
-    }
-    terminalPinFlashSessionId = null;
-  }, 1600);
-}
-
-function scrollPinListToBottom(pinId?: string) {
-  const list = document.querySelector(".context-pin-list");
-  if (!list) {
-    return;
-  }
-  if (pinId) {
-    const pinEl = list.querySelector(`[data-pin-id="${CSS.escape(pinId)}"]`);
-    if (pinEl) {
-      pinEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      return;
-    }
-  }
-  list.scrollTop = list.scrollHeight;
-}
-
-let contextNotesSaveTimer: ReturnType<typeof setTimeout> | null = null;
-
-function handleContextNotesInput(target: HTMLTextAreaElement) {
-  const sessionId = target.dataset.sessionId;
-  if (!sessionId) {
-    return;
-  }
-  const preview = document.getElementById("context-notes-preview");
-  if (preview) {
-    preview.innerHTML = renderContextNotesPreview(target.value, sessionById(sessionId)?.repoID || null);
-  }
-  if (contextNotesSaveTimer !== null) {
-    clearTimeout(contextNotesSaveTimer);
-  }
-  contextNotesSaveTimer = setTimeout(() => {
-    contextNotesSaveTimer = null;
-    void api.updateSessionOrganization(sessionId, { notes: target.value });
-  }, 400);
 }
 
 function syncPortStatusPolling() {
@@ -14178,11 +13576,7 @@ function syncSectionFocusUi(options: { preserveCurrentFocus?: boolean } = {}) {
   }
 
   // Keep inline session renames stable while live session updates refresh the chrome.
-  // Also preserve focus when the user is interacting with the context panel (e.g. typing
-  // in the notes textarea) — otherwise periodic state broadcasts steal focus back to the
-  // terminal/main section.
-  const activeInContextPanel = document.activeElement?.closest(".context-panel") !== null;
-  if (isAnyDialogOpen() || options.preserveCurrentFocus || ui.renamingSessionId || activeInContextPanel) {
+  if (isAnyDialogOpen() || options.preserveCurrentFocus || ui.renamingSessionId) {
     return;
   }
 
@@ -14839,8 +14233,7 @@ type SessionChromeIconKind =
   | "more"
   | "rename"
   | "close"
-  | "toolbar"
-  | "context-panel";
+  | "toolbar";
 
 function renderSessionChromeIcon(kind: SessionChromeIconKind): string {
   switch (kind) {
@@ -14897,16 +14290,6 @@ function renderSessionChromeIcon(kind: SessionChromeIconKind): string {
       return `
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M4.25 4.25 11.75 11.75M11.75 4.25 4.25 11.75" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>
-        </svg>
-      `;
-    case "context-panel":
-      return `
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/>
-          <line x1="9.5" y1="2.5" x2="9.5" y2="13.5" stroke="currentColor" stroke-width="1.2"/>
-          <line x1="11" y1="5.5" x2="13" y2="5.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
-          <line x1="11" y1="7.5" x2="13" y2="7.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
-          <line x1="11" y1="9.5" x2="12.5" y2="9.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
         </svg>
       `;
     case "more":
@@ -15169,15 +14552,6 @@ async function handleTerminalLineKillShortcut(event) {
 function handleTerminalCustomKeyEvent(event) {
   if (event.type !== "keydown") {
     return true;
-  }
-
-  const kb = getKeybindings();
-  if (matchesAccelerator(event, kb["pin-terminal-selection"])) {
-    if (!terminalPinHandled(event)) {
-      markTerminalPinHandled(event);
-      void pinActiveTerminalSelection();
-    }
-    return false;
   }
 
   if (isTerminalLineKillShortcut(event)) {

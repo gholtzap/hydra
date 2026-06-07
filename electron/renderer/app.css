@@ -1831,6 +1831,7 @@ textarea {
   max-width: 200px;
   flex: 0 1 auto;
   border: 0;
+  border-radius: 0;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;

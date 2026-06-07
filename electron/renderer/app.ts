@@ -27,6 +27,7 @@ import type {
   TrackedPortStatus,
   VoiceCallState,
   VoiceConfig,
+  WorktreeChangeStats,
   WorktreeCloseAction,
   WikiContext,
   WikiTreeNode as SharedWikiTreeNode,
@@ -388,6 +389,8 @@ type UiState = {
   voiceLiveUserText: string;
   voiceLiveBotText: string;
   contextPanelOpen: boolean;
+  workspaceFocusMode: boolean;
+  workspacePreFocusLayout: WorkspaceLayoutNode | null;
 };
 
 const ui: UiState = {
@@ -502,7 +505,9 @@ const ui: UiState = {
   voiceInstallLog: [] as string[],
   voiceLiveUserText: "",
   voiceLiveBotText: "",
-  contextPanelOpen: false
+  contextPanelOpen: false,
+  workspaceFocusMode: false,
+  workspacePreFocusLayout: null as WorkspaceLayoutNode | null
 };
 
 const sidebarElement = document.getElementById("sidebar") as HTMLElement;
@@ -1317,6 +1322,7 @@ api.onSessionUpdated((payload) => {
 
   if (ui.selection.type === "session" && isSessionVisible(session.id)) {
     updateSessionWorkspaceToolbar();
+    updateContextPanel(session);
     updateSessionPane(session);
     syncSessionTerminalLiveState(session);
   } else if (ui.selection.type !== "session") {
@@ -3014,14 +3020,17 @@ function updateSessionWorkspaceToolbar() {
   }
 
   const repo = repoById(session.repoID);
-  const visibleIds = workspaceVisibleSessionIds();
+  // In focus mode, show tabs for all sessions from the pre-focus layout
+  const visibleIds = ui.workspaceFocusMode && ui.workspacePreFocusLayout
+    ? collectWorkspaceSessionIds(ui.workspacePreFocusLayout).filter((id) => sessionById(id))
+    : workspaceVisibleSessionIds();
   const visibleSessionCount = visibleIds.length;
 
   const tabSigs = visibleIds.map((id) => {
     const s = sessionById(id);
     return s ? `${s.id}:${s.title}:${s.status}:${s.tagColor || ""}` : id;
   });
-  const sig = `tabs|${session.id}|${tabSigs.join(",")}|${visibleSessionCount}|${repo?.id}|${ui.contextPanelOpen}`;
+  const sig = `tabs|${session.id}|${tabSigs.join(",")}|${visibleSessionCount}|${repo?.id}|${ui.contextPanelOpen}|${ui.workspaceFocusMode}`;
   if (toolbar.dataset.sig === sig) {
     return;
   }
@@ -3123,6 +3132,20 @@ function updateSessionWorkspaceToolbar() {
               }
             },
             renderSessionChromeIconElement("grid")
+          ),
+          dom(
+            "button",
+            {
+              className: classNames("ws-layout-btn", ui.workspaceFocusMode ? "ws-layout-btn-active" : undefined),
+              attrs: {
+                "data-action": "workspace-layout-focus",
+                "aria-label": "Focus on active session",
+                title: "Focus",
+                type: "button",
+                disabled: visibleSessionCount > 1 ? undefined : true
+              }
+            },
+            renderSessionChromeIconElement("focus")
           )
         ),
         dom(
@@ -6652,6 +6675,15 @@ async function handleClick(event) {
       break;
     }
     case "select-session-pane":
+      if (ui.workspaceFocusMode && target.dataset.sessionId) {
+        setStoredSessionWorkspaceLayout(createWorkspaceLeaf(target.dataset.sessionId));
+        ui.selection = { type: "session", id: target.dataset.sessionId };
+        ui.mainListSessionId = target.dataset.sessionId;
+        await api.setFocusedSession(target.dataset.sessionId);
+        renderSidebar();
+        renderDetail();
+        break;
+      }
       await activateVisibleSession(target.dataset.sessionId, "main");
       break;
     case "collapse-sidebar-project":
@@ -6925,6 +6957,9 @@ async function handleClick(event) {
       break;
     case "workspace-layout-grid":
       applyWorkspacePreset("grid");
+      break;
+    case "workspace-layout-focus":
+      toggleWorkspaceFocusMode();
       break;
     case "switch-session":
       quickSwitcherDialog.close();
@@ -7782,11 +7817,22 @@ async function handleKeyDown(event) {
   if (event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
     const digit = event.key >= "1" && event.key <= "9" ? parseInt(event.key, 10) : 0;
     if (digit > 0 && ui.selection.type === "session") {
-      const visibleIds = workspaceVisibleSessionIds();
+      const visibleIds = ui.workspaceFocusMode && ui.workspacePreFocusLayout
+        ? collectWorkspaceSessionIds(ui.workspacePreFocusLayout).filter((id) => sessionById(id))
+        : workspaceVisibleSessionIds();
       const targetIndex = digit - 1;
       if (targetIndex < visibleIds.length) {
         event.preventDefault();
-        await activateVisibleSession(visibleIds[targetIndex], "terminal");
+        if (ui.workspaceFocusMode) {
+          setStoredSessionWorkspaceLayout(createWorkspaceLeaf(visibleIds[targetIndex]));
+          ui.selection = { type: "session", id: visibleIds[targetIndex] };
+          ui.mainListSessionId = visibleIds[targetIndex];
+          await api.setFocusedSession(visibleIds[targetIndex]);
+          renderSidebar();
+          renderDetail();
+        } else {
+          await activateVisibleSession(visibleIds[targetIndex], "terminal");
+        }
         return;
       }
     }
@@ -8522,6 +8568,30 @@ async function activateVisibleSession(
 }
 
 async function hideSessionPane(sessionId) {
+  // In focus mode, also remove from the saved pre-focus layout
+  if (ui.workspaceFocusMode && ui.workspacePreFocusLayout) {
+    ui.workspacePreFocusLayout = removeSessionFromLayout(ui.workspacePreFocusLayout, sessionId);
+    const remaining = collectWorkspaceSessionIds(ui.workspacePreFocusLayout);
+    if (remaining.length <= 1) {
+      ui.workspaceFocusMode = false;
+      ui.workspacePreFocusLayout = null;
+    }
+    if (ui.selection.type === "session" && ui.selection.id === sessionId) {
+      const nextId = remaining.find((id) => id !== sessionId) || remaining[0];
+      if (nextId) {
+        setStoredSessionWorkspaceLayout(
+          ui.workspaceFocusMode ? createWorkspaceLeaf(nextId) : ui.workspacePreFocusLayout
+        );
+        ui.selection = { type: "session", id: nextId };
+        ui.mainListSessionId = nextId;
+        await api.setFocusedSession(nextId);
+        renderSidebar();
+        renderDetail();
+        return;
+      }
+    }
+  }
+
   if (ui.selection.type === "session" && ui.selection.id === sessionId) {
     const nextVisibleSessionId = nextVisibleSessionIdAfterRemoving(sessionId);
     // Move selection first so ensureValidSelection cannot auto-restore the
@@ -8575,6 +8645,38 @@ function applyWorkspacePreset(preset: "columns" | "stack" | "grid") {
       break;
   }
 
+  ui.workspaceFocusMode = false;
+  ui.workspacePreFocusLayout = null;
+  renderDetail();
+}
+
+function toggleWorkspaceFocusMode() {
+  if (ui.selection.type !== "session") {
+    return;
+  }
+
+  if (ui.workspaceFocusMode) {
+    // Restore pre-focus layout
+    if (ui.workspacePreFocusLayout) {
+      setStoredSessionWorkspaceLayout(ui.workspacePreFocusLayout);
+    }
+    ui.workspaceFocusMode = false;
+    ui.workspacePreFocusLayout = null;
+    renderDetail();
+    return;
+  }
+
+  const sessionIds = workspaceVisibleSessionIds();
+  if (sessionIds.length <= 1) {
+    return;
+  }
+
+  // Save current layout before focusing
+  ui.workspacePreFocusLayout = workspaceLayoutIndex.normalized;
+  ui.workspaceFocusMode = true;
+
+  // Show only the active session
+  setStoredSessionWorkspaceLayout(createWorkspaceLeaf(ui.selection.id));
   renderDetail();
 }
 
@@ -8614,6 +8716,123 @@ async function refreshPortStatus() {
 // Context Panel — pinned messages + notes
 // ---------------------------------------------------------------------------
 
+function worktreeChangeStats(session: SessionSummary): WorktreeChangeStats {
+  const files = session.parallelWorktree?.changedFiles || [];
+  const stats = session.parallelWorktree?.changeStats;
+  return {
+    files: stats?.files || files.length,
+    additions: stats?.additions || 0,
+    deletions: stats?.deletions || 0
+  };
+}
+
+function contextPanelSignature(session: SessionSummary, pins: PinnedMessage[], notes: string) {
+  const metadata = session.parallelWorktree;
+  const stats = worktreeChangeStats(session);
+  const pinSignature = pins
+    .map((pin) => `${pin.id}:${pin.checked ? "1" : "0"}:${pin.line ?? "-"}:${hashSeed(pin.text)}`)
+    .join(",");
+  const changedFiles = metadata?.changedFiles || [];
+
+  return [
+    session.id,
+    pinSignature,
+    `${notes.length}:${hashSeed(notes)}`,
+    metadata?.mode || "",
+    metadata?.lifecycleState || "",
+    metadata?.worktreePath || "",
+    metadata?.branch || "",
+    metadata?.baseBranch || "",
+    metadata?.landingBranch || "",
+    metadata?.lastError || "",
+    changedFiles.join("\0"),
+    `${stats.files}:${stats.additions}:${stats.deletions}`
+  ].join("|");
+}
+
+function branchLeafLabel(branch: string | null | undefined) {
+  const normalized = String(branch || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  const parts = normalized.split("/").filter(Boolean);
+  return parts[parts.length - 1] || normalized;
+}
+
+function contextWorktreeLabel(session: SessionSummary, repo: RepoSnapshot | null | undefined) {
+  const metadata = session.parallelWorktree;
+  if (!metadata || metadata.mode === "disabled") {
+    return {
+      label: repo?.name || "Repo checkout",
+      title: repo?.path || ""
+    };
+  }
+
+  const pathValue = metadata.worktreePath || (metadata.mode === "shared" ? repo?.path : null);
+  const label =
+    (pathValue ? pathLabel(pathValue) : "") ||
+    branchLeafLabel(metadata.branch) ||
+    (metadata.mode === "shared" ? repo?.name : "") ||
+    parallelWorktreeStateLabel(sessionParallelWorktreeDisplayState(session));
+
+  return {
+    label: label || "Worktree",
+    title: pathValue || metadata.branch || repo?.path || ""
+  };
+}
+
+function renderContextChangeNodes(session: SessionSummary): HTMLElement[] {
+  const metadata = session.parallelWorktree;
+  const files = metadata?.changedFiles || [];
+  const stats = worktreeChangeStats(session);
+  const isTracked = !!metadata && metadata.mode !== "disabled";
+  const hasChanges = stats.files > 0 || stats.additions > 0 || stats.deletions > 0 || files.length > 0;
+
+  const summary = !isTracked
+    ? dom("span", { className: "context-env-value" }, "Not tracked")
+    : hasChanges
+      ? dom(
+          "span",
+          { className: "context-env-value context-change-summary" },
+          `${stats.files || files.length} file${(stats.files || files.length) === 1 ? "" : "s"}`,
+          dom("span", { className: "context-change-additions" }, `+${stats.additions}`),
+          dom("span", { className: "context-change-deletions" }, `-${stats.deletions}`)
+        )
+      : dom("span", { className: "context-env-value" }, "None");
+
+  const nodes = [
+    dom(
+      "div",
+      { className: "context-env-row" },
+      dom("span", { className: "context-env-key" }, "Changes"),
+      summary
+    )
+  ];
+
+  if (files.length) {
+    nodes.push(
+      dom(
+        "div",
+        { className: "context-change-file-list" },
+        ...files.slice(0, 6).map((filePath) =>
+          dom("span", { className: "mono context-change-file", attrs: { title: filePath } }, filePath)
+        ),
+        files.length > 6 ? dom("span", { className: "context-change-file-more" }, `+${files.length - 6} more`) : null
+      )
+    );
+  }
+
+  return nodes;
+}
+
+function renderContextNotesPreview(markdown: string, repoId: string | null | undefined) {
+  if (!markdown.trim()) {
+    return `<p class="muted">No notes yet.</p>`;
+  }
+
+  return renderMarkdownDocument(markdown, { kind: "plain", repoId: repoId || null });
+}
+
 function updateContextPanel(session: SessionSummary | null) {
   const panel = document.getElementById("context-panel");
   if (!panel) {
@@ -8638,10 +8857,10 @@ function updateContextPanel(session: SessionSummary | null) {
   const repo = repoById(session.repoID);
   const pins = session.pinnedMessages || [];
   const notes = session.notes || "";
-  const worktreeInfo = parallelWorktreeSummary(session);
+  const worktreeLabel = contextWorktreeLabel(session, repo);
   const branch = session.parallelWorktree?.branch || session.parallelWorktree?.baseBranch || "";
 
-  const sig = `${session.id}|${pins.length}|${pins.map((p) => `${p.id}:${p.checked}:${p.line ?? "-"}`).join(",")}|${notes.length}|${branch}|${worktreeInfo}`;
+  const sig = contextPanelSignature(session, pins, notes);
   if (panel.dataset.sig === sig) {
     return;
   }
@@ -8669,26 +8888,15 @@ function updateContextPanel(session: SessionSummary | null) {
         dom(
           "div",
           { className: "context-env-list" },
-          dom(
-            "div",
-            { className: "context-env-row" },
-            dom("span", { className: "context-env-key" }, "Changes"),
-            dom(
-              "span",
-              { className: "context-env-value" },
-              session.parallelWorktree?.changedFiles?.length
-                ? `${session.parallelWorktree.changedFiles.length} file${session.parallelWorktree.changedFiles.length === 1 ? "" : "s"}`
-                : "None"
-            )
-          ),
+          ...renderContextChangeNodes(session),
           dom(
             "div",
             { className: "context-env-row" },
             dom("span", { className: "context-env-key" }, "Worktree"),
             dom(
               "span",
-              { className: "context-env-value" },
-              session.parallelWorktree?.mode === "disabled" ? "Shared" : "Isolated"
+              { className: "context-env-value", attrs: { title: worktreeLabel.title } },
+              worktreeLabel.label
             )
           ),
           branch
@@ -8820,6 +9028,9 @@ function updateContextPanel(session: SessionSummary | null) {
         "div",
         { className: "context-section context-section-notes" },
         dom("div", { className: "context-section-label" }, "Notes"),
+        trustedElement<HTMLDivElement>(
+          `<div id="context-notes-preview" class="context-notes-preview markdown-body">${renderContextNotesPreview(notes, session.repoID)}</div>`
+        ),
         dom("textarea", {
           className: "context-notes-textarea",
           value: notes,
@@ -9000,6 +9211,10 @@ function handleContextNotesInput(target: HTMLTextAreaElement) {
   const sessionId = target.dataset.sessionId;
   if (!sessionId) {
     return;
+  }
+  const preview = document.getElementById("context-notes-preview");
+  if (preview) {
+    preview.innerHTML = renderContextNotesPreview(target.value, sessionById(sessionId)?.repoID || null);
   }
   if (contextNotesSaveTimer !== null) {
     clearTimeout(contextNotesSaveTimer);
@@ -14596,6 +14811,7 @@ type SessionChromeIconKind =
   | "columns"
   | "stack"
   | "grid"
+  | "focus"
   | "plus"
   | "more"
   | "rename"
@@ -14626,6 +14842,13 @@ function renderSessionChromeIcon(kind: SessionChromeIconKind): string {
           <rect x="9" y="2.5" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
           <rect x="2.25" y="9.25" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
           <rect x="9" y="9.25" width="4.75" height="4.75" rx="1.15" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        </svg>
+      `;
+    case "focus":
+      return `
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="3" y="3" width="10" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <rect x="5.5" y="5.5" width="5" height="5" rx="0.75" fill="currentColor" opacity="0.5"/>
         </svg>
       `;
     case "plus":

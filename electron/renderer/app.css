@@ -1621,6 +1621,12 @@ textarea {
   color: var(--text);
 }
 
+.ws-layout-btn-active {
+  background: color-mix(in oklab, var(--accent) 22%, transparent);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 30%, transparent);
+}
+
 .ws-layout-btn:disabled {
   opacity: 0.35;
   cursor: default;
@@ -6662,6 +6668,48 @@ textarea {
   color: var(--accent-2);
 }
 
+.context-change-summary {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.context-change-additions {
+  color: var(--status-live-fg);
+  font-weight: 700;
+}
+
+.context-change-deletions {
+  color: var(--status-danger-fg);
+  font-weight: 700;
+}
+
+.context-change-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.context-change-file,
+.context-change-file-more {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.context-change-file-more {
+  font-family: var(--font-sans);
+  font-style: italic;
+}
+
 /* ── Add button ── */
 
 .context-add-btn {
@@ -6816,11 +6864,44 @@ textarea {
   font-style: italic;
 }
 
-/* ── Notes textarea ── */
+/* ── Notes ── */
+
+.context-notes-preview {
+  flex: none;
+  max-height: 160px;
+  min-height: 36px;
+  overflow: auto;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--field-bg) 54%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--workspace-toolbar-border) 70%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.context-notes-preview > :first-child {
+  margin-top: 0;
+}
+
+.context-notes-preview > :last-child {
+  margin-bottom: 0;
+}
+
+.context-notes-preview p,
+.context-notes-preview ul,
+.context-notes-preview ol,
+.context-notes-preview blockquote,
+.context-notes-preview pre {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
 
 .context-notes-textarea {
   flex: 1 1 0%;
-  min-height: 64px;
+  min-height: 80px;
   width: 100%;
   resize: none;
   border: 0;

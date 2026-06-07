@@ -13399,6 +13399,16 @@ function updateSessionDropUi() {
       label.textContent = "";
     }
   }
+
+  // Highlight target tab during drag
+  const tabs = detailElement.querySelectorAll(".ws-tab");
+  for (const tab of tabs) {
+    const sessionId = (tab as HTMLElement).dataset.sessionId;
+    tab.classList.toggle(
+      "ws-tab-drop-target",
+      !!(sessionId && sessionId === ui.dragTargetSessionId && ui.dragTargetZone)
+    );
+  }
 }
 
 function workspaceDropLabel(

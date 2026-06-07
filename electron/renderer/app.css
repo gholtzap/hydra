@@ -1843,8 +1843,22 @@ textarea {
   user-select: none;
 }
 
+.ws-tab[draggable="true"] {
+  cursor: grab;
+}
+
+.ws-tab[draggable="true"]:active {
+  cursor: grabbing;
+}
+
 .ws-tab:hover {
   background: color-mix(in oklab, var(--surface-soft) 60%, transparent);
+  color: var(--text);
+}
+
+.ws-tab-drop-target {
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  border-top-color: var(--accent);
   color: var(--text);
 }
 

@@ -55,7 +55,8 @@ export type KeybindingAction =
   | "navigate-section-right"
   | "navigate-section-up"
   | "navigate-section-down"
-  | "end-session";
+  | "end-session"
+  | "pin-terminal-selection";
 
 export type KeybindingMap = Record<KeybindingAction, string>;
 export type KeybindingOverrides = Partial<KeybindingMap>;
@@ -143,6 +144,7 @@ export type PinnedMessage = {
   text: string;
   checked: boolean;
   createdAt: string;
+  line?: number;
 };
 
 export type SessionOrganizationPatch = {

@@ -6733,6 +6733,50 @@ textarea {
   color: var(--destructive-foreground);
 }
 
+.context-pin-jumpable .context-pin-text {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 1px 2px;
+  margin: -1px -2px;
+  transition: background 80ms ease, color 80ms ease;
+}
+
+.context-pin-jumpable .context-pin-text:hover,
+.context-pin-jumpable .context-pin-text:focus-visible {
+  background: color-mix(in oklab, var(--accent-2) 18%, transparent);
+  color: var(--accent-2);
+  outline: none;
+}
+
+.context-pin-jump-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0.6;
+  transition: opacity 80ms ease, background 80ms ease, color 80ms ease;
+}
+
+.context-pin-item:hover .context-pin-jump-icon,
+.context-pin-jump-icon:focus-visible {
+  opacity: 1;
+}
+
+.context-pin-jump-icon:hover,
+.context-pin-jump-icon:focus-visible {
+  background: color-mix(in oklab, var(--accent-2) 18%, transparent);
+  color: var(--accent-2);
+  outline: none;
+}
+
 .context-pin-empty {
   font-family: var(--font-sans);
   font-size: 11px;

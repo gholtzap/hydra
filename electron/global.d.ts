@@ -220,6 +220,27 @@ interface ClaudeTerminalResizePayload {
   rows: number;
 }
 
+interface ClaudeTerminalSelectionPosition {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+}
+
+interface ClaudeTerminalBufferLineLike {
+  isWrapped?: boolean;
+  length: number;
+  translateToString: (trim?: boolean, start?: number, end?: number) => string;
+}
+
+interface ClaudeTerminalActiveBufferLike {
+  viewportY: number;
+  length: number;
+  getLine: (y: number) => ClaudeTerminalBufferLineLike | undefined | null;
+}
+
+interface ClaudeTerminalBufferLike {
+  active: ClaudeTerminalActiveBufferLike;
+}
+
 interface ClaudeTerminalLike {
   cols: number;
   rows: number;
@@ -236,6 +257,11 @@ interface ClaudeTerminalLike {
   dispose: () => void;
   getSelection?: () => string;
   paste?: (text: string) => void;
+  getSelectionPosition?: () => ClaudeTerminalSelectionPosition | undefined;
+  scrollToLine?: (line: number) => void;
+  select?: (column: number, row: number, length?: number) => void;
+  clearSelection?: () => void;
+  buffer?: ClaudeTerminalBufferLike;
 }
 
 interface ClaudeFitAddonLike {

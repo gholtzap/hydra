@@ -6795,6 +6795,13 @@ async function handleClick(event) {
     case "add-pinned-message":
       await addPinnedMessage(target.dataset.sessionId);
       break;
+    case "jump-pinned-message":
+      if (target.dataset.sessionId && target.dataset.pinId) {
+        event.preventDefault();
+        event.stopPropagation();
+        jumpToPinnedMessage(target.dataset.sessionId, target.dataset.pinId);
+      }
+      return;
     case "remove-pinned-message":
       await removePinnedMessage(target.dataset.sessionId, target.dataset.pinId);
       break;
@@ -7716,6 +7723,10 @@ async function handleKeyDown(event) {
     }
   }
 
+  if (await handleGlobalShortcut(event)) {
+    return;
+  }
+
   if (await handleAppShortcut(event)) {
     return;
   }
@@ -7845,6 +7856,22 @@ async function handleAppShortcut(event) {
     return true;
   }
 
+  return false;
+}
+
+async function handleGlobalShortcut(event) {
+  if (isAnyDialogOpen()) {
+    return false;
+  }
+  if (isEditableTarget(event.target as HTMLElement | null)) {
+    return false;
+  }
+  const kb = getKeybindings();
+  if (matchesAccelerator(event, kb["pin-terminal-selection"])) {
+    event.preventDefault();
+    await pinActiveTerminalSelection();
+    return true;
+  }
   return false;
 }
 
@@ -8537,7 +8564,7 @@ function updateContextPanel(session: SessionSummary | null) {
   const worktreeInfo = parallelWorktreeSummary(session);
   const branch = session.parallelWorktree?.branch || session.parallelWorktree?.baseBranch || "";
 
-  const sig = `${session.id}|${pins.length}|${pins.map((p) => `${p.id}:${p.checked}`).join(",")}|${notes.length}|${branch}|${worktreeInfo}`;
+  const sig = `${session.id}|${pins.length}|${pins.map((p) => `${p.id}:${p.checked}:${p.line ?? "-"}`).join(",")}|${notes.length}|${branch}|${worktreeInfo}`;
   if (panel.dataset.sig === sig) {
     return;
   }
@@ -8636,11 +8663,16 @@ function updateContextPanel(session: SessionSummary | null) {
           ? dom(
               "div",
               { className: "context-pin-list" },
-              ...pins.map((pin) =>
-                dom(
+              ...pins.map((pin) => {
+                const isJumpable = typeof pin.line === "number";
+                return dom(
                   "label",
                   {
-                    className: classNames("context-pin-item", pin.checked ? "context-pin-checked" : undefined),
+                    className: classNames(
+                      "context-pin-item",
+                      pin.checked ? "context-pin-checked" : undefined,
+                      isJumpable ? "context-pin-jumpable" : undefined
+                    ),
                     attrs: { "data-pin-id": pin.id }
                   },
                   dom("input", {
@@ -8653,7 +8685,39 @@ function updateContextPanel(session: SessionSummary | null) {
                       ...(pin.checked ? { checked: true } : {})
                     }
                   }),
-                  dom("span", { className: "context-pin-text" }, pin.text),
+                  dom(
+                    "span",
+                    {
+                      className: "context-pin-text",
+                      attrs: isJumpable
+                        ? {
+                            role: "button",
+                            tabindex: "0",
+                            "data-action": "jump-pinned-message",
+                            "data-session-id": session.id,
+                            "data-pin-id": pin.id,
+                            title: "Jump to source line"
+                          }
+                        : undefined
+                    },
+                    pin.text
+                  ),
+                  isJumpable
+                    ? dom(
+                        "span",
+                        {
+                          className: "context-pin-jump-icon",
+                          attrs: {
+                            "data-action": "jump-pinned-message",
+                            "data-session-id": session.id,
+                            "data-pin-id": pin.id,
+                            "aria-hidden": "true",
+                            title: "Jump to source line"
+                          }
+                        },
+                        "\u2197"
+                      )
+                    : null,
                   dom(
                     "button",
                     {
@@ -8669,8 +8733,8 @@ function updateContextPanel(session: SessionSummary | null) {
                     },
                     "\u00d7"
                   )
-                )
-              )
+                );
+              })
             )
           : dom("div", { className: "context-pin-empty" }, "No pinned messages yet.")
       ),
@@ -8757,6 +8821,94 @@ async function togglePinnedMessage(sessionId: string | null | undefined, pinId: 
     p.id === pinId ? { ...p, checked: !p.checked } : p
   );
   await api.updateSessionOrganization(sessionId, { pinnedMessages: nextPins });
+}
+
+function getActiveTerminalSelection(): { text: string; line: number } | null {
+  const mount = activeTerminalMount();
+  if (!mount) {
+    return null;
+  }
+  const text = mount.terminal.getSelection?.() || "";
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const position = mount.terminal.getSelectionPosition?.();
+  const buffer = mount.terminal.buffer;
+  if (!position || !buffer) {
+    return { text: trimmed, line: -1 };
+  }
+  const startY = position.start.y;
+  const line = startY + buffer.active.viewportY;
+  return { text: trimmed, line };
+}
+
+async function pinActiveTerminalSelection() {
+  if (isAnyDialogOpen()) {
+    return;
+  }
+  const session = currentActiveSession();
+  if (!session) {
+    return;
+  }
+  const selection = getActiveTerminalSelection();
+  if (!selection) {
+    return;
+  }
+  const pin: PinnedMessage = {
+    id: crypto.randomUUID(),
+    text: selection.text,
+    checked: false,
+    createdAt: new Date().toISOString(),
+    line: selection.line >= 0 ? selection.line : undefined
+  };
+  const nextPins = [...(session.pinnedMessages || []), pin];
+  await api.updateSessionOrganization(session.id, { pinnedMessages: nextPins });
+}
+
+let terminalPinFlashTimer: ReturnType<typeof setTimeout> | null = null;
+let terminalPinFlashSessionId: string | null = null;
+
+function jumpToPinnedMessage(sessionId: string, pinId: string) {
+  const session = sessionById(sessionId);
+  const pin = session?.pinnedMessages?.find((p) => p.id === pinId);
+  if (!session || !pin || pin.line === undefined) {
+    return;
+  }
+  if (ui.selection.type !== "session" || ui.selection.id !== sessionId) {
+    void selectSession(sessionId, "terminal");
+  }
+  const mount = ui.terminalMounts.get(sessionId);
+  if (!mount) {
+    return;
+  }
+  if (typeof mount.terminal.scrollToLine === "function") {
+    mount.terminal.scrollToLine(pin.line);
+  }
+  const buffer = mount.terminal.buffer;
+  if (typeof mount.terminal.select === "function" && buffer) {
+    const lineText = buffer.active.getLine(pin.line)?.translateToString(true) ?? "";
+    const cols = mount.terminal.cols || 80;
+    const length = Math.max(0, Math.min(lineText.length, cols));
+    if (length > 0) {
+      mount.terminal.select(0, pin.line, length);
+    } else {
+      mount.terminal.select(0, pin.line, 1);
+    }
+  }
+  if (terminalPinFlashTimer !== null) {
+    clearTimeout(terminalPinFlashTimer);
+    terminalPinFlashTimer = null;
+  }
+  terminalPinFlashSessionId = sessionId;
+  terminalPinFlashTimer = setTimeout(() => {
+    terminalPinFlashTimer = null;
+    if (terminalPinFlashSessionId === sessionId) {
+      const live = ui.terminalMounts.get(sessionId);
+      live?.terminal.clearSelection?.();
+    }
+    terminalPinFlashSessionId = null;
+  }, 1600);
 }
 
 let contextNotesSaveTimer: ReturnType<typeof setTimeout> | null = null;

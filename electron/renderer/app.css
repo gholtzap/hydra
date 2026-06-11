@@ -1807,16 +1807,10 @@ textarea {
   gap: 0;
   min-height: 36px;
   flex: none;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
+  overflow: visible;
   background: var(--workspace-backdrop);
   border-bottom: 1px solid var(--workspace-separator);
   padding: 0 4px;
-}
-
-.ws-tab-bar::-webkit-scrollbar {
-  display: none;
 }
 
 .ws-tab-bar-tabs {
@@ -1825,6 +1819,13 @@ textarea {
   gap: 1px;
   min-width: 0;
   flex: 1 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.ws-tab-bar-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .ws-tab {

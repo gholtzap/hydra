@@ -1287,7 +1287,9 @@ api.onSessionOutput((payload) => {
   updateSidebarDrawerSessionPreview(session);
 
   if (ui.selection.type === "session" && isSessionVisible(payload.sessionId)) {
-    updateSessionWorkspaceToolbar();
+    if (!updateSessionWorkspaceTab(session)) {
+      updateSessionWorkspaceToolbar();
+    }
     updateSessionPane(session);
     writeSessionTerminalOutput(payload.sessionId, payload.data);
     return;
@@ -3306,6 +3308,49 @@ function updateSessionWorkspaceToolbar() {
       )
     )
   );
+}
+
+function updateSessionWorkspaceTab(session: SessionSummary): boolean {
+  const toolbar = document.getElementById("session-workspace-toolbar");
+  const tab = toolbar?.querySelector(
+    `.ws-tab[data-session-id="${CSS.escape(session.id)}"]`
+  ) as HTMLButtonElement | null;
+  if (!tab || !toolbar) {
+    return false;
+  }
+
+  tab.className = classNames(
+    "ws-tab",
+    selectionMatches("session", session.id) ? "ws-tab-active" : undefined
+  );
+  tab.title = session.title;
+
+  const dot = tab.querySelector(".ws-tab-dot") as HTMLElement | null;
+  if (dot) {
+    dot.className = classNames("ws-tab-dot", `ws-tab-dot-${session.status}`);
+  }
+
+  const label = tab.querySelector(".ws-tab-label") as HTMLElement | null;
+  if (label) {
+    label.textContent = session.title;
+  }
+
+  // Keep the sig in sync so updateSessionWorkspaceToolbar won't rebuild the
+  // toolbar (and reset the open <details> menu) just because we updated a tab.
+  const selectedSession = ui.selection.type === "session" ? sessionById(ui.selection.id) : null;
+  if (selectedSession) {
+    const repo = repoById(selectedSession.repoID);
+    const visibleIds = ui.workspaceFocusMode && ui.workspacePreFocusLayout
+      ? collectWorkspaceSessionIds(ui.workspacePreFocusLayout).filter((id) => sessionById(id))
+      : workspaceVisibleSessionIds();
+    const tabSigs = visibleIds.map((id) => {
+      const s = sessionById(id);
+      return s ? `${s.id}:${s.title}:${s.status}:${s.tagColor || ""}` : id;
+    });
+    toolbar.dataset.sig = `tabs|${selectedSession.id}|${tabSigs.join(",")}|${visibleIds.length}|${repo?.id}|${ui.workspaceFocusMode}`;
+  }
+
+  return true;
 }
 
 function updateAllSessionPanes() {

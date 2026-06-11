@@ -1,5 +1,19 @@
 # Lessons
 
+## Workspace tools `<details>` menu invisible due to overflow clipping
+
+**Root cause**: `.ws-tab-bar` had `overflow-x: auto; overflow-y: hidden` to allow horizontal tab scrolling. The workspace-tools dropdown (`<details class="ws-toolbar-menu">`) lives inside `.ws-tab-bar-actions` which is a flex child of `.ws-tab-bar`. Its popover is `position: absolute; top: calc(100% + 10px)` — extending *below* the tab bar. `overflow-y: hidden` on `.ws-tab-bar` clipped it, making the menu invisible on open (button appeared to do nothing).
+
+**What caused it**: The horizontal scroll overflow was placed on the parent flex container (`.ws-tab-bar`) rather than just the tabs sub-container (`.ws-tab-bar-tabs`), unintentionally clipping the absolutely-positioned dropdown popover.
+
+**Fix**: Moved `overflow-x: auto; overflow-y: hidden; scrollbar-width: none` from `.ws-tab-bar` to `.ws-tab-bar-tabs`. `.ws-tab-bar` is now `overflow: visible`, so the popover extends outside the tab bar without being clipped.
+
+## Workspace tools sig desync causing spurious toolbar rebuilds (secondary issue)
+
+**Root cause**: `updateSessionWorkspaceTab` (fast-path that updates only one tab on session output) updated the DOM but left `toolbar.dataset.sig` stale. The next call to `updateSessionWorkspaceToolbar` saw a sig mismatch and rebuilt the entire toolbar, replacing the open `<details>` with a fresh closed one.
+
+**Fix**: `updateSessionWorkspaceTab` now recomputes the full sig after DOM mutation and stores it in `toolbar.dataset.sig`.
+
 ## New session: IPC race condition caused selectSession to silently no-op
 
 **Root cause**: `startSessionForRepo` calls `api.createSession` (an IPC invoke) and then immediately calls `selectSession(sessionId)`. The main process calls `broadcastState()` (via `webContents.send`) *before* returning the sessionId, but `send` and `invoke` replies travel on separate Chromium IPC channels with no ordering guarantee. The invoke reply often arrives first, so `sessionById(sessionId)` returns `null` inside `selectSession` and the function returns early — the session exists in main-process state but the renderer never navigates to it.

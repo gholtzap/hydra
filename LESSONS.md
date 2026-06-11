@@ -1,5 +1,13 @@
 # Lessons
 
+## Workspace tools `<details>` menu closed immediately after opening (stale sig desync)
+
+**Root cause**: `updateSessionWorkspaceTab` was introduced as a fast-path to update only a tab's title/status in the DOM without rebuilding the entire toolbar. However, it did not update `toolbar.dataset.sig`, which `updateSessionWorkspaceToolbar` uses to short-circuit full rebuilds. After `updateSessionWorkspaceTab` ran (e.g., on session output), the sig became stale. The next call to `updateSessionWorkspaceToolbar` (e.g., from `onSessionUpdated`) saw a mismatch and rebuilt the entire toolbar DOM — including a fresh, closed `<details>` element — destroying the user's open menu state.
+
+**What caused it**: The fast-path optimization forgot to keep the sig cache in sync with the DOM mutations it performed.
+
+**Fix**: After updating the tab DOM, `updateSessionWorkspaceTab` now recomputes the full sig (same formula as `updateSessionWorkspaceToolbar`) and stores it in `toolbar.dataset.sig`, so the next toolbar update call correctly skips the rebuild.
+
 ## New session: IPC race condition caused selectSession to silently no-op
 
 **Root cause**: `startSessionForRepo` calls `api.createSession` (an IPC invoke) and then immediately calls `selectSession(sessionId)`. The main process calls `broadcastState()` (via `webContents.send`) *before* returning the sessionId, but `send` and `invoke` replies travel on separate Chromium IPC channels with no ordering guarantee. The invoke reply often arrives first, so `sessionById(sessionId)` returns `null` inside `selectSession` and the function returns early — the session exists in main-process state but the renderer never navigates to it.

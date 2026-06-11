@@ -1,12 +1,18 @@
 # Lessons
 
-## Workspace tools `<details>` menu closed immediately after opening (stale sig desync)
+## Workspace tools `<details>` menu invisible due to overflow clipping
 
-**Root cause**: `updateSessionWorkspaceTab` was introduced as a fast-path to update only a tab's title/status in the DOM without rebuilding the entire toolbar. However, it did not update `toolbar.dataset.sig`, which `updateSessionWorkspaceToolbar` uses to short-circuit full rebuilds. After `updateSessionWorkspaceTab` ran (e.g., on session output), the sig became stale. The next call to `updateSessionWorkspaceToolbar` (e.g., from `onSessionUpdated`) saw a mismatch and rebuilt the entire toolbar DOM — including a fresh, closed `<details>` element — destroying the user's open menu state.
+**Root cause**: `.ws-tab-bar` had `overflow-x: auto; overflow-y: hidden` to allow horizontal tab scrolling. The workspace-tools dropdown (`<details class="ws-toolbar-menu">`) lives inside `.ws-tab-bar-actions` which is a flex child of `.ws-tab-bar`. Its popover is `position: absolute; top: calc(100% + 10px)` — extending *below* the tab bar. `overflow-y: hidden` on `.ws-tab-bar` clipped it, making the menu invisible on open (button appeared to do nothing).
 
-**What caused it**: The fast-path optimization forgot to keep the sig cache in sync with the DOM mutations it performed.
+**What caused it**: The horizontal scroll overflow was placed on the parent flex container (`.ws-tab-bar`) rather than just the tabs sub-container (`.ws-tab-bar-tabs`), unintentionally clipping the absolutely-positioned dropdown popover.
 
-**Fix**: After updating the tab DOM, `updateSessionWorkspaceTab` now recomputes the full sig (same formula as `updateSessionWorkspaceToolbar`) and stores it in `toolbar.dataset.sig`, so the next toolbar update call correctly skips the rebuild.
+**Fix**: Moved `overflow-x: auto; overflow-y: hidden; scrollbar-width: none` from `.ws-tab-bar` to `.ws-tab-bar-tabs`. `.ws-tab-bar` is now `overflow: visible`, so the popover extends outside the tab bar without being clipped.
+
+## Workspace tools sig desync causing spurious toolbar rebuilds (secondary issue)
+
+**Root cause**: `updateSessionWorkspaceTab` (fast-path that updates only one tab on session output) updated the DOM but left `toolbar.dataset.sig` stale. The next call to `updateSessionWorkspaceToolbar` saw a sig mismatch and rebuilt the entire toolbar, replacing the open `<details>` with a fresh closed one.
+
+**Fix**: `updateSessionWorkspaceTab` now recomputes the full sig after DOM mutation and stores it in `toolbar.dataset.sig`.
 
 ## New session: IPC race condition caused selectSession to silently no-op
 

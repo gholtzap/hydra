@@ -229,8 +229,6 @@ function matchesAccelerator(
   return eventKey === targetKey;
 }
 
-type RepoParallelWorktreeSettingsRequest = RepoParallelWorktreeSettingsPatch;
-
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args) as Promise<T>;
 }
@@ -298,7 +296,7 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
       invoke<void>("repo:contextMenu", { repoId, position }),
     updateRepoAppLaunchConfig: (payload: RepoAppLaunchConfigRequest) =>
       invoke<RepoAppLaunchConfig | null>("repo:updateAppLaunchConfig", payload),
-    updateRepoParallelWorktreeSettings: (payload: RepoParallelWorktreeSettingsRequest) =>
+    updateRepoParallelWorktreeSettings: (payload: RepoParallelWorktreeSettingsPatch) =>
       invoke<RepoParallelWorktreeSettings | null>("repo:updateParallelWorktreeSettings", payload),
     listRepoBranches: (repoId: string) => invoke<string[]>("repo:listBranches", repoId),
     buildAndRunApp: (repoId: string) => invoke<string | null>("repo:buildAndRunApp", repoId),

@@ -608,8 +608,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       prompt: z.string().max(MAX_SESSION_PROMPT_CHARS).optional().describe("Initial prompt to send. Required when the user asks the new session to do anything specific."),
     },
     async (args: McpActionArgs<"create_session">) => {
-      const result = await appController.handleMcpAction("create_session", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("create_session", args));
     }
   );
 
@@ -630,8 +629,10 @@ export function register(server: McpServer, appController: AppControllerHandle):
         });
       }
 
-      const result = await appController.handleMcpAction("create_shell_session", args);
-      return textResult({ sessionId: result, commandQueued: !!args.command });
+      return textResult({
+        sessionId: await appController.handleMcpAction("create_shell_session", args),
+        commandQueued: !!args.command,
+      });
     }
   );
 

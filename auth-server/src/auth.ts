@@ -68,9 +68,6 @@ function createAuth(
       strategy: "jwe" as const,
     },
   };
-  const account = {
-    encryptOAuthTokens: true,
-  };
   const verification = {
     // Hash verification identifiers before storing them in secondary storage.
     storeIdentifier: "hashed" as const,
@@ -117,7 +114,7 @@ function createAuth(
         // The desktop app now uses the native Better Auth Electron client/plugin flow.
         plugins: [electron()],
         session,
-        account,
+        account: { encryptOAuthTokens: true },
         verification,
         advanced,
         databaseHooks,

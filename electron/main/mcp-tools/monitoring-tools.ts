@@ -45,10 +45,6 @@ const EPHEMERAL_TOOL_ID_VALUES = [
   "tokscale"
 ] as const;
 
-function sessionActivityTimestamp(session: SessionRecord): string {
-  return session.lastActivityAt || session.updatedAt;
-}
-
 function inboxReasons(session: SessionRecord): string[] {
   const reasons: string[] = [];
   if (session.status === "blocked" || session.status === "needs_input" || session.blocker) {
@@ -85,7 +81,7 @@ function sortedActionableSessions(blocked: SessionRecord[], unread: SessionRecor
       const leftBlocked = leftReasons.includes("blocked");
       const rightBlocked = rightReasons.includes("blocked");
       if (leftBlocked !== rightBlocked) return leftBlocked ? -1 : 1;
-      return sessionActivityTimestamp(right).localeCompare(sessionActivityTimestamp(left));
+      return (right.lastActivityAt || right.updatedAt).localeCompare(left.lastActivityAt || left.updatedAt);
     });
 }
 

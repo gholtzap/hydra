@@ -140,12 +140,11 @@ export function registerResources(server: McpServer, appController: AppControlle
           }],
         };
       }
-      const result = await appController.handleMcpAction("get_wiki", { repoId: id });
       return {
         contents: [{
           uri: uri.href,
           mimeType: "application/json",
-          text: JSON.stringify(result ?? { error: "Wiki not available" }),
+          text: JSON.stringify((await appController.handleMcpAction("get_wiki", { repoId: id })) ?? { error: "Wiki not available" }),
         }],
       };
     }

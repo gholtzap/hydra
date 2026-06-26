@@ -82,10 +82,6 @@ function compareVersions(left, right) {
   return left.patch - right.patch;
 }
 
-function maxVersion(left, right) {
-  return compareVersions(left, right) >= 0 ? left : right;
-}
-
 function incrementVersion(version, bump) {
   if (bump === "major") {
     return { raw: `${version.major + 1}.0.0`, major: version.major + 1, minor: 0, patch: 0 };
@@ -179,7 +175,7 @@ function resolveTargetVersion(packageVersion, latestTagVersion, requestedBump) {
     return packageVersion;
   }
 
-  return incrementVersion(maxVersion(packageVersion, latestTagVersion || packageVersion), requestedBump);
+  return incrementVersion(latestTagVersion, requestedBump);
 }
 
 function publishCommandFor(options, targetVersion) {

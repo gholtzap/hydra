@@ -219,8 +219,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       repoId: z.string().describe("Repo ID"),
     },
     async (args: McpActionArgs<"build_and_run_app">) => {
-      const result = await appController.handleMcpAction("build_and_run_app", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("build_and_run_app", args));
     }
   );
 }

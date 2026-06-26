@@ -25,8 +25,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       patch: z.record(z.string(), z.unknown()).describe("Partial preferences object to merge"),
     },
     async (args: McpActionArgs<"update_preferences">) => {
-      const result = await appController.handleMcpAction("update_preferences", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("update_preferences", args)) ?? { ok: true });
     }
   );
 
@@ -64,8 +63,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       content: z.string().describe("File content to write"),
     },
     async (args: McpActionArgs<"save_settings_file">) => {
-      const result = await appController.handleMcpAction("save_settings_file", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("save_settings_file", args)) ?? { ok: true });
     }
   );
 }

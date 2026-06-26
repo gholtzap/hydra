@@ -684,12 +684,11 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ ok: false, error: "Session not found" });
       const previousRuntimeState = session.runtimeState;
-      const result = await appController.handleMcpAction("restart_session", args);
       return textResult({
         ok: true,
         previousRuntimeState,
         restartQueued: previousRuntimeState === "live",
-        result: result ?? null,
+        result: (await appController.handleMcpAction("restart_session", args)) ?? null,
       });
     }
   );
@@ -705,12 +704,11 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ ok: false, error: "Session not found" });
       const previousRuntimeState = session.runtimeState;
-      const result = await appController.handleMcpAction("stop_session", args);
       return textResult({
         ok: true,
         previousRuntimeState,
         stopped: true,
-        result: result ?? null,
+        result: (await appController.handleMcpAction("stop_session", args)) ?? null,
       });
     }
   );
@@ -728,8 +726,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         if (!repo) return textResult({ ok: false, error: "Repo not found" });
       }
 
-      const result = await appController.handleMcpAction("stop_sessions", args);
-      return textResult({ ok: true, ...result });
+      return textResult({ ok: true, ...(await appController.handleMcpAction("stop_sessions", args)) });
     }
   );
 
@@ -743,8 +740,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
     async (args: McpActionArgs<"mark_session_read">) => {
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ ok: false, error: "Session not found" });
-      const result = await appController.handleMcpAction("mark_session_read", args);
-      return textResult({ ok: true, ...result });
+      return textResult({ ok: true, ...(await appController.handleMcpAction("mark_session_read", args)) });
     }
   );
 
@@ -761,8 +757,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         if (!repo) return textResult({ ok: false, error: "Repo not found" });
       }
 
-      const result = await appController.handleMcpAction("mark_sessions_read", args);
-      return textResult({ ok: true, ...result });
+      return textResult({ ok: true, ...(await appController.handleMcpAction("mark_sessions_read", args)) });
     }
   );
 
@@ -778,13 +773,12 @@ export function register(server: McpServer, appController: AppControllerHandle):
     async (args: McpActionArgs<"resize_session">) => {
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ ok: false, error: "Session not found" });
-      const result = await appController.handleMcpAction("resize_session", args);
       return textResult({
         ok: true,
         sessionId: args.sessionId,
         cols: args.cols,
         rows: args.rows,
-        result: result ?? null,
+        result: (await appController.handleMcpAction("resize_session", args)) ?? null,
       });
     }
   );
@@ -1212,8 +1206,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       quietMs: z.number().optional().describe("For quiet waits, required no-output window in milliseconds, capped from 250 to 30000"),
     },
     async (args: SessionWaitArgs) => {
-      const result = await waitForSessionState(appController, args);
-      return textResult(result);
+      return textResult(await waitForSessionState(appController, args));
     }
   );
 

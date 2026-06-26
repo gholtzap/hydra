@@ -393,13 +393,25 @@ function transcriptTail(text: string, lineLimit: number, charLimit: number): Ses
   };
 }
 
-function sessionTailResult(
-  session: SessionRecord,
+function sessionTranscriptTail(
+  session: SessionRecord | null | undefined,
   args: Pick<SessionTailArgs, "lines" | "maxChars" | "includeRawTranscript">
 ) {
   const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
   const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
 
+  return {
+    transcript: session ? transcriptTail(session.transcript, lineLimit, charLimit) : null,
+    rawTranscript: session && args.includeRawTranscript
+      ? transcriptTail(session.rawTranscript, lineLimit, charLimit)
+      : undefined,
+  };
+}
+
+function sessionTailResult(
+  session: SessionRecord,
+  args: Pick<SessionTailArgs, "lines" | "maxChars" | "includeRawTranscript">
+) {
   return {
     sessionId: session.id,
     repoID: session.repoID,
@@ -410,10 +422,7 @@ function sessionTailResult(
     blocker: session.blocker,
     lastActivityAt: session.lastActivityAt,
     updatedAt: session.updatedAt,
-    transcript: transcriptTail(session.transcript, lineLimit, charLimit),
-    rawTranscript: args.includeRawTranscript
-      ? transcriptTail(session.rawTranscript, lineLimit, charLimit)
-      : undefined,
+    ...sessionTranscriptTail(session, args),
   };
 }
 
@@ -887,18 +896,13 @@ export function register(server: McpServer, appController: AppControllerHandle):
         await appController.handleMcpAction("stop_session", { sessionId: args.sessionId });
       }
       const currentSession = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
-      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
-      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
 
       return textResult({
         ok: wait.ok,
         command: commandResult,
         wait,
         stopped,
-        transcript: currentSession ? transcriptTail(currentSession.transcript, lineLimit, charLimit) : null,
-        rawTranscript: currentSession && args.includeRawTranscript
-          ? transcriptTail(currentSession.rawTranscript, lineLimit, charLimit)
-          : undefined,
+        ...sessionTranscriptTail(currentSession, args),
       });
     }
   );
@@ -948,8 +952,6 @@ export function register(server: McpServer, appController: AppControllerHandle):
         await appController.handleMcpAction("stop_session", { sessionId });
       }
       const currentSession = appController.state.sessions.find((candidate) => candidate.id === sessionId);
-      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
-      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
 
       return textResult({
         ok: wait.ok,
@@ -957,10 +959,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         command: commandResult,
         wait,
         stopped,
-        transcript: currentSession ? transcriptTail(currentSession.transcript, lineLimit, charLimit) : null,
-        rawTranscript: currentSession && args.includeRawTranscript
-          ? transcriptTail(currentSession.rawTranscript, lineLimit, charLimit)
-          : undefined,
+        ...sessionTranscriptTail(currentSession, args),
       });
     }
   );
@@ -1015,8 +1014,6 @@ export function register(server: McpServer, appController: AppControllerHandle):
         await appController.handleMcpAction("stop_session", { sessionId });
       }
       const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
-      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
-      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
 
       return textResult({
         ok: wait.ok,
@@ -1024,10 +1021,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         repoId: args.repoId,
         wait,
         stopped,
-        transcript: session ? transcriptTail(session.transcript, lineLimit, charLimit) : null,
-        rawTranscript: session && args.includeRawTranscript
-          ? transcriptTail(session.rawTranscript, lineLimit, charLimit)
-          : undefined,
+        ...sessionTranscriptTail(session, args),
       });
     }
   );

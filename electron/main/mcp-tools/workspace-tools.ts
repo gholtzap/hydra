@@ -99,8 +99,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       path: z.string().describe("Absolute path to workspace folder"),
     },
     async (args: McpActionArgs<"add_workspace">) => {
-      const result = await appController.handleMcpAction("add_workspace", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("add_workspace", args));
     }
   );
 
@@ -111,8 +110,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       workspaceId: z.string().describe("Workspace ID to rescan"),
     },
     async (args: McpActionArgs<"rescan_workspace">) => {
-      const result = await appController.handleMcpAction("rescan_workspace", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("rescan_workspace", args));
     }
   );
 
@@ -185,8 +183,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       repoId: z.string().describe("Repo ID"),
     },
     async (args: McpActionArgs<"list_files">) => {
-      const result = await appController.handleMcpAction("list_files", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("list_files", args));
     }
   );
 
@@ -198,8 +195,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       path: z.string().describe("Relative file path within repo"),
     },
     async (args: McpActionArgs<"read_file">) => {
-      const result = await appController.handleMcpAction("read_file", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("read_file", args));
     }
   );
 

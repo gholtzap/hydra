@@ -42,8 +42,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       enabled: z.boolean().describe("Enable or disable wiki"),
     },
     async (args: McpActionArgs<"toggle_wiki">) => {
-      const result = await appController.handleMcpAction("toggle_wiki", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("toggle_wiki", args)) ?? { ok: true });
     }
   );
 }

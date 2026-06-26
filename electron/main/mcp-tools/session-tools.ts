@@ -644,8 +644,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       title: z.string().describe("New title"),
     },
     async (args: McpActionArgs<"rename_session">) => {
-      const result = await appController.handleMcpAction("rename_session", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("rename_session", args)) ?? { ok: true });
     }
   );
 
@@ -657,8 +656,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       sessionId: z.string().describe("Session ID to close"),
     },
     async (args: McpActionArgs<"close_session">) => {
-      const result = await appController.handleMcpAction("close_session", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("close_session", args)) ?? { ok: true });
     }
   );
 
@@ -670,8 +668,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       sessionId: z.string().describe("Session ID to reopen"),
     },
     async (args: McpActionArgs<"reopen_session">) => {
-      const result = await appController.handleMcpAction("reopen_session", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("reopen_session", args)) ?? { ok: true });
     }
   );
 
@@ -802,8 +799,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       repoId: z.string().optional().describe("Move to different repo"),
     },
     async (args: McpActionArgs<"organize_session">) => {
-      const result = await appController.handleMcpAction("organize_session", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("organize_session", args)) ?? { ok: true });
     }
   );
 

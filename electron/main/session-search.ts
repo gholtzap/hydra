@@ -521,27 +521,23 @@ function indexedMatchesFromRankedLines<T>(
   const ordered: T[] = [];
 
   for (const line of rankedLines.slice(0, limit)) {
-    const match = indexedValueFromRankedLine(matches, line);
+    const tabIndex = line.indexOf("\t");
+    if (tabIndex === -1) {
+      continue;
+    }
+
+    const matchIndex = Number(line.slice(0, tabIndex));
+    if (!Number.isFinite(matchIndex)) {
+      continue;
+    }
+
+    const match = matches[matchIndex] ?? null;
     if (match !== null) {
       ordered.push(match);
     }
   }
 
   return ordered;
-}
-
-function indexedValueFromRankedLine<T>(matches: T[], line: string): T | null {
-  const tabIndex = line.indexOf("\t");
-  if (tabIndex === -1) {
-    return null;
-  }
-
-  const matchIndex = Number(line.slice(0, tabIndex));
-  if (!Number.isFinite(matchIndex)) {
-    return null;
-  }
-
-  return matches[matchIndex] ?? null;
 }
 
 async function runListCommand(

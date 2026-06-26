@@ -6025,10 +6025,6 @@ textarea {
 }
 
 .settings-worktree-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
   padding: 10px 0;
   border-top: 1px solid var(--border);
 }
@@ -6038,10 +6034,7 @@ textarea {
 }
 
 .settings-worktree-copy {
-  display: flex;
-  flex-direction: column;
   gap: 4px;
-  min-width: 0;
 }
 
 .inline-toggle input[type="checkbox"],
@@ -6542,4 +6535,3 @@ textarea {
   color: var(--text-muted);
   white-space: nowrap;
 }
-

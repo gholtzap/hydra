@@ -48,7 +48,7 @@ export function getAuthRuntimeConfig(env: CloudflareBindings): AuthRuntimeConfig
     baseURL,
     secret,
     socialProviders: getSocialProviders(env),
-    trustedOrigins: normalizeTrustedOrigins(allowedOrigins),
+    trustedOrigins: [...new Set([...allowedOrigins, ELECTRON_DEEP_LINK_ORIGIN])],
     useSecureCookies: shouldUseSecureCookies(baseURL),
   };
 }
@@ -72,10 +72,6 @@ export function normalizeAllowedOrigins(value: string): string[] {
 
   normalized.add(ELECTRON_AUTH_ORIGIN);
   return [...normalized];
-}
-
-function normalizeTrustedOrigins(allowedOrigins: string[]): string[] {
-  return [...new Set([...allowedOrigins, ELECTRON_DEEP_LINK_ORIGIN])];
 }
 
 function getSocialProviders(

@@ -220,7 +220,12 @@ class HydraMcpClient {
 
   async callTool(name, args = {}) {
     await this.ensureInitialized();
-    return this.request("tools/call", { name, arguments: args });
+    return this.post({
+      jsonrpc: "2.0",
+      id: this.nextId++,
+      method: "tools/call",
+      params: { name, arguments: args },
+    }, true);
   }
 
   async ensureInitialized() {
@@ -250,16 +255,6 @@ class HydraMcpClient {
       params: {},
     }, true);
 
-    return result;
-  }
-
-  async request(method, params) {
-    const result = await this.post({
-      jsonrpc: "2.0",
-      id: this.nextId++,
-      method,
-      params,
-    }, true);
     return result;
   }
 

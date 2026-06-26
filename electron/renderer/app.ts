@@ -9816,7 +9816,7 @@ class HydraSmallWebRTCClient implements VoiceClientLike {
     }
 
     if (this.audioContext) {
-      await this.audioContext.close().catch(() => undefined);
+      void this.audioContext.close().catch(() => undefined);
       this.audioContext = null;
     }
 

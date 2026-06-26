@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-const localAuthServerUrl = "http://localhost:8787";
 const hasAuthServerOverride = Boolean(process.env.AUTH_SERVER_URL?.trim()) || existsSync("electron/renderer/auth-config.json");
 
 const processes = [
@@ -16,7 +15,7 @@ const processes = [
     label: "desktop",
     cmd: npmCommand,
     args: ["run", "dev:desktop"],
-    env: hasAuthServerOverride ? {} : { AUTH_SERVER_URL: localAuthServerUrl },
+    env: hasAuthServerOverride ? {} : { AUTH_SERVER_URL: "http://localhost:8787" },
   },
 ];
 

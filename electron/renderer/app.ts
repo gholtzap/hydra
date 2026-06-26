@@ -14799,12 +14799,6 @@ async function revealSessionSearchResult(index: number) {
   });
 }
 
-function pathLeafLabel(filePath: string) {
-  const normalized = filePath.replace(/\\/g, "/");
-  const parts = normalized.split("/");
-  return parts.slice(-2).join("/");
-}
-
 function canResumeSessionSearchResult(
   result: SessionSearchResult | null | undefined
 ): result is SessionSearchResult & { sessionId: string } {

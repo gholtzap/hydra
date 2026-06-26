@@ -17,18 +17,14 @@ const rendererAssets = [
   "vendor/pipecat-webrtc.js",
 ];
 
-function mkdir(dir) {
-  mkdirSync(dir, { recursive: true });
-}
-
 function cp(src, dest, options) {
   cpSync(join(root, src), join(root, dest), options);
 }
 
 try {
   // Ensure output directories exist
-  mkdir(join(root, "dist-electron/main"));
-  mkdir(join(root, "dist-electron/renderer/vendor"));
+  mkdirSync(join(root, "dist-electron/main"), { recursive: true });
+  mkdirSync(join(root, "dist-electron/renderer/vendor"), { recursive: true });
 
   // PTY host (Unix only — Windows uses node-pty in-process)
   cp("electron/main/pty_host.py", "dist-electron/main/pty_host.py");

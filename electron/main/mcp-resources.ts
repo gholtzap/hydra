@@ -3,6 +3,10 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import type { AgentDefinition, RepoRecord, SessionRecord } from "../shared-types";
 import type { AppControllerHandle } from "./internal-api";
 
+const { AGENT_DEFINITIONS } = require("./state-store") as {
+  AGENT_DEFINITIONS: AgentDefinition[];
+};
+
 function readTemplateVariable(value: string | string[] | undefined): string | null {
   return typeof value === "string" && value ? value : null;
 }
@@ -152,18 +156,9 @@ export function registerResources(server: McpServer, appController: AppControlle
     "agents",
     "hydra://agents",
     { title: "Agent Definitions", description: "Available AI agent types and their configurations", mimeType: "application/json" },
-    async (uri: URL) => {
-      // AGENT_DEFINITIONS is loaded in main.ts from state-store; read from require at runtime
-      let agents: AgentDefinition[] = [];
-      try {
-        ({ AGENT_DEFINITIONS: agents } = require("./state-store") as {
-          AGENT_DEFINITIONS: AgentDefinition[];
-        });
-      } catch {
-        agents = [];
-      }
-      return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(agents) }] };
-    }
+    async (uri: URL) => ({
+      contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(AGENT_DEFINITIONS) }],
+    })
   );
 
   // hydra://preferences — current preferences

@@ -661,7 +661,7 @@ async function getMarketplaceSkillDetails(payload: {
     files: summary.files,
     installTargets: {
       user: path.join(os.homedir(), ".claude", "skills"),
-      project: payload?.source ? ".claude/skills" : null
+      project: ".claude/skills"
     }
   };
 }
@@ -707,8 +707,8 @@ async function installMarketplaceSkill(payload: {
   scope: MarketplaceInstallScope;
   repoPath?: string | null;
 }): Promise<MarketplaceInstallResponse> {
-  const scope = payload?.scope === "project" ? "project" : "user";
-  const repoPath = payload?.repoPath || "";
+  const scope = payload.scope === "project" ? "project" : "user";
+  const repoPath = payload.repoPath || "";
 
   if (scope === "project" && !repoPath) {
     throw new Error("Open a project folder before installing a project-scoped skill.");

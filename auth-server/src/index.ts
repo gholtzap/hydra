@@ -21,22 +21,6 @@ function authConfigOrError(c: Context<{ Bindings: CloudflareBindings }>) {
   }
 }
 
-function appendSetCookie(headers: Headers, source: Headers): void {
-  const getSetCookie = (source as Headers & { getSetCookie?: () => string[] }).getSetCookie;
-  const cookies = typeof getSetCookie === "function" ? getSetCookie.call(source) : [];
-  if (cookies.length > 0) {
-    for (const cookie of cookies) {
-      headers.append("set-cookie", cookie);
-    }
-    return;
-  }
-
-  const cookie = source.get("set-cookie");
-  if (cookie) {
-    headers.append("set-cookie", cookie);
-  }
-}
-
 // CORS for auth routes — allow Electron origins
 app.use("/api/auth/*", async (c, next) => {
   const result = authConfigOrError(c);
@@ -100,7 +84,21 @@ app.get("/api/auth/electron/init-oauth-proxy", async (c) => {
   }
 
   const responseHeaders = new Headers();
-  appendSetCookie(responseHeaders, signInResponse.headers);
+  const getSetCookie = (
+    signInResponse.headers as Headers & { getSetCookie?: () => string[] }
+  ).getSetCookie;
+  const cookies =
+    typeof getSetCookie === "function" ? getSetCookie.call(signInResponse.headers) : [];
+  if (cookies.length > 0) {
+    for (const cookie of cookies) {
+      responseHeaders.append("set-cookie", cookie);
+    }
+  } else {
+    const cookie = signInResponse.headers.get("set-cookie");
+    if (cookie) {
+      responseHeaders.append("set-cookie", cookie);
+    }
+  }
   if ("url" in data && typeof data.url === "string" && "redirect" in data && data.redirect) {
     responseHeaders.set("location", data.url);
     return new Response(null, { headers: responseHeaders, status: 302 });

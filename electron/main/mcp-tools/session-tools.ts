@@ -20,13 +20,6 @@ const AGENT_DENY_MAP: Record<string, string> = {
   codex: "\x1b[B\r",
 };
 
-function defaultApprove(): string {
-  return "y\r";
-}
-function defaultDeny(): string {
-  return "n\r";
-}
-
 type SessionListItem = Omit<SessionRecord, "transcript" | "rawTranscript" | "sessionIconPath">;
 type SessionDetailsResult = Omit<SessionRecord, "sessionIconPath" | "rawTranscript"> & {
   rawTranscript?: string;
@@ -1119,7 +1112,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ error: "Session not found" });
       const agentId = session.startupAgentId || "claude";
-      const input = AGENT_APPROVE_MAP[agentId] ?? defaultApprove();
+      const input = AGENT_APPROVE_MAP[agentId] ?? "y\r";
       appController.handleSessionInput(args.sessionId, input);
       return textResult({ ok: true, agentId });
     }
@@ -1137,7 +1130,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
       if (!session) return textResult({ ok: false, error: "Focused session not found", sessionId });
       const agentId = session.startupAgentId || "claude";
-      const input = AGENT_APPROVE_MAP[agentId] ?? defaultApprove();
+      const input = AGENT_APPROVE_MAP[agentId] ?? "y\r";
       appController.handleSessionInput(sessionId, input);
       return textResult({ ok: true, sessionId, agentId });
     }
@@ -1154,7 +1147,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ error: "Session not found" });
       const agentId = session.startupAgentId || "claude";
-      const input = AGENT_DENY_MAP[agentId] ?? defaultDeny();
+      const input = AGENT_DENY_MAP[agentId] ?? "n\r";
       appController.handleSessionInput(args.sessionId, input);
       return textResult({ ok: true, agentId });
     }
@@ -1172,7 +1165,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
       if (!session) return textResult({ ok: false, error: "Focused session not found", sessionId });
       const agentId = session.startupAgentId || "claude";
-      const input = AGENT_DENY_MAP[agentId] ?? defaultDeny();
+      const input = AGENT_DENY_MAP[agentId] ?? "n\r";
       appController.handleSessionInput(sessionId, input);
       return textResult({ ok: true, sessionId, agentId });
     }

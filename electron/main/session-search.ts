@@ -203,8 +203,7 @@ async function getSessionSearchFileRecords(
     pruneSessionSearchFileCache();
     return files;
   } catch (error) {
-    const currentEntry = sessionSearchFileCache.get(normalizedRepoPath);
-    if (currentEntry?.pending === pending) {
+    if (sessionSearchFileCache.get(normalizedRepoPath)?.pending === pending) {
       if (existingEntry) {
         touchSessionSearchFileCache(normalizedRepoPath, {
           cachedAt: existingEntry.cachedAt,
@@ -448,7 +447,7 @@ async function readJsonlLineAt(filePath: string, lineNumber: number): Promise<st
   } catch {
     return "";
   } finally {
-    await fileHandle?.close().catch(() => undefined);
+    void fileHandle?.close().catch(() => undefined);
   }
 
   return "";
@@ -608,8 +607,7 @@ async function runListCommand(
     child.stdin?.end(stdinText, "utf8");
   });
 
-  const trimmedOutput = output.trim();
-  return trimmedOutput ? trimmedOutput.split("\n").filter(Boolean) : [];
+  return output.trim().split("\n").filter(Boolean);
 }
 
 function claudeProjectKey(repoPath: string): string {
@@ -671,7 +669,7 @@ async function readCodexMetadataSnippet(filePath: string): Promise<string> {
   } catch {
     return "";
   } finally {
-    await fileHandle?.close().catch(() => undefined);
+    void fileHandle?.close().catch(() => undefined);
   }
 }
 

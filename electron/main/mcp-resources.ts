@@ -1,6 +1,6 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import type { AgentDefinition, RepoRecord, SessionRecord } from "../shared-types";
+import type { AgentDefinition } from "../shared-types";
 import type { AppControllerHandle } from "./internal-api";
 
 const { AGENT_DEFINITIONS } = require("./state-store") as {

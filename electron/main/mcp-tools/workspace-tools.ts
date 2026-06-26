@@ -39,6 +39,15 @@ type WorkspaceSearchResult = {
 const DEFAULT_REPO_SEARCH_LIMIT = 10;
 const MAX_REPO_SEARCH_LIMIT = 50;
 
+function compareNameMatches(
+  left: { name: string; matchedFields: string[] },
+  right: { name: string; matchedFields: string[] }
+): number {
+  const leftNameMatch = left.matchedFields.includes("name") ? 0 : 1;
+  const rightNameMatch = right.matchedFields.includes("name") ? 0 : 1;
+  return leftNameMatch - rightNameMatch || left.name.localeCompare(right.name);
+}
+
 export function register(server: McpServer, appController: AppControllerHandle): void {
   server.tool(
     "list_workspaces",
@@ -76,11 +85,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
           };
         })
         .filter((workspace) => workspace.matchedFields.length > 0)
-        .sort((left, right) => {
-          const leftNameMatch = left.matchedFields.includes("name") ? 0 : 1;
-          const rightNameMatch = right.matchedFields.includes("name") ? 0 : 1;
-          return leftNameMatch - rightNameMatch || left.name.localeCompare(right.name);
-        })
+        .sort(compareNameMatches)
         .slice(0, limit);
 
       return textResult({ query: args.query, limit, matches });
@@ -153,11 +158,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
           };
         })
         .filter((repo) => repo.matchedFields.length > 0)
-        .sort((left, right) => {
-          const leftNameMatch = left.matchedFields.includes("name") ? 0 : 1;
-          const rightNameMatch = right.matchedFields.includes("name") ? 0 : 1;
-          return leftNameMatch - rightNameMatch || left.name.localeCompare(right.name);
-        })
+        .sort(compareNameMatches)
         .slice(0, limit);
 
       return textResult({ query: args.query, limit, matches });

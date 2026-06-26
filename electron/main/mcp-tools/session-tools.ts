@@ -1177,8 +1177,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       query: z.string().describe("Search query"),
     },
     async (args: McpActionArgs<"search_sessions">) => {
-      const result = await appController.handleMcpAction("search_sessions", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("search_sessions", args));
     }
   );
 
@@ -1228,8 +1227,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       externalSessionId: z.string().describe("External session ID to resume from"),
     },
     async (args: McpActionArgs<"resume_session">) => {
-      const result = await appController.handleMcpAction("resume_session", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("resume_session", args));
     }
   );
 }

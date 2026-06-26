@@ -2145,6 +2145,7 @@ function renderWikiDetail(repo) {
   }
 
   const wikiContext = ui.wikiContextRepoId === repo.id ? ui.wikiContext : null;
+  const wikiFiles = flattenWikiFiles(wikiContext?.tree || []);
 
   detailElement.innerHTML = `
     <section class="detail-panel">
@@ -2195,7 +2196,7 @@ function renderWikiDetail(repo) {
                     <div class="wiki-panel-header">
                       <div>
                         <div class="row-title">Files</div>
-                        <div class="row-subtitle">${flattenWikiFiles(wikiContext.tree || []).length} tracked ${pluralize(flattenWikiFiles(wikiContext.tree || []).length, "file", "files")}</div>
+                        <div class="row-subtitle">${wikiFiles.length} tracked ${pluralize(wikiFiles.length, "file", "files")}</div>
                       </div>
                     </div>
                     <div class="wiki-tree-scroll">
@@ -3735,15 +3736,11 @@ function renderPausedSessionNotice(session) {
     dom(
       "div",
       {},
-      dom("div", { className: "row-title" }, restartSessionActionLabel()),
+      dom("div", { className: "row-title" }, "Restart"),
       dom("div", { className: "row-subtitle" }, body)
     ),
     renderSessionRestartButtonElement(session, { className: "primary" })
   );
-}
-
-function restartSessionActionLabel() {
-  return "Restart";
 }
 
 function startSessionRename(sessionId) {
@@ -5444,8 +5441,9 @@ function renderClaudeFilesPane(context) {
 }
 
 function renderClaudePluginsPane(context) {
+  const jsonFiles = editableClaudeJsonFiles();
   const selectedFile =
-    editableClaudeJsonFiles().find((file) => file.path === ui.settingsSelectedFilePath) || null;
+    jsonFiles.find((file) => file.path === ui.settingsSelectedFilePath) || null;
   const parseError = ui.settingsJsonError;
   const showRawEditor = ui.settingsShowRawJson || !!parseError;
   const currentRootValue = currentJsonSettingsValue();
@@ -5470,7 +5468,7 @@ function renderClaudePluginsPane(context) {
       }
 
       ${
-        editableClaudeJsonFiles().length
+        jsonFiles.length
           ? `
             <div class="settings-group-card">
               <div class="settings-help-row">
@@ -5480,7 +5478,7 @@ function renderClaudePluginsPane(context) {
                 </div>
               </div>
               <div class="claude-settings-chip-row">
-                ${editableClaudeJsonFiles().map((file) => renderClaudeSettingsFileChip(file)).join("")}
+                ${jsonFiles.map((file) => renderClaudeSettingsFileChip(file)).join("")}
               </div>
             </div>
           `
@@ -14157,7 +14155,7 @@ function renderSessionRestartButton(session, options: SessionRestartButtonRender
     noDrag = false,
     stopRowSelect = false
   } = options;
-  const label = restartSessionActionLabel();
+  const label = "Restart";
   const classes = classNames(
     className || undefined,
     "session-restart-button",

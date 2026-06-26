@@ -203,7 +203,7 @@ export class VoiceManager {
       return { success: false, error: "Python 3.10+ not found" };
     }
 
-    const markerPath = this.depsMarkerPath();
+    const markerPath = path.join(os.homedir(), ".hydra", "voice-deps.json");
     if (fs.existsSync(markerPath)) {
       try {
         const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
@@ -487,10 +487,6 @@ export class VoiceManager {
   private voiceDir(): string {
     const devPath = path.join(__dirname, "..", "..", "voice");
     return fs.existsSync(devPath) ? devPath : path.join(__dirname, "voice");
-  }
-
-  private depsMarkerPath(): string {
-    return path.join(os.homedir(), ".hydra", "voice-deps.json");
   }
 
   private depsVersion(): string {

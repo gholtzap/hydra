@@ -27,7 +27,6 @@ const result = spawnSync(
   process.platform === "win32" ? "npx.cmd" : "npx",
   ["electron-builder", ...builderArgs],
   {
-    cwd: process.cwd(),
     env,
     stdio: "inherit",
     shell: process.platform === "win32"

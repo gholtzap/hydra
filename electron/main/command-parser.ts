@@ -28,7 +28,7 @@ function parseCommandSpec(value: unknown): ParsedCommandSpec | null {
   }
 
   const tokens = tokenizeCommandLine(normalized);
-  if (!tokens || !tokens.length) {
+  if (!tokens) {
     return null;
   }
 

@@ -11,7 +11,6 @@ const MAIN_BRANCH = "main";
 function run(command, args, options = {}) {
   const { capture = true } = options;
   const result = execFileSync(command, args, {
-    cwd: process.cwd(),
     encoding: "utf8",
     stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit"
   });

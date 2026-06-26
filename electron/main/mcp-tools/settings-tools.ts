@@ -36,8 +36,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       repoId: z.string().describe("Repo ID"),
     },
     async (args: McpActionArgs<"get_settings_context">) => {
-      const result = await appController.handleMcpAction("get_settings_context", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("get_settings_context", args));
     }
   );
 
@@ -49,8 +48,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       filePath: z.string().describe("Settings file path"),
     },
     async (args: McpActionArgs<"load_settings_file">) => {
-      const result = await appController.handleMcpAction("load_settings_file", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("load_settings_file", args));
     }
   );
 

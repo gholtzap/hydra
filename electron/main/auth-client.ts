@@ -225,8 +225,7 @@ export class HydraAuthClient {
       return this.cachedSession;
     }
 
-    const result = await this.loadSessionState();
-    return result.session;
+    return (await this.loadSessionState()).session;
   }
 
   async signIn(email: string, password: string): Promise<AuthResult> {
@@ -381,8 +380,7 @@ export class HydraAuthClient {
   // -----------------------------------------------------------------------
 
   private async refreshSession(options: { broadcast?: boolean } = {}): Promise<AuthSession | null> {
-    const result = await this.loadSessionState(options);
-    return result.session;
+    return (await this.loadSessionState(options)).session;
   }
 
   private async loadSessionState(

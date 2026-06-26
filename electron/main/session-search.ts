@@ -4,8 +4,8 @@ const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process") as typeof import("node:child_process");
-const { resolveCommandPath } = require("./command-path") as {
-  resolveCommandPath: (command: string) => Promise<string | null>;
+const { resolveCommandPathSync } = require("./command-path") as {
+  resolveCommandPathSync: (command: string) => string | null;
 };
 const { isPathWithinRoot } = require("./shared-utils") as {
   isPathWithinRoot: (filePath: string, rootPath: string) => boolean;
@@ -237,7 +237,7 @@ async function resolveRequiredTools(): Promise<SearchToolPaths> {
   const missingTools: string[] = [];
 
   for (const toolName of REQUIRED_TOOLS) {
-    const toolPath = await resolveCommandPath(toolName);
+    const toolPath = resolveCommandPathSync(toolName);
     if (!toolPath) {
       missingTools.push(toolName);
       continue;

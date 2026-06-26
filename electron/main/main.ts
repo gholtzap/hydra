@@ -368,9 +368,8 @@ const {
   wikiExists: (rootPath: string) => Promise<boolean>;
   wikiExistsSync: (rootPath: string) => boolean;
 };
-const { mergeCommandPath, resolveCommandPath, resolveCommandPathSync } = require("./command-path") as {
+const { mergeCommandPath, resolveCommandPathSync } = require("./command-path") as {
   mergeCommandPath: (envPath?: string | null) => string;
-  resolveCommandPath: (command: string, envPath?: string | null) => Promise<string | null>;
   resolveCommandPathSync: (command: string, envPath?: string | null) => string | null;
 };
 const { startMcpServer } = require("./mcp-server") as {
@@ -1199,7 +1198,7 @@ class AppController {
     const [, state, lazygitPath] = await Promise.all([
       this.authMainSetup,
       loadState(),
-      resolveCommandPath("lazygit")
+      resolveCommandPathSync("lazygit")
     ]);
 
     this.state = state;

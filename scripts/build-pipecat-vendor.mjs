@@ -43,8 +43,7 @@ await Promise.all(
       minify: true,
       platform: "browser",
       target: "es2022",
-      legalComments: "none",
-      sourcemap: false
+      legalComments: "none"
     })
   )
 );

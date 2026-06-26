@@ -14967,14 +14967,6 @@ function terminalLineKillHandled(event) {
   return !!(event as KeyboardEvent & { __claudeWorkspaceTerminalLineKillHandled?: boolean }).__claudeWorkspaceTerminalLineKillHandled;
 }
 
-function markTerminalPinHandled(event) {
-  (event as KeyboardEvent & { __claudeWorkspaceTerminalPinHandled?: boolean }).__claudeWorkspaceTerminalPinHandled = true;
-}
-
-function terminalPinHandled(event) {
-  return !!(event as KeyboardEvent & { __claudeWorkspaceTerminalPinHandled?: boolean }).__claudeWorkspaceTerminalPinHandled;
-}
-
 function isTerminalCopyShortcut(event) {
   return event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "c";
 }

@@ -77,12 +77,7 @@ function sessionSummary(appController: AppControllerHandle, session: SessionReco
   };
 }
 
-function sortedActionableSessions(sessions: SessionRecord[]): SessionRecord[] {
-  const blocked = sessions.filter(
-    (session) => session.status === "blocked" || session.status === "needs_input" || session.blocker !== null
-  );
-  const unread = sessions.filter((session) => session.unreadCount > 0);
-
+function sortedActionableSessions(blocked: SessionRecord[], unread: SessionRecord[]): SessionRecord[] {
   return Array.from(new Map([...blocked, ...unread].map((session) => [session.id, session])).values())
     .sort((left, right) => {
       const leftReasons = inboxReasons(left);
@@ -149,7 +144,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const unread = sessions.filter((session) => session.unreadCount > 0);
       const blockedIds = new Set(blocked.map((session) => session.id));
       const summaryMap = (session: SessionRecord): InboxSessionSummary => sessionSummary(appController, session);
-      const actionable = sortedActionableSessions(sessions).slice(0, limit);
+      const actionable = sortedActionableSessions(blocked, unread).slice(0, limit);
 
       return textResult({
         actionable: actionable.map(summaryMap),
@@ -188,7 +183,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
 
       return textResult({
         focusedSession: focusedSession ? sessionSummary(appController, focusedSession) : null,
-        actionable: sortedActionableSessions(sessions).slice(0, limit).map((session) =>
+        actionable: sortedActionableSessions(blocked, unread).slice(0, limit).map((session) =>
           sessionSummary(appController, session)
         ),
         counts: {

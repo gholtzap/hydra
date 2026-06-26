@@ -91,8 +91,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
     "Get dev port monitoring status",
     {},
     async () => {
-      const result = await appController.handleMcpAction("get_port_status", {});
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("get_port_status", {}));
     }
   );
 
@@ -104,8 +103,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       repoId: z.string().describe("Repo ID"),
     },
     async (args: McpActionArgs<"launch_ephemeral_tool">) => {
-      const result = await appController.handleMcpAction("launch_ephemeral_tool", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("launch_ephemeral_tool", args));
     }
   );
 

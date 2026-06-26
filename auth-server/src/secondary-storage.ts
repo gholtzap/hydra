@@ -120,14 +120,14 @@ export function createEncryptedSecondaryStorage(
 
       const now = Date.now();
       if (row.expires_at !== null && row.expires_at <= now) {
-        await deleteByHashedKey(keyHash).catch(() => undefined);
+        void deleteByHashedKey(keyHash).catch(() => undefined);
         return null;
       }
 
       try {
         return await decryptValue(row.value_encrypted, keyHash, row.expires_at);
       } catch {
-        await deleteByHashedKey(keyHash).catch(() => undefined);
+        void deleteByHashedKey(keyHash).catch(() => undefined);
         return null;
       }
     },

@@ -205,9 +205,9 @@ export class HydraAuthClient {
   /** Restore any existing Better Auth session on startup. */
   async initialize(): Promise<AuthSession | null> {
     for (let attempt = 0; attempt <= SESSION_RESTORE_RETRY_DELAYS_MS.length; attempt += 1) {
-      const result = await this.loadSessionState();
-      if (result.status !== "error") {
-        return result.session;
+      const { status, session } = await this.loadSessionState();
+      if (status !== "error") {
+        return session;
       }
 
       if (attempt === SESSION_RESTORE_RETRY_DELAYS_MS.length) {

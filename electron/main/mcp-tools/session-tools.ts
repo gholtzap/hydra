@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { SessionRecord, SessionStatus } from "../../shared-types";
 import type { AppControllerHandle } from "../internal-api";
 import type { McpActionArgs } from "../mcp-contracts";
+import { boundedInteger } from "./limits";
 import { textResult } from "./result";
 
 const AGENT_APPROVE_MAP: Record<string, string> = {
@@ -250,13 +251,6 @@ function delayMs(durationMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, durationMs);
   });
-}
-
-function boundedInteger(value: number | undefined, fallback: number, minimum: number, maximum: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(minimum, Math.min(maximum, Math.trunc(value)));
 }
 
 function sessionActivityTimestamp(session: SessionRecord): string {

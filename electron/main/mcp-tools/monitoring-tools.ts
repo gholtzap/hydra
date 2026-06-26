@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { SessionRecord } from "../../shared-types";
 import type { AppControllerHandle } from "../internal-api";
 import type { McpActionArgs } from "../mcp-contracts";
+import { boundedInteger } from "./limits";
 import { textResult } from "./result";
 
 type InboxArgs = {
@@ -43,13 +44,6 @@ const EPHEMERAL_TOOL_ID_VALUES = [
   "lazygit",
   "tokscale"
 ] as const;
-
-function boundedInboxLimit(limit: number | undefined): number {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) {
-    return DEFAULT_INBOX_LIMIT;
-  }
-  return Math.max(1, Math.min(MAX_INBOX_LIMIT, Math.trunc(limit)));
-}
 
 function sessionActivityTimestamp(session: SessionRecord): string {
   return session.lastActivityAt || session.updatedAt;
@@ -145,7 +139,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       limit: z.number().optional().describe("Maximum actionable sessions to return, capped at 100"),
     },
     async (args: InboxArgs) => {
-      const limit = boundedInboxLimit(args.limit);
+      const limit = boundedInteger(args.limit, DEFAULT_INBOX_LIMIT, 1, MAX_INBOX_LIMIT);
       const sessions = args.repoId
         ? appController.state.sessions.filter((session) => session.repoID === args.repoId)
         : appController.state.sessions;
@@ -179,7 +173,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       limit: z.number().optional().describe("Maximum actionable sessions to return, capped at 100"),
     },
     async (args: ControlOverviewArgs) => {
-      const limit = boundedInboxLimit(args.limit);
+      const limit = boundedInteger(args.limit, DEFAULT_INBOX_LIMIT, 1, MAX_INBOX_LIMIT);
       const sessions = args.repoId
         ? appController.state.sessions.filter((session) => session.repoID === args.repoId)
         : appController.state.sessions;

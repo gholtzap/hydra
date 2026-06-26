@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import type { AppControllerHandle } from "../internal-api";
 import type { McpActionArgs } from "../mcp-contracts";
+import { boundedInteger } from "./limits";
 import { textResult } from "./result";
 
 type RepoSearchArgs = {
@@ -38,13 +39,6 @@ type WorkspaceSearchResult = {
 const DEFAULT_REPO_SEARCH_LIMIT = 10;
 const MAX_REPO_SEARCH_LIMIT = 50;
 
-function boundedSearchLimit(limit: number | undefined): number {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) {
-    return DEFAULT_REPO_SEARCH_LIMIT;
-  }
-  return Math.max(1, Math.min(MAX_REPO_SEARCH_LIMIT, Math.trunc(limit)));
-}
-
 export function register(server: McpServer, appController: AppControllerHandle): void {
   server.tool(
     "list_workspaces",
@@ -66,7 +60,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const needle = args.query.trim().toLowerCase();
       if (!needle) return textResult({ query: args.query, matches: [] });
 
-      const limit = boundedSearchLimit(args.limit);
+      const limit = boundedInteger(args.limit, DEFAULT_REPO_SEARCH_LIMIT, 1, MAX_REPO_SEARCH_LIMIT);
       const matches: WorkspaceSearchResult[] = appController.state.workspaces
         .map((workspace) => {
           const matchedFields: string[] = [];
@@ -142,7 +136,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const needle = args.query.trim().toLowerCase();
       if (!needle) return textResult({ query: args.query, matches: [] });
 
-      const limit = boundedSearchLimit(args.limit);
+      const limit = boundedInteger(args.limit, DEFAULT_REPO_SEARCH_LIMIT, 1, MAX_REPO_SEARCH_LIMIT);
       const matches: RepoSearchResult[] = appController.state.repos
         .filter((repo) => !args.workspaceId || repo.workspaceID === args.workspaceId)
         .map((repo) => {

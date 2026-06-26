@@ -832,8 +832,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         });
       }
 
-      const result = await appController.handleMcpAction("send_command", args);
-      return textResult({ ok: true, ...result });
+      return textResult({ ok: true, ...(await appController.handleMcpAction("send_command", args)) });
     }
   );
 

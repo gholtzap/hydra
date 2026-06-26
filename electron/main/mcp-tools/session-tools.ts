@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { SessionRecord, SessionStatus } from "../../shared-types";
 import type { AppControllerHandle } from "../internal-api";
 import type { McpActionArgs } from "../mcp-contracts";
+import { textResult } from "./result";
 
 const AGENT_APPROVE_MAP: Record<string, string> = {
   claude: "1\r",
@@ -23,10 +24,6 @@ function defaultApprove(): string {
 }
 function defaultDeny(): string {
   return "n\r";
-}
-
-function textResult(data: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
 type SessionListItem = Omit<SessionRecord, "transcript" | "rawTranscript" | "sessionIconPath">;

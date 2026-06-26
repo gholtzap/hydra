@@ -7,10 +7,7 @@ import { z } from "zod";
 import type { SessionRecord } from "../../shared-types";
 import type { AppControllerHandle } from "../internal-api";
 import type { McpActionArgs } from "../mcp-contracts";
-
-function textResult(data: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
-}
+import { textResult } from "./result";
 
 type InboxArgs = {
   repoId?: string;

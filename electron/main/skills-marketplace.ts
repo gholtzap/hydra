@@ -747,7 +747,8 @@ async function installMarketplaceSkill(payload: {
       await fs.writeFile(targetPath, contents);
     }
   } catch (error) {
-    await fs.rm(installPath, { recursive: true, force: true }).catch(() => undefined);
+    // ponytail: best-effort rollback; partial installs get overwritten on the next attempt.
+    void fs.rm(installPath, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
 

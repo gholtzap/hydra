@@ -117,8 +117,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       sessionId: z.string().describe("Session ID of the ephemeral tool"),
     },
     async (args: McpActionArgs<"close_ephemeral_tool">) => {
-      const result = await appController.handleMcpAction("close_ephemeral_tool", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("close_ephemeral_tool", args)) ?? { ok: true });
     }
   );
 

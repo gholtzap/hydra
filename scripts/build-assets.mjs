@@ -6,6 +6,16 @@ import { fileURLToPath } from "node:url";
 import { platform } from "node:process";
 
 const root = fileURLToPath(new URL("..", import.meta.url)).replace(/[/\\]$/, "");
+const rendererAssets = [
+  "index.html",
+  "auth.html",
+  "app.css",
+  "vendor/xterm.css",
+  "vendor/xterm.js",
+  "vendor/addon-fit.js",
+  "vendor/pipecat-client.js",
+  "vendor/pipecat-webrtc.js",
+];
 
 function mkdir(dir) {
   mkdirSync(dir, { recursive: true });
@@ -35,14 +45,9 @@ try {
   }
 
   // Renderer static assets
-  cp("electron/renderer/index.html", "dist-electron/renderer/index.html");
-  cp("electron/renderer/auth.html", "dist-electron/renderer/auth.html");
-  cp("electron/renderer/app.css", "dist-electron/renderer/app.css");
-  cp("electron/renderer/vendor/xterm.css", "dist-electron/renderer/vendor/xterm.css");
-  cp("electron/renderer/vendor/xterm.js", "dist-electron/renderer/vendor/xterm.js");
-  cp("electron/renderer/vendor/addon-fit.js", "dist-electron/renderer/vendor/addon-fit.js");
-  cp("electron/renderer/vendor/pipecat-client.js", "dist-electron/renderer/vendor/pipecat-client.js");
-  cp("electron/renderer/vendor/pipecat-webrtc.js", "dist-electron/renderer/vendor/pipecat-webrtc.js");
+  for (const asset of rendererAssets) {
+    cp(`electron/renderer/${asset}`, `dist-electron/renderer/${asset}`);
+  }
 
   // Optional auth server override used by packaged/dev builds.
   if (existsSync(join(root, "electron/renderer/auth-config.json"))) {

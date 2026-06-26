@@ -238,41 +238,41 @@ async function listWorktreeChanges(repoPath: string, baseBranch: string): Promis
 }
 
 async function readCurrentBranch(repoPath: string): Promise<string | null> {
-  const result = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], repoPath);
-  if (!result.ok) {
+  const { ok, stdout } = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], repoPath);
+  if (!ok) {
     return null;
   }
 
-  const normalized = result.stdout.trim();
+  const normalized = stdout.trim();
   return normalized && normalized !== "HEAD" ? normalized : null;
 }
 
 function readCurrentBranchSync(repoPath: string): string | null {
-  const result = runGitSync(["rev-parse", "--abbrev-ref", "HEAD"], repoPath);
-  if (!result.ok) {
+  const { ok, stdout } = runGitSync(["rev-parse", "--abbrev-ref", "HEAD"], repoPath);
+  if (!ok) {
     return null;
   }
 
-  const normalized = result.stdout.trim();
+  const normalized = stdout.trim();
   return normalized && normalized !== "HEAD" ? normalized : null;
 }
 
 async function listGitWorktrees(repoPath: string): Promise<ListedWorktree[]> {
-  const result = await runGit(["worktree", "list", "--porcelain"], repoPath);
-  if (!result.ok) {
+  const { ok, stdout } = await runGit(["worktree", "list", "--porcelain"], repoPath);
+  if (!ok) {
     return [];
   }
 
-  return parseListedWorktrees(result.stdout);
+  return parseListedWorktrees(stdout);
 }
 
 function listGitWorktreesSync(repoPath: string): ListedWorktree[] {
-  const result = runGitSync(["worktree", "list", "--porcelain"], repoPath);
-  if (!result.ok) {
+  const { ok, stdout } = runGitSync(["worktree", "list", "--porcelain"], repoPath);
+  if (!ok) {
     return [];
   }
 
-  return parseListedWorktrees(result.stdout);
+  return parseListedWorktrees(stdout);
 }
 
 function parseListedWorktrees(output: string): ListedWorktree[] {

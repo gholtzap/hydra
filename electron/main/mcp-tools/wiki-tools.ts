@@ -16,8 +16,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       repoId: z.string().describe("Repo ID"),
     },
     async (args: McpActionArgs<"get_wiki">) => {
-      const result = await appController.handleMcpAction("get_wiki", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("get_wiki", args));
     }
   );
 
@@ -29,8 +28,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       path: z.string().describe("Relative path to wiki page"),
     },
     async (args: McpActionArgs<"read_wiki_page">) => {
-      const result = await appController.handleMcpAction("read_wiki_page", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("read_wiki_page", args));
     }
   );
 

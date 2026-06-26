@@ -10,12 +10,8 @@ const { detectWikiEnabled } = require("./wiki") as {
 };
 
 async function scanWorkspace(rootPath: string, workspaceId: string): Promise<RepoRecord[]> {
-  const normalizedRootPath = path.resolve(rootPath);
-  return [await createRepoRecord(normalizedRootPath, workspaceId)];
-}
-
-async function createRepoRecord(repoPath: string, workspaceId: string): Promise<RepoRecord> {
-  return {
+  const repoPath = path.resolve(rootPath);
+  return [{
     id: randomUUID(),
     workspaceID: workspaceId,
     name: path.basename(repoPath) || repoPath,
@@ -25,7 +21,7 @@ async function createRepoRecord(repoPath: string, workspaceId: string): Promise<
     parallelWorktreeSettings: normalizeRepoParallelWorktreeSettings({}),
     parallelWorktreeLedger: [],
     discoveredAt: new Date().toISOString()
-  };
+  }];
 }
 
 module.exports = {

@@ -36,10 +36,11 @@ export function register(server: McpServer, appController: AppControllerHandle):
       agentId: z.string().describe("Agent ID to use for continue handoffs"),
     },
     async (args: { agentId: string }) => {
-      const result = await appController.handleMcpAction("update_preferences", {
-        patch: { handoffAgentId: args.agentId },
-      });
-      return textResult(result ?? { ok: true });
+      return textResult(
+        (await appController.handleMcpAction("update_preferences", {
+          patch: { handoffAgentId: args.agentId },
+        })) ?? { ok: true }
+      );
     }
   );
 
@@ -50,10 +51,11 @@ export function register(server: McpServer, appController: AppControllerHandle):
       agentId: z.string().describe("Agent ID to set as default"),
     },
     async (args: { agentId: string }) => {
-      const result = await appController.handleMcpAction("update_preferences", {
-        patch: { defaultAgentId: args.agentId },
-      });
-      return textResult(result ?? { ok: true });
+      return textResult(
+        (await appController.handleMcpAction("update_preferences", {
+          patch: { defaultAgentId: args.agentId },
+        })) ?? { ok: true }
+      );
     }
   );
 
@@ -66,12 +68,13 @@ export function register(server: McpServer, appController: AppControllerHandle):
     },
     async (args: { agentId: string; command: string }) => {
       const currentOverrides = appController.state.preferences.agentCommandOverrides || {};
-      const result = await appController.handleMcpAction("update_preferences", {
-        patch: {
-          agentCommandOverrides: { ...currentOverrides, [args.agentId]: args.command },
-        },
-      });
-      return textResult(result ?? { ok: true });
+      return textResult(
+        (await appController.handleMcpAction("update_preferences", {
+          patch: {
+            agentCommandOverrides: { ...currentOverrides, [args.agentId]: args.command },
+          },
+        })) ?? { ok: true }
+      );
     }
   );
 }

@@ -393,6 +393,30 @@ function transcriptTail(text: string, lineLimit: number, charLimit: number): Ses
   };
 }
 
+function sessionTailResult(
+  session: SessionRecord,
+  args: Pick<SessionTailArgs, "lines" | "maxChars" | "includeRawTranscript">
+) {
+  const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
+  const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
+
+  return {
+    sessionId: session.id,
+    repoID: session.repoID,
+    title: session.title,
+    status: session.status,
+    runtimeState: session.runtimeState,
+    unreadCount: session.unreadCount,
+    blocker: session.blocker,
+    lastActivityAt: session.lastActivityAt,
+    updatedAt: session.updatedAt,
+    transcript: transcriptTail(session.transcript, lineLimit, charLimit),
+    rawTranscript: args.includeRawTranscript
+      ? transcriptTail(session.rawTranscript, lineLimit, charLimit)
+      : undefined,
+  };
+}
+
 function containsTerminalControlCharacter(text: string): boolean {
   return TERMINAL_TEXT_CONTROL_CHARACTER_PATTERN.test(text);
 }
@@ -520,25 +544,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ error: "Session not found" });
 
-      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
-      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
-      const result = {
-        sessionId: session.id,
-        repoID: session.repoID,
-        title: session.title,
-        status: session.status,
-        runtimeState: session.runtimeState,
-        unreadCount: session.unreadCount,
-        blocker: session.blocker,
-        lastActivityAt: session.lastActivityAt,
-        updatedAt: session.updatedAt,
-        transcript: transcriptTail(session.transcript, lineLimit, charLimit),
-        rawTranscript: args.includeRawTranscript
-          ? transcriptTail(session.rawTranscript, lineLimit, charLimit)
-          : undefined,
-      };
-
-      return textResult(result);
+      return textResult(sessionTailResult(session, args));
     }
   );
 
@@ -558,25 +564,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
       if (!session) return textResult({ ok: false, error: "Focused session not found", sessionId });
 
-      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
-      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
-      const result = {
-        sessionId: session.id,
-        repoID: session.repoID,
-        title: session.title,
-        status: session.status,
-        runtimeState: session.runtimeState,
-        unreadCount: session.unreadCount,
-        blocker: session.blocker,
-        lastActivityAt: session.lastActivityAt,
-        updatedAt: session.updatedAt,
-        transcript: transcriptTail(session.transcript, lineLimit, charLimit),
-        rawTranscript: args.includeRawTranscript
-          ? transcriptTail(session.rawTranscript, lineLimit, charLimit)
-          : undefined,
-      };
-
-      return textResult(result);
+      return textResult(sessionTailResult(session, args));
     }
   );
 

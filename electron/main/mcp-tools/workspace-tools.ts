@@ -212,8 +212,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       runCommand: z.string().describe("Run command"),
     },
     async (args: McpActionArgs<"set_build_run_config">) => {
-      const result = await appController.handleMcpAction("set_build_run_config", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("set_build_run_config", args)) ?? { ok: true });
     }
   );
 

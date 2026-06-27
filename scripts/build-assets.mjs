@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { platform } from "node:process";
 
-const root = fileURLToPath(new URL("..", import.meta.url)).replace(/[/\\]$/, "");
+const root = fileURLToPath(new URL("..", import.meta.url));
 const rendererAssets = [
   "index.html",
   "auth.html",

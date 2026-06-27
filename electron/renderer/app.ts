@@ -8712,13 +8712,6 @@ async function refreshPortStatus() {
 }
 
 
-function currentActiveSession(): SessionSummary | null {
-  if (ui.selection.type !== "session") {
-    return null;
-  }
-  return sessionById(ui.selection.id);
-}
-
 function syncPortStatusPolling() {
   if (ui.selection.type === "status") {
     if (ui.portStatusPollTimer === null) {

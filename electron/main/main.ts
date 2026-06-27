@@ -2401,10 +2401,7 @@ class AppController {
     );
   }
 
-  initialParallelWorktreeModeForNewSession(
-    repo: RepoRecord,
-    excludeSessionId: string | null = null
-  ): ParallelWorktreeSessionMode {
+  initialParallelWorktreeModeForNewSession(repo: RepoRecord): ParallelWorktreeSessionMode {
     const settings = this.effectiveRepoParallelWorktreeSettings(repo);
     if (!settings.enabled) {
       return "disabled";
@@ -2634,13 +2631,13 @@ class AppController {
 
     let mode: ParallelWorktreeSessionMode;
     if (launchReason === "create" || launchReason === "resume") {
-      mode = this.initialParallelWorktreeModeForNewSession(repo, session.id);
+      mode = this.initialParallelWorktreeModeForNewSession(repo);
       session.parallelWorktree = this.buildParallelWorktreeMetadata(repo, mode);
     } else {
       const existingMode = session.parallelWorktree?.mode || "disabled";
       mode =
         existingMode === "disabled"
-          ? this.initialParallelWorktreeModeForNewSession(repo, session.id)
+          ? this.initialParallelWorktreeModeForNewSession(repo)
           : existingMode;
       const nextMetadata = this.buildParallelWorktreeMetadata(repo, mode);
       if (launchReason === "reopen" && session.parallelWorktree.mode === "isolated") {
@@ -2731,7 +2728,7 @@ class AppController {
       sessionIconUpdatedAt: null,
       parallelWorktree: this.buildParallelWorktreeMetadata(
         repo,
-        startupAgentId ? this.initialParallelWorktreeModeForNewSession(repo, sessionId) : "disabled"
+        startupAgentId ? this.initialParallelWorktreeModeForNewSession(repo) : "disabled"
       ),
       pinnedMessages: [],
       notes: "",
@@ -3230,7 +3227,7 @@ class AppController {
       sessionIconUpdatedAt: null,
       parallelWorktree: this.buildParallelWorktreeMetadata(
         repo,
-        this.initialParallelWorktreeModeForNewSession(repo, sessionId)
+        this.initialParallelWorktreeModeForNewSession(repo)
       ),
       pinnedMessages: [],
       notes: "",

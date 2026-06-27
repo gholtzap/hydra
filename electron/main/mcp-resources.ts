@@ -50,9 +50,6 @@ export function registerResources(server: McpServer, appController: AppControlle
     { title: "Session Detail", description: "Single session with full transcript", mimeType: "application/json" },
     async (uri: URL, variables) => {
       const id = readTemplateVariable(variables.id);
-      if (!id) {
-        return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify({ error: "Session not found" }) }] };
-      }
       const session = appController.state.sessions.find((candidate) => candidate.id === id);
       if (!session) {
         return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify({ error: "Session not found" }) }] };

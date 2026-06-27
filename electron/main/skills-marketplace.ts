@@ -429,19 +429,6 @@ function deriveCompatibility(tags: string[], description: string) {
   return matches.slice(0, 3);
 }
 
-function matchesSearch(value: string, query: string) {
-  if (!query) {
-    return true;
-  }
-
-  const normalizedValue = String(value || "").toLowerCase();
-  return query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((term) => normalizedValue.includes(term));
-}
-
 async function buildSkillSummary(source: {
   owner: string;
   repo: string;
@@ -522,7 +509,10 @@ async function searchReviewedCatalog(query: string): Promise<ResolvedMarketplace
         catalogTags: entry.tags
       });
       const searchableText = `${summary.title} ${summary.description} ${summary.tags.join(" ")} ${summary.repoFullName}`;
-      return matchesSearch(searchableText, query) ? summary : null;
+      const normalizedValue = String(searchableText || "").toLowerCase();
+      return !query || query.toLowerCase().split(/\s+/).filter(Boolean).every((term) => normalizedValue.includes(term))
+        ? summary
+        : null;
     } catch {
       return null;
     }

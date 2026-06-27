@@ -41,7 +41,6 @@ const commandDefinitions = [
             type: 3,
             name: "status",
             description: "Filter by session status",
-            required: false,
             choices: [
               "running",
               "blocked",

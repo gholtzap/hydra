@@ -566,7 +566,7 @@ async function searchGithubCode(query: string): Promise<ResolvedMarketplaceSkill
     .slice(0, 10)
     .map(async (entry) => {
       try {
-        return await buildSkillSummary({
+        return buildSkillSummary({
           owner: entry.owner,
           repo: entry.repo,
           path: entry.path,

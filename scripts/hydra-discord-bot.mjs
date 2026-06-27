@@ -217,7 +217,7 @@ class HydraMcpClient {
     return response.json();
   }
 
-  async callTool(name, args = {}) {
+  async callTool(name, args) {
     await this.ensureInitialized();
     return this.post({
       jsonrpc: "2.0",

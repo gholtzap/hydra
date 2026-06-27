@@ -11211,16 +11211,8 @@ async function openTokscaleOverlay(repoId: string | null) {
   await openEphemeralToolOverlay("tokscale", repoId);
 }
 
-function closeTokscaleOverlay() {
-  closeEphemeralToolOverlay("tokscale");
-}
-
 async function openLazygitOverlay(repoId: string | null) {
   await openEphemeralToolOverlay("lazygit", repoId);
-}
-
-function closeLazygitOverlay() {
-  closeEphemeralToolOverlay("lazygit");
 }
 
 async function startSessionForRepo(

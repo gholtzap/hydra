@@ -8,26 +8,13 @@
 import type {
   AppPreferencesPatch,
   AppStateSnapshot,
-  ClaudeSettingsContext,
-  DirectoryReadResult,
-  MarketplaceInspectResponse,
-  MarketplaceInstallResponse,
-  MarketplaceInstallScope,
-  MarketplaceReviewState,
-  MarketplaceSkillDetails,
   RepoRecord,
-  RepoAppLaunchConfig,
-  SessionSearchResponse,
   SessionSearchSource,
   SessionTagColor,
   SessionRecord,
   SessionStatus,
   StoredAppState,
-  TrackedPortStatus,
-  WikiContext,
-  WikiFileContents,
-  WorkspaceRecord,
-  ReadFileResult
+  WorkspaceRecord
 } from "../shared-types";
 import type {
   McpActionArgs,

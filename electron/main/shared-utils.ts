@@ -39,15 +39,6 @@ function parseFrontmatter(contents: string): {
   values: Record<string, string>;
   body: string;
 } {
-  if (!contents.startsWith("---")) {
-    return {
-      hasFrontmatter: false,
-      lines: [],
-      values: {},
-      body: contents
-    };
-  }
-
   const lines = contents.split(/\r?\n/);
   if (lines[0].trim() !== "---") {
     return {

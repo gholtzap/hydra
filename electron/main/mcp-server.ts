@@ -40,11 +40,13 @@ interface SessionEntry {
 
 interface HydraMcpServerOptions {
   authToken: string;
+  isAccessAllowed: () => boolean | Promise<boolean>;
 }
 
 export class HydraMcpServer {
   private appController: AppControllerHandle;
   private authToken: string;
+  private isAccessAllowed: () => boolean | Promise<boolean>;
   private httpServer: HttpServer | null = null;
   /** Active sessions keyed by mcp-session-id */
   private sessions = new Map<string, SessionEntry>();
@@ -52,6 +54,7 @@ export class HydraMcpServer {
   constructor(appController: AppControllerHandle, options: HydraMcpServerOptions) {
     this.appController = appController;
     this.authToken = options.authToken.trim();
+    this.isAccessAllowed = options.isAccessAllowed;
     if (!this.authToken) {
       throw new Error("MCP auth token is required.");
     }
@@ -112,6 +115,11 @@ export class HydraMcpServer {
 
         if (!this.isAuthorizedRequest(req)) {
           this.writeUnauthorized(res);
+          return;
+        }
+
+        if (!(await this.hasMcpAccess())) {
+          this.writeSignInRequired(res);
           return;
         }
 
@@ -190,6 +198,25 @@ export class HydraMcpServer {
       "WWW-Authenticate": 'Bearer realm="hydra-mcp"',
     });
     res.end(JSON.stringify({ error: "Unauthorized" }));
+  }
+
+  private async hasMcpAccess(): Promise<boolean> {
+    try {
+      return Boolean(await this.isAccessAllowed());
+    } catch (error) {
+      console.warn("[MCP] Access guard failed:", error);
+      return false;
+    }
+  }
+
+  private writeSignInRequired(res: ServerResponse): void {
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
+
+    res.writeHead(403, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Sign in required for Hydra MCP server access." }));
   }
 
   private async handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {

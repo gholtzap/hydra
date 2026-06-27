@@ -85,7 +85,7 @@ export class VoiceManager {
     );
   }
 
-  setMcpAuthToken(token: string): void {
+  setMcpAuthToken(token: string | null): void {
     this.mcpAuthToken = token;
   }
 

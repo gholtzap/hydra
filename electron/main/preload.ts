@@ -414,6 +414,7 @@ contextBridge.exposeInMainWorld("claudeWorkspace", {
     authSignOut: () => invoke<void>("auth:signOut"),
     authGetSession: () => invoke<AuthSession | null>("auth:getSession"),
     authOpenPage: () => invoke<void>("auth:openPage"),
+    authContinueAsGuest: () => invoke<void>("auth:continueAsGuest"),
     requestPasswordReset: (email: string, redirectUrl: string) =>
       invoke<AuthResult>("auth:resetPassword", { email, redirectUrl }),
     verifyTotp: (code: string) =>

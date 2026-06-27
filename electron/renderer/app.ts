@@ -10098,17 +10098,6 @@ function voiceRequiredApiKeys(config: VoiceConfig) {
   return [...keys];
 }
 
-function voiceSetupInstructions(config: VoiceConfig) {
-  const requiredKeys = voiceRequiredApiKeys(config);
-  if (!requiredKeys.length) {
-    return "To get started, choose your providers and allow microphone access when prompted.";
-  }
-
-  return `To get started, choose your providers, make sure ${requiredKeys.join(", ")} ${
-    requiredKeys.length === 1 ? "is" : "are"
-  } configured in the right panel or your shell, and allow microphone access when prompted.`;
-}
-
 function voiceTooltip(voiceState: VoiceCallState) {
   if (voiceState === "listening") return "Voice Active";
   if (voiceState === "connecting") return "Preparing...";

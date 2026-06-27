@@ -33,7 +33,6 @@ await Promise.all(
     build({
       stdin: {
         contents: bundle.contents,
-        loader: "js",
         resolveDir: projectRoot,
         sourcefile: bundle.sourcefile
       },

@@ -3882,17 +3882,6 @@ function mountSessionWorkspaceTerminals(layout: WorkspaceLayoutNode) {
   }
 }
 
-function mountTerminal(session) {
-  if (!isSessionVisible(session.id)) {
-    return;
-  }
-
-  const mount = ui.terminalMounts.get(session.id);
-  if (mount && ui.focusSection === "terminal" && ui.selection.type === "session" && ui.selection.id === session.id) {
-    mount.terminal.focus();
-  }
-}
-
 function writeSessionTerminalOutput(sessionId, data) {
   const mount = ui.terminalMounts.get(sessionId);
   if (!mount) {

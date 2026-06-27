@@ -99,7 +99,6 @@ type BetterAuthMainClient = {
     ) => Promise<BetterAuthResponse<Record<string, unknown>> | Record<string, unknown>>;
   };
   useSession: {
-    get: () => BetterAuthSessionState;
     subscribe: (listener: (state: BetterAuthSessionState) => void) => () => void;
   };
 };

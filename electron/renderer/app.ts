@@ -14300,12 +14300,6 @@ function renderUtilityIconElement(kind): SVGElement {
   return trustedElement<SVGElement>(renderUtilityIcon(kind));
 }
 
-function renderSessionVisualButtonElement(session, extraClass = "", action = "", label = "Upload session icon") {
-  return trustedElement<HTMLButtonElement>(
-    renderSessionVisualButton(session, extraClass, action, label)
-  );
-}
-
 function renderSessionVisualElement(
   session,
   extraClass = "",

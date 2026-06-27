@@ -258,24 +258,6 @@ function sessionQuietDurationMs(session: SessionRecord, nowMs: number): number {
   return Math.max(0, nowMs - activityMs);
 }
 
-function sessionSnapshot(
-  session: SessionRecord,
-  condition: SessionWaitCondition,
-  nowMs: number
-): SessionWaitSnapshot {
-  return {
-    sessionId: session.id,
-    condition,
-    status: session.status,
-    runtimeState: session.runtimeState,
-    unreadCount: session.unreadCount,
-    blocker: session.blocker,
-    lastActivityAt: session.lastActivityAt,
-    quietForMs: sessionQuietDurationMs(session, nowMs),
-    updatedAt: session.updatedAt,
-  };
-}
-
 function sessionMatchesWaitCondition(
   session: SessionRecord,
   condition: SessionWaitCondition,
@@ -341,7 +323,17 @@ async function waitForSessionState(
       };
     }
 
-    lastSnapshot = sessionSnapshot(session, args.condition, nowMs);
+    lastSnapshot = {
+      sessionId: session.id,
+      condition: args.condition,
+      status: session.status,
+      runtimeState: session.runtimeState,
+      unreadCount: session.unreadCount,
+      blocker: session.blocker,
+      lastActivityAt: session.lastActivityAt,
+      quietForMs: sessionQuietDurationMs(session, nowMs),
+      updatedAt: session.updatedAt,
+    };
     if (sessionMatchesWaitCondition(session, args.condition, afterActivityAt, quietMs, nowMs)) {
       return {
         ok: true,

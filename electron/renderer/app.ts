@@ -14089,20 +14089,6 @@ function renderSessionTagDot(tagColor, extraClass = "") {
 
 function renderSessionVisualButton(session, extraClass = "", action = "", label = "Upload session icon") {
   const className = extraClass ? ` ${extraClass}` : "";
-  const actionAttribute = action ? ` data-action="${escapeAttribute(action)}"` : "";
-  return `
-    <button
-      type="button"
-      class="session-visual-button${className}"
-      ${actionAttribute}
-      data-session-id="${session.id}"
-      aria-label="${escapeAttribute(label)}"
-      title="${escapeAttribute(label)}">
-      ${renderSessionVisual(session, "session-visual-button-content", { includePlaceholder: true })}
-    </button>
-  `;
-}
-
 function renderSessionVisual(
   session,
   extraClass = "",

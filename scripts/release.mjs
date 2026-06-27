@@ -201,8 +201,7 @@ function main() {
     latestTagVersion !== null &&
     compareVersions(packageVersion, latestTagVersion) > 0 &&
     isRecoverablePreparedReleaseState(entries);
-  const shouldCommitPreparedVersion = preparedReleaseState;
-  const requiresReleaseCommit = shouldBumpPackageVersion || shouldCommitPreparedVersion;
+  const requiresReleaseCommit = shouldBumpPackageVersion || preparedReleaseState;
   const publishCommand = publishCommandFor(options, targetVersion);
 
   if (tagExists(targetTag)) {

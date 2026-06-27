@@ -375,7 +375,7 @@ const { mergeCommandPath, resolveCommandPathSync } = require("./command-path") a
 const { startMcpServer } = require("./mcp-server") as {
   startMcpServer: (
     appController: AppControllerHandle,
-    options: { authToken: string }
+    options: { authToken: string; isAccessAllowed: () => boolean | Promise<boolean> }
   ) => Promise<HydraMcpServer>;
 };
 const { createVoiceManager } = require("./voice-manager") as {
@@ -1303,36 +1303,116 @@ class AppController {
       (patch) => this.updatePreferences(patch),
       () => this.ensureMcpServerForVoice()
     );
-    // Auth gate: check for valid session before loading the main app
-    this.loadAuthenticatedPage(window);
-  }
-
-  private async loadAuthenticatedPage(window: ElectronBrowserWindow): Promise<void> {
-    try {
-      const session = await this.authClient?.initialize();
-      if (window.isDestroyed()) return;
-      if (session) {
-        window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
-      } else {
-        window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
-      }
-    } catch {
-      if (window.isDestroyed()) return;
-      // If auth check fails (e.g. server unreachable), show auth page
-      window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
-    }
+    void this.authClient?.initialize().catch((error: unknown) => {
+      console.warn("[Auth] Failed to initialize persisted auth session:", formatUpdaterLogMessage(error));
+    });
   }
 
   private async handleAuthSessionChanged(session: AuthSession | null): Promise<void> {
+    if (!this.isActiveAuthSession(session)) {
+      await this.clearMcpAccessForAuthLoss();
+    } else if (isEnabledFlag(process.env[MCP_SERVER_ENABLE_ENV])) {
+      maybeStartMcpServer(this).catch((error: unknown) => {
+        console.error("[MCP] Server failed to start after sign in:", error);
+      });
+    }
+
     if (!this.window || this.window.isDestroyed()) {
       return;
     }
 
     const currentUrl = this.window.webContents.getURL();
-    if (session && currentUrl.endsWith("/auth.html")) {
+    if (this.isActiveAuthSession(session) && currentUrl.endsWith("/auth.html")) {
       await this.window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
-    } else if (!session && !currentUrl.endsWith("/auth.html")) {
+    }
+  }
+
+  private isActiveAuthSession(session: AuthSession | null | undefined): session is AuthSession {
+    if (!session) {
+      return false;
+    }
+
+    const expiresAt = Date.parse(session.expiresAt);
+    return Number.isFinite(expiresAt) && expiresAt > Date.now();
+  }
+
+  private async getActiveAuthSession(): Promise<AuthSession | null> {
+    if (!this.authClient) {
+      return null;
+    }
+
+    try {
+      const session = await this.authClient.getSession();
+      return this.isActiveAuthSession(session) ? session : null;
+    } catch (error: unknown) {
+      console.warn("[Auth] Failed to read auth session:", formatUpdaterLogMessage(error));
+      return null;
+    }
+  }
+
+  async isMcpAccessAllowed(): Promise<boolean> {
+    return (await this.getActiveAuthSession()) !== null;
+  }
+
+  async requireMcpAuthSession(
+    reason: string,
+    options: { openAuthPage?: boolean } = {}
+  ): Promise<AuthSession | null> {
+    const session = await this.getActiveAuthSession();
+    if (session) {
+      return session;
+    }
+
+    await this.clearMcpAccessForAuthLoss();
+    console.warn(`[MCP] Sign in required before ${reason}.`);
+
+    if (options.openAuthPage) {
+      await this.openAuthPageForMcpAccess();
+    }
+
+    return null;
+  }
+
+  private async openAuthPageForMcpAccess(): Promise<void> {
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
+
+    const currentUrl = this.window.webContents.getURL();
+    if (!currentUrl.endsWith("/auth.html")) {
       await this.window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
+    }
+  }
+
+  async continueAsGuest(): Promise<void> {
+    if (this.authClient) {
+      try {
+        await this.authClient.signOut();
+      } catch (error: unknown) {
+        console.warn("[Auth] Failed to clear auth session for guest mode:", formatUpdaterLogMessage(error));
+      }
+    }
+
+    await this.clearMcpAccessForAuthLoss();
+    if (this.window && !this.window.isDestroyed()) {
+      await this.window.loadFile(TRUSTED_RENDERER_ENTRY_PATH);
+    }
+  }
+
+  private async clearMcpAccessForAuthLoss(): Promise<void> {
+    this.mcpAuthToken = null;
+    this.voiceManager?.setMcpAuthToken(null);
+
+    const server = this.mcpServer;
+    this.mcpServer = null;
+    if (!server) {
+      return;
+    }
+
+    try {
+      await server.stop();
+    } catch (error: unknown) {
+      console.warn("[MCP] Failed to stop MCP server after auth loss:", formatUpdaterLogMessage(error));
     }
   }
 
@@ -1530,16 +1610,16 @@ class AppController {
       try {
         await this.authClient.signOut();
       } finally {
-        // Always navigate back to auth page, even if signOut throws
-        if (this.window && !this.window.isDestroyed()) {
-          this.window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
-        }
+        await this.clearMcpAccessForAuthLoss();
       }
     });
     ipcMain.handle("auth:openPage", async () => {
       if (this.window) {
         await this.window.loadFile(TRUSTED_AUTH_ENTRY_PATH);
       }
+    });
+    ipcMain.handle("auth:continueAsGuest", async () => {
+      await this.continueAsGuest();
     });
     ipcMain.handle("auth:startProvider", async (_event, payload) => {
       if (!this.authClient) return { success: false, error: "Auth not initialized." };
@@ -4697,6 +4777,13 @@ class AppController {
   }
 
   private async ensureMcpServerForVoice(): Promise<string | null> {
+    const session = await this.requireMcpAuthSession("starting MCP-backed voice mode", {
+      openAuthPage: true
+    });
+    if (!session) {
+      return null;
+    }
+
     if (this.mcpServer) {
       if (this.mcpAuthToken) {
         this.voiceManager?.setMcpAuthToken(this.mcpAuthToken);
@@ -4706,7 +4793,10 @@ class AppController {
     try {
       const auth = await resolveMcpServerAuthToken();
       this.mcpAuthToken = auth.token;
-      this.mcpServer = await startMcpServer(this, { authToken: auth.token });
+      this.mcpServer = await startMcpServer(this, {
+        authToken: auth.token,
+        isAccessAllowed: () => this.isMcpAccessAllowed()
+      });
       this.voiceManager?.setMcpAuthToken(auth.token);
       console.log("[MCP] Auto-started MCP server for voice mode.");
       return auth.token;
@@ -5583,10 +5673,25 @@ async function maybeStartMcpServer(controller: AppController): Promise<void> {
     return;
   }
 
+  if (controller.mcpServer) {
+    if (controller.mcpAuthToken) {
+      controller.voiceManager?.setMcpAuthToken(controller.mcpAuthToken);
+    }
+    return;
+  }
+
+  const session = await controller.requireMcpAuthSession("starting the MCP server");
+  if (!session) {
+    return;
+  }
+
   const auth = await resolveMcpServerAuthToken();
   controller.mcpAuthToken = auth.token;
   controller.voiceManager?.setMcpAuthToken(auth.token);
-  controller.mcpServer = await startMcpServer(controller, { authToken: auth.token });
+  controller.mcpServer = await startMcpServer(controller, {
+    authToken: auth.token,
+    isAccessAllowed: () => controller.isMcpAccessAllowed()
+  });
 
   if (auth.source === "env") {
     console.log(`[MCP] Authentication enabled via ${MCP_SERVER_TOKEN_ENV}.`);

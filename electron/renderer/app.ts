@@ -1331,9 +1331,16 @@ api.onAuthStateChanged((session) => {
   ui.authSession = session;
   ui.authSessionLoaded = true;
   ui.settingsAuthError = "";
+  if (!session && voiceCallIsActive()) {
+    endVoiceSession();
+  }
   if (settingsDialog.open) {
     void renderSettingsDialog();
   }
+  if (voiceDialog.open) {
+    renderVoiceDialog();
+  }
+  renderSidebar();
 });
 
 api.onPlanDetected(({ sessionId, markdown }) => {
@@ -5208,6 +5215,9 @@ function renderAccountSettingsPane() {
   const session = ui.authSession;
   const loading = !ui.authSessionLoaded || ui.settingsAuthInFlight;
   const expiresLabel = session ? formatDateTime(session.expiresAt, "Unknown") : "Not available";
+  const profileHelp = session
+    ? "View the active Hydra account or sign out into Guest Mode without leaving Settings."
+    : "Hydra is running in Guest Mode. Non-MCP features remain available; sign in for Hydra MCP server access.";
   const avatarMarkup = session?.user.image
     ? `
       <span class="account-avatar" aria-hidden="true">
@@ -5224,13 +5234,13 @@ function renderAccountSettingsPane() {
         <div class="settings-help-row">
           <div class="settings-field-copy">
             <div class="row-title">Profile</div>
-            <div class="muted">View the active Hydra account and return to the auth screen without leaving Settings.</div>
+            <div class="muted">${escapeHtml(profileHelp)}</div>
           </div>
           <div class="settings-detail-actions">
             <button type="button" data-action="settings-auth-refresh" ${ui.settingsAuthInFlight ? "disabled" : ""}>${ui.settingsAuthInFlight ? "Refreshing..." : "Refresh"}</button>
             ${
               session
-                ? `<button type="button" class="ws-action-danger" data-action="settings-sign-out" ${ui.settingsAuthInFlight ? "disabled" : ""}>Sign Out</button>`
+                ? `<button type="button" class="ws-action-danger" data-action="settings-sign-out" ${ui.settingsAuthInFlight ? "disabled" : ""}>Sign Out to Guest Mode</button>`
                 : `<button type="button" class="primary" data-action="settings-sign-in" ${ui.settingsAuthInFlight ? "disabled" : ""}>Sign In</button>`
             }
           </div>
@@ -5250,6 +5260,7 @@ function renderAccountSettingsPane() {
                       <div class="settings-meta-row">
                         <span class="settings-meta-pill">${session.user.emailVerified ? "Email Verified" : "Email Unverified"}</span>
                         <span class="settings-meta-pill">Session Active</span>
+                        <span class="settings-meta-pill">MCP Server Enabled</span>
                       </div>
                     </div>
                   </div>
@@ -5266,9 +5277,17 @@ function renderAccountSettingsPane() {
                 </div>
               `
               : `
-                <div class="settings-warning-card">
-                  <div class="row-title">You’re not signed in</div>
-                  <div class="row-subtitle">Use Sign In to switch back to Hydra’s auth screen. After authentication, Hydra returns to the main app.</div>
+                <div class="account-guest-card">
+                  <span class="account-avatar account-avatar-guest" aria-hidden="true">G</span>
+                  <div class="account-identity-copy">
+                    <div class="row-title">Guest Mode</div>
+                    <div class="row-subtitle">You can keep using sessions, repos, local tools, settings, and other non-MCP features without an account.</div>
+                    <div class="settings-meta-row">
+                      <span class="settings-meta-pill">Guest App State</span>
+                      <span class="settings-meta-pill">Non-MCP Features Enabled</span>
+                      <span class="settings-meta-pill">MCP Server Requires Sign In</span>
+                    </div>
+                  </div>
                 </div>
               `
         }
@@ -7024,9 +7043,22 @@ async function handleClick(event) {
       await renderSettingsDialog();
       try {
         await api.authSignOut();
+        ui.authSession = null;
+        ui.authSessionLoaded = true;
+        ui.settingsAuthError = "";
+        if (voiceCallIsActive()) {
+          endVoiceSession();
+        }
+      } catch (error) {
+        ui.settingsAuthError =
+          error instanceof Error ? error.message : "Failed to sign out.";
       } finally {
         ui.settingsAuthInFlight = false;
+        await renderSettingsDialog();
       }
+      break;
+    case "voice-sign-in":
+      await api.authOpenPage();
       break;
     case "settings-claude-view":
       ui.settingsClaudeView = (target.dataset.claudeView || "files") as ClaudeSettingsView;
@@ -10179,6 +10211,17 @@ async function openVoiceModal() {
 
   voiceDialog.addEventListener("close", onVoiceDialogClose, { once: true });
 
+  if (!ui.authSessionLoaded) {
+    await refreshAuthSession();
+    if (!voiceDialog.open) return;
+    renderVoiceDialog();
+  }
+
+  if (!ui.authSession) {
+    renderSidebar();
+    return;
+  }
+
   await startVoiceSession();
 }
 
@@ -10252,6 +10295,25 @@ function restoreVoiceModal() {
 }
 
 async function startVoiceSession() {
+  if (!ui.authSessionLoaded) {
+    await refreshAuthSession();
+  }
+
+  if (!ui.authSession) {
+    voiceSessionRunId += 1;
+    clearVoiceSilenceIdleTimer();
+    disconnectPipecatClient();
+    ui.voiceCallState = "idle";
+    ui.voiceMuted = false;
+    ui.voiceMinimized = false;
+    renderSidebar();
+    if (voiceDialog.open) {
+      renderVoiceDialog();
+    }
+    renderVoiceMiniOverlay();
+    return;
+  }
+
   const runId = ++voiceSessionRunId;
   ui.voiceCallState = "connecting";
   ui.voiceMuted = false;
@@ -10485,6 +10547,13 @@ function toggleVoiceMute() {
 }
 
 async function saveVoiceConfig() {
+  if (!ui.authSession) {
+    if (voiceDialog.open) {
+      renderVoiceDialog();
+    }
+    return;
+  }
+
   const form = document.getElementById("voice-settings-form") as HTMLFormElement | null;
   if (!form) return;
 
@@ -10744,9 +10813,117 @@ function scrollVoiceTranscript() {
   });
 }
 
+function renderVoiceSignInRequiredModal(authIsLoading: boolean) {
+  const authError = authIsLoading ? "" : ui.settingsAuthError.trim();
+
+  return dom(
+    "div",
+    { className: "voice-modal voice-modal-auth-required" },
+    dom(
+      "div",
+      { className: "voice-main-panel" },
+      dom(
+        "div",
+        { className: "voice-header" },
+        dom(
+          "div",
+          { className: "voice-header-text" },
+          dom("div", { className: "voice-header-label" }, "Voice Mode"),
+          dom("h2", { className: "voice-header-title" }, "Hands-free Hydra control"),
+          dom(
+            "div",
+            { className: "voice-header-subtitle" },
+            "Voice commands use Hydra MCP tools for sessions, repos, settings, and wiki actions."
+          )
+        ),
+        dom(
+          "div",
+          { className: "voice-header-actions" },
+          dom("button", {
+            className: "voice-close-btn",
+            attrs: { type: "button", "data-action": "voice-end" }
+          }, "Close")
+        )
+      ),
+      dom(
+        "div",
+        { className: "voice-content voice-auth-content" },
+        dom(
+          "div",
+          { className: "voice-auth-required-card" },
+          dom("div", { className: "voice-auth-kicker" }, authIsLoading ? "Checking Account" : "Guest Mode"),
+          dom(
+            "h3",
+            { className: "voice-auth-title" },
+            authIsLoading ? "Checking your account" : "Sign in to use MCP-backed voice"
+          ),
+          dom(
+            "p",
+            { className: "voice-auth-detail" },
+            authIsLoading
+              ? "Hydra is checking whether a signed-in account is available before starting voice mode."
+              : "You can keep using non-MCP features in Guest Mode. Voice access requires sign-in because it connects to Hydra MCP tools."
+          ),
+          authError
+            ? dom("div", { className: "voice-auth-error" }, authError)
+            : null,
+          dom(
+            "div",
+            { className: "voice-auth-actions" },
+            dom("button", {
+              className: "voice-btn voice-btn-primary",
+              attrs: {
+                type: "button",
+                "data-action": "voice-sign-in",
+                disabled: authIsLoading ? true : null
+              }
+            }, authIsLoading ? "Checking..." : "Sign In"),
+            dom("button", {
+              className: "voice-btn",
+              attrs: { type: "button", "data-action": "voice-end" }
+            }, "Close")
+          )
+        )
+      )
+    ),
+    dom(
+      "div",
+      { className: "voice-settings-panel voice-auth-panel" },
+      dom(
+        "div",
+        { className: "voice-settings-scroll" },
+        dom("div", { className: "voice-settings-label" }, "Guest Mode"),
+        dom("div", { className: "voice-settings-heading" }, "MCP access"),
+        dom(
+          "div",
+          { className: "voice-auth-panel-list" },
+          dom(
+            "div",
+            { className: "voice-auth-panel-item" },
+            dom("strong", {}, "Available now"),
+            dom("span", {}, "Sessions, repos, local settings, and other non-MCP workflows stay available in Guest Mode.")
+          ),
+          dom(
+            "div",
+            { className: "voice-auth-panel-item" },
+            dom("strong", {}, "Sign-in required"),
+            dom("span", {}, "MCP-backed voice control is enabled after a Hydra account session is loaded.")
+          )
+        )
+      )
+    )
+  );
+}
+
 function renderVoiceDialog() {
   const host = document.getElementById("voice-dialog-host");
   if (!host) return;
+
+  const authIsLoading = !ui.authSessionLoaded || ui.settingsAuthInFlight;
+  if (!ui.authSession) {
+    replaceDomChildren(host, renderVoiceSignInRequiredModal(authIsLoading));
+    return;
+  }
 
   const voiceState = ui.voiceCallState;
   const config = state.preferences.voiceConfig as VoiceConfig | undefined;

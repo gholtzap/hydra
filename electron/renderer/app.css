@@ -3437,6 +3437,93 @@ textarea {
   border-color: rgba(239, 68, 68, 0.2);
 }
 
+.voice-auth-content {
+  justify-content: center;
+}
+
+.voice-auth-required-card {
+  max-width: 620px;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-soft);
+  box-shadow: var(--shadow-sm);
+}
+
+.voice-auth-kicker {
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.voice-auth-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.voice-auth-detail {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.voice-auth-error {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.08);
+  color: #f87171;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+:root:not(.dark) .voice-auth-error {
+  background: rgba(239, 68, 68, 0.06);
+  color: #dc2626;
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+.voice-auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.voice-auth-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.voice-auth-panel-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.voice-auth-panel-item strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.voice-auth-panel-item span {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
 /* ── Transcript area ─────────────────────────────── */
 
 .voice-transcript-scroll {
@@ -5322,6 +5409,16 @@ textarea {
   padding: 14px;
 }
 
+.account-guest-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-muted);
+}
+
 .account-profile-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(240px, 0.9fr);
@@ -5383,9 +5480,22 @@ textarea {
   letter-spacing: 0.04em;
 }
 
+.account-avatar-guest {
+  background: oklch(0.90 0.035 145 / 0.95);
+  border-color: transparent;
+  color: oklch(0.34 0.075 145);
+  font-size: 16px;
+  font-weight: 700;
+}
+
 .dark .account-avatar-fallback {
   background: oklch(0.38 0.045 230 / 0.95);
   color: oklch(0.9 0.02 230);
+}
+
+.dark .account-avatar-guest {
+  background: oklch(0.34 0.045 145 / 0.95);
+  color: oklch(0.86 0.04 145);
 }
 
 .account-detail-item {

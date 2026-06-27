@@ -336,7 +336,7 @@ function buildCodexFileRecord(line: string): SessionSearchFileRecord | null {
   return {
     source: "codex",
     filePath: matchLine.filePath,
-    sessionId: sessionId || null,
+    sessionId,
     title: displayStamp
       ? `Codex ${displayStamp}`
       : `Codex ${path.basename(matchLine.filePath, ".jsonl")}`

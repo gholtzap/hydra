@@ -75,8 +75,6 @@ import {
   type McpActionName,
   type McpActionResult
 } from "./mcp-contracts";
-import { Agent } from "node:http";
-
 const fs = require("node:fs");
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path");

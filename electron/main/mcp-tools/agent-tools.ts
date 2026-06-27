@@ -19,13 +19,12 @@ export function register(server: McpServer, appController: AppControllerHandle):
     {},
     async () => {
       const prefs = appController.state.preferences;
-      const agents = AGENT_DEFINITIONS.map((a) => ({
+      return textResult(AGENT_DEFINITIONS.map((a) => ({
         ...a,
         isDefault: a.id === prefs.defaultAgentId,
         isHandoffDefault: a.id === prefs.handoffAgentId,
         command: prefs.agentCommandOverrides?.[a.id] ?? a.defaultCommand,
-      }));
-      return textResult(agents);
+      })));
     }
   );
 

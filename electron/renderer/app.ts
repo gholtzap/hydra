@@ -2871,13 +2871,6 @@ function renderSessionDetail(session) {
   syncSectionFocusUi();
 }
 
-function updateSessionChrome(session) {
-  if (isSessionVisible(session.id)) {
-    updateSessionWorkspaceToolbar();
-    updateSessionPane(session);
-  }
-}
-
 function renderSessionWorkspaceLayoutNode(node: WorkspaceLayoutNode, path = "") {
   if (!node) {
     return null;

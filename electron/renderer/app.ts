@@ -3891,10 +3891,6 @@ function writeSessionTerminalOutput(sessionId, data) {
   mount.terminal.write(data);
 }
 
-function syncTerminalLiveState(session) {
-  syncSessionTerminalLiveState(session);
-}
-
 function syncSessionTerminalLiveState(session) {
   const mount = ui.terminalMounts.get(session.id);
   if (!mount) {

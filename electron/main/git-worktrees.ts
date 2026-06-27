@@ -104,17 +104,6 @@ function listBranchesSync(repoPath: string): string[] {
     .sort((left, right) => left.localeCompare(right));
 }
 
-function hasUntrackedFilesSync(repoPath: string): boolean {
-  const result = runGitSync(["status", "--porcelain", "--untracked-files=all"], repoPath);
-  if (!result.ok) {
-    return false;
-  }
-
-  return result.stdout
-    .split(/\r?\n/)
-    .some((line) => line.startsWith("?? "));
-}
-
 function parseNumstat(stdout: string): WorktreeChangeStats {
   const stats: WorktreeChangeStats = {
     files: 0,
@@ -441,7 +430,6 @@ module.exports = {
   createWorktreeSync,
   deleteWorktreeSync,
   fastForwardWorktreeToBranchSync,
-  hasUntrackedFilesSync,
   listBranchesSync,
   listWorktreeChanges,
   listGitWorktrees,

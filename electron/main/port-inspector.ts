@@ -237,7 +237,7 @@ function parseLsofListeners(output: string): Map<number, PortListener[]> {
 }
 
 function parsePort(value: string): number | null {
-  const match = /:(\d+)(?:->.*)?$/.exec(String(value || ""));
+  const match = /:(\d+)(?:->.*)?$/.exec(value);
   if (!match) {
     return null;
   }

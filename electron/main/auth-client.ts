@@ -483,7 +483,14 @@ export class HydraAuthClient {
       return null;
     }
 
-    const expiresAt = this.toIsoString(session.expiresAt);
+    const expiresAt =
+      typeof session.expiresAt === "string"
+        ? session.expiresAt
+        : typeof session.expiresAt === "number"
+          ? new Date(session.expiresAt).toISOString()
+          : session.expiresAt instanceof Date
+            ? session.expiresAt.toISOString()
+            : null;
     if (!expiresAt) {
       return null;
     }
@@ -498,22 +505,6 @@ export class HydraAuthClient {
       },
       expiresAt,
     };
-  }
-
-  private toIsoString(value: unknown): string | null {
-    if (typeof value === "string") {
-      return value;
-    }
-
-    if (typeof value === "number") {
-      return new Date(value).toISOString();
-    }
-
-    if (value instanceof Date) {
-      return value.toISOString();
-    }
-
-    return null;
   }
 
   private setCachedSession(

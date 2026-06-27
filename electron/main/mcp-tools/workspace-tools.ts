@@ -121,9 +121,9 @@ export function register(server: McpServer, appController: AppControllerHandle):
       workspaceId: z.string().optional().describe("Filter by workspace ID"),
     },
     async (args: { workspaceId?: string }) => {
-      let repos = [...appController.state.repos];
-      if (args.workspaceId) repos = repos.filter((repo) => repo.workspaceID === args.workspaceId);
-      return textResult(repos);
+      return textResult(args.workspaceId
+        ? appController.state.repos.filter((repo) => repo.workspaceID === args.workspaceId)
+        : appController.state.repos);
     }
   );
 

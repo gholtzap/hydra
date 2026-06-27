@@ -134,8 +134,7 @@ app.all("/api/auth/*", async (c) => {
       const url = new URL(request.url);
       console.error(`[auth] ${request.method} ${url.pathname} -> ${response.status}`);
       try {
-        const cloned = response.clone();
-        const body = await cloned.text();
+        const body = await response.clone().text();
         console.error(`[auth] body: ${body.slice(0, 500)}`);
       } catch {}
     }

@@ -77,7 +77,7 @@ function createAuth(
     useSecureCookies: runtimeConfig?.useSecureCookies ?? false,
   };
   const socialProviders =
-    runtimeConfig && Object.keys(runtimeConfig.socialProviders).length > 0
+    runtimeConfig && Object.keys(runtimeConfig.socialProviders).length
       ? runtimeConfig.socialProviders
       : undefined;
   const databaseHooks = {

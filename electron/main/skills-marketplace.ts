@@ -6,7 +6,6 @@ import type {
   MarketplaceSearchResponse,
   MarketplaceSkillDetails,
   MarketplaceSkillFile,
-  MarketplaceSkillSource,
   MarketplaceSkillSummary
 } from "../shared-types";
 

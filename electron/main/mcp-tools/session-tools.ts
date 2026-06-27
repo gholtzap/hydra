@@ -240,12 +240,6 @@ const MAX_TERMINAL_COLS = 500;
 const MAX_TERMINAL_ROWS = 200;
 const TERMINAL_TEXT_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
 
-function delayMs(durationMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, durationMs);
-  });
-}
-
 function sessionActivityTimestamp(session: SessionRecord): string {
   return session.lastActivityAt || session.updatedAt;
 }
@@ -345,7 +339,9 @@ async function waitForSessionState(
       };
     }
 
-    await delayMs(Math.min(pollIntervalMs, Math.max(deadline - Date.now(), 0)));
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(pollIntervalMs, Math.max(deadline - Date.now(), 0)));
+    });
   }
 
   return {

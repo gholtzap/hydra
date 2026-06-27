@@ -10080,24 +10080,6 @@ class HydraSmallWebRTCClient implements VoiceClientLike {
   }
 }
 
-function voiceRequiredApiKeys(config: VoiceConfig) {
-  const keys = new Set<string>();
-  const add = (key: string | null) => {
-    if (key) keys.add(key);
-  };
-
-  add(config.llmProvider === "openai" ? "OPENAI_API_KEY" : null);
-  add(config.llmProvider === "anthropic" ? "ANTHROPIC_API_KEY" : null);
-  add(config.llmProvider === "google" ? "GOOGLE_API_KEY" : null);
-  add(config.sttProvider === "deepgram" ? "DEEPGRAM_API_KEY" : null);
-  add(config.sttProvider === "google" ? "GOOGLE_API_KEY" : null);
-  add(config.ttsProvider === "cartesia" ? "CARTESIA_API_KEY" : null);
-  add(config.ttsProvider === "elevenlabs" ? "ELEVENLABS_API_KEY" : null);
-  add(config.ttsProvider === "deepgram" ? "DEEPGRAM_API_KEY" : null);
-
-  return [...keys];
-}
-
 function voiceTooltip(voiceState: VoiceCallState) {
   if (voiceState === "listening") return "Voice Active";
   if (voiceState === "connecting") return "Preparing...";

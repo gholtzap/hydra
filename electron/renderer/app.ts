@@ -10105,13 +10105,6 @@ function voiceTooltip(voiceState: VoiceCallState) {
   return "Voice Mode";
 }
 
-function voiceStatusLabel(voiceState: VoiceCallState) {
-  if (voiceState === "connecting") return "Preparing";
-  if (voiceState === "listening") return "Listening";
-  if (voiceState === "error") return "Error";
-  return "";
-}
-
 function appendVoiceSetupInstructions(_config: VoiceConfig) {
   // Setup guidance is shown via the status banner, not transcript entries
 }

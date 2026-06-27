@@ -155,7 +155,7 @@ function normalizePreferences(preferences: Record<string, unknown>): AppPreferen
   const handoffAgentId = normalizeAgentId(preferences.handoffAgentId, null);
   const nextAgentCommands: Record<AgentId, string> = { ...DEFAULT_AGENT_COMMANDS };
   const savedOverrides: Record<string, unknown> =
-    preferences && typeof preferences.agentCommandOverrides === "object"
+    typeof preferences.agentCommandOverrides === "object"
       ? preferences.agentCommandOverrides as Record<string, unknown>
       : {};
 

@@ -756,28 +756,6 @@ function sessionWorkingDirectory(session: SessionRecord, repo: RepoRecord): stri
     : repo.path;
 }
 
-function parallelWorktreeDisplayState(
-  metadata: SessionParallelWorktreeMetadata | null | undefined
-): ParallelWorktreeLifecycleState | "overlap_warning" {
-  if (!metadata) {
-    return "inactive";
-  }
-
-  if (
-    metadata.overlapSessionIds.length > 0 &&
-    (
-      metadata.lifecycleState === "shared_checkout" ||
-      metadata.lifecycleState === "awaiting_agent" ||
-      metadata.lifecycleState === "active" ||
-      metadata.lifecycleState === "ready_to_finish"
-    )
-  ) {
-    return "overlap_warning";
-  }
-
-  return metadata.lifecycleState;
-}
-
 function tokscaleBinaryPackageName(): string | null {
   const arch = process.arch;
 

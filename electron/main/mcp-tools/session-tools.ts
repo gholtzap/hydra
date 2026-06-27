@@ -1187,7 +1187,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
           const rightTime = right.lastActivityAt || right.updatedAt;
           return rightTime.localeCompare(leftTime);
         });
-      const next = unread[0] ?? null;
+      const next = unread[0];
       return textResult({ sessionId: next?.id ?? null, unreadTotal: unread.length });
     }
   );

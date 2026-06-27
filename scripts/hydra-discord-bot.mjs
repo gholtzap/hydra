@@ -230,7 +230,7 @@ class HydraMcpClient {
   async ensureInitialized() {
     if (this.sessionId) return;
 
-    const result = await this.post({
+    await this.post({
       jsonrpc: "2.0",
       id: this.nextId++,
       method: "initialize",
@@ -253,8 +253,6 @@ class HydraMcpClient {
       method: "notifications/initialized",
       params: {},
     }, true);
-
-    return result;
   }
 
   async post(payload, includeSession) {

@@ -12145,30 +12145,6 @@ function defaultValueForSettingKind(kind) {
   }
 }
 
-function countTopLevelJsonEntries(value) {
-  if (Array.isArray(value)) {
-    return value.length;
-  }
-
-  if (isJsonObject(value)) {
-    return Object.keys(value).length;
-  }
-
-  return value === null || value === undefined ? 0 : 1;
-}
-
-function countLeafJsonEntries(value) {
-  if (Array.isArray(value)) {
-    return value.reduce((count, item) => count + countLeafJsonEntries(item), 0);
-  }
-
-  if (isJsonObject(value)) {
-    return Object.values(value).reduce((count, item) => count + countLeafJsonEntries(item), 0);
-  }
-
-  return value === undefined ? 0 : 1;
-}
-
 function describeJsonValueType(value) {
   return jsonValueTypeLabel(value).toLowerCase();
 }

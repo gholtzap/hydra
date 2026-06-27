@@ -83,25 +83,6 @@ const terminalRowsSchema = z.number().int().min(1).max(200);
 
 export type MarketplaceSkillSourcePayload = z.output<typeof marketplaceSkillSourceSchema>;
 
-export type MarketplaceSkillDetailsArgs =
-  | { source: MarketplaceSkillSourcePayload }
-  | MarketplaceSkillSourcePayload;
-
-export type MarketplaceInstallArgs =
-  | {
-      source: z.output<typeof marketplaceInstallSourceSchema>;
-      scope: MarketplaceInstallScope;
-      repoPath?: string | null;
-    }
-  | {
-      owner: string;
-      repo: string;
-      ref?: string;
-      path: string;
-      scope: MarketplaceInstallScope;
-      repoPath?: string | null;
-    };
-
 export const MCP_ACTION_ARGS_SCHEMAS = {
   create_session: z.object({
     repoId: z.string(),

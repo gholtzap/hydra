@@ -68,9 +68,6 @@ function createAuth(
       strategy: "jwe" as const,
     },
   };
-  const account = {
-    encryptOAuthTokens: true,
-  };
   const verification = {
     // Hash verification identifiers before storing them in secondary storage.
     storeIdentifier: "hashed" as const,
@@ -80,7 +77,7 @@ function createAuth(
     useSecureCookies: runtimeConfig?.useSecureCookies ?? false,
   };
   const socialProviders =
-    runtimeConfig && Object.keys(runtimeConfig.socialProviders).length > 0
+    runtimeConfig && Object.keys(runtimeConfig.socialProviders).length
       ? runtimeConfig.socialProviders
       : undefined;
   const databaseHooks = {
@@ -117,7 +114,7 @@ function createAuth(
         // The desktop app now uses the native Better Auth Electron client/plugin flow.
         plugins: [electron()],
         session,
-        account,
+        account: { encryptOAuthTokens: true },
         verification,
         advanced,
         databaseHooks,

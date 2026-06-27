@@ -11,7 +11,6 @@ const MAIN_BRANCH = "main";
 function run(command, args, options = {}) {
   const { capture = true } = options;
   const result = execFileSync(command, args, {
-    cwd: repoRoot(),
     encoding: "utf8",
     stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit"
   });
@@ -21,10 +20,6 @@ function run(command, args, options = {}) {
   }
 
   return result.trim();
-}
-
-function repoRoot() {
-  return process.cwd();
 }
 
 function parseArgs(argv) {
@@ -62,7 +57,7 @@ function parseArgs(argv) {
 }
 
 function readPackageJson() {
-  const packageJsonPath = path.join(repoRoot(), "package.json");
+  const packageJsonPath = path.join(process.cwd(), "package.json");
   return JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
 }
 
@@ -84,10 +79,6 @@ function compareVersions(left, right) {
   if (left.major !== right.major) return left.major - right.major;
   if (left.minor !== right.minor) return left.minor - right.minor;
   return left.patch - right.patch;
-}
-
-function maxVersion(left, right) {
-  return compareVersions(left, right) >= 0 ? left : right;
 }
 
 function incrementVersion(version, bump) {
@@ -122,15 +113,6 @@ function currentBranch() {
     throw new Error("Release script requires a named branch, not a detached HEAD.");
   }
   return branchName;
-}
-
-function isMainBranch(branchName) {
-  return branchName === MAIN_BRANCH;
-}
-
-function isWorktreeClean() {
-  const status = run("git", ["status", "--short"]);
-  return !status;
 }
 
 function worktreeEntries() {
@@ -192,7 +174,7 @@ function resolveTargetVersion(packageVersion, latestTagVersion, requestedBump) {
     return packageVersion;
   }
 
-  return incrementVersion(maxVersion(packageVersion, latestTagVersion || packageVersion), requestedBump);
+  return incrementVersion(latestTagVersion, requestedBump);
 }
 
 function publishCommandFor(options, targetVersion) {
@@ -219,8 +201,7 @@ function main() {
     latestTagVersion !== null &&
     compareVersions(packageVersion, latestTagVersion) > 0 &&
     isRecoverablePreparedReleaseState(entries);
-  const shouldCommitPreparedVersion = preparedReleaseState;
-  const requiresReleaseCommit = shouldBumpPackageVersion || shouldCommitPreparedVersion;
+  const requiresReleaseCommit = shouldBumpPackageVersion || preparedReleaseState;
   const publishCommand = publishCommandFor(options, targetVersion);
 
   if (tagExists(targetTag)) {
@@ -251,7 +232,7 @@ function main() {
     );
   }
 
-  if (options.prepare && isMainBranch(branchName)) {
+  if (options.prepare && branchName === MAIN_BRANCH) {
     throw new Error(
       `Release preparation must run on a branch, not ${MAIN_BRANCH}.\n` +
         `Create a short-lived branch from ${MAIN_BRANCH}, run ${publishCommand} -- --prepare there, ` +
@@ -266,7 +247,7 @@ function main() {
     );
   }
 
-  if (!options.prepare && !isMainBranch(branchName)) {
+  if (!options.prepare && branchName !== MAIN_BRANCH) {
     throw new Error(
       `Release publishing must run from ${MAIN_BRANCH}. You are on ${branchName}.\n` +
         `Use ${publishCommand} -- --prepare on this branch, merge the release pull request, ` +
@@ -286,9 +267,9 @@ function main() {
 
   if (shouldBumpPackageVersion) {
     run("npm", ["version", targetVersion.raw, "--no-git-tag-version"], { capture: false });
-    run("git", ["add", "package.json", "package-lock.json"], { capture: false });
-    run("git", ["commit", "-m", `Release ${targetTag}`], { capture: false });
-  } else if (shouldCommitPreparedVersion) {
+  }
+
+  if (requiresReleaseCommit) {
     run("git", ["add", "package.json", "package-lock.json"], { capture: false });
     run("git", ["commit", "-m", `Release ${targetTag}`], { capture: false });
   }

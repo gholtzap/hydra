@@ -4,8 +4,8 @@ const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process") as typeof import("node:child_process");
-const { resolveCommandPath } = require("./command-path") as {
-  resolveCommandPath: (command: string) => Promise<string | null>;
+const { resolveCommandPathSync } = require("./command-path") as {
+  resolveCommandPathSync: (command: string) => string | null;
 };
 const { isPathWithinRoot } = require("./shared-utils") as {
   isPathWithinRoot: (filePath: string, rootPath: string) => boolean;
@@ -203,8 +203,7 @@ async function getSessionSearchFileRecords(
     pruneSessionSearchFileCache();
     return files;
   } catch (error) {
-    const currentEntry = sessionSearchFileCache.get(normalizedRepoPath);
-    if (currentEntry?.pending === pending) {
+    if (sessionSearchFileCache.get(normalizedRepoPath)?.pending === pending) {
       if (existingEntry) {
         touchSessionSearchFileCache(normalizedRepoPath, {
           cachedAt: existingEntry.cachedAt,
@@ -237,7 +236,7 @@ async function resolveRequiredTools(): Promise<SearchToolPaths> {
   const missingTools: string[] = [];
 
   for (const toolName of REQUIRED_TOOLS) {
-    const toolPath = await resolveCommandPath(toolName);
+    const toolPath = resolveCommandPathSync(toolName);
     if (!toolPath) {
       missingTools.push(toolName);
       continue;
@@ -337,7 +336,7 @@ function buildCodexFileRecord(line: string): SessionSearchFileRecord | null {
   return {
     source: "codex",
     filePath: matchLine.filePath,
-    sessionId: sessionId || null,
+    sessionId,
     title: displayStamp
       ? `Codex ${displayStamp}`
       : `Codex ${path.basename(matchLine.filePath, ".jsonl")}`
@@ -448,7 +447,7 @@ async function readJsonlLineAt(filePath: string, lineNumber: number): Promise<st
   } catch {
     return "";
   } finally {
-    await fileHandle?.close().catch(() => undefined);
+    void fileHandle?.close().catch(() => undefined);
   }
 
   return "";
@@ -521,27 +520,23 @@ function indexedMatchesFromRankedLines<T>(
   const ordered: T[] = [];
 
   for (const line of rankedLines.slice(0, limit)) {
-    const match = indexedValueFromRankedLine(matches, line);
+    const tabIndex = line.indexOf("\t");
+    if (tabIndex === -1) {
+      continue;
+    }
+
+    const matchIndex = Number(line.slice(0, tabIndex));
+    if (!Number.isFinite(matchIndex)) {
+      continue;
+    }
+
+    const match = matches[matchIndex] ?? null;
     if (match !== null) {
       ordered.push(match);
     }
   }
 
   return ordered;
-}
-
-function indexedValueFromRankedLine<T>(matches: T[], line: string): T | null {
-  const tabIndex = line.indexOf("\t");
-  if (tabIndex === -1) {
-    return null;
-  }
-
-  const matchIndex = Number(line.slice(0, tabIndex));
-  if (!Number.isFinite(matchIndex)) {
-    return null;
-  }
-
-  return matches[matchIndex] ?? null;
 }
 
 async function runListCommand(
@@ -612,8 +607,7 @@ async function runListCommand(
     child.stdin?.end(stdinText, "utf8");
   });
 
-  const trimmedOutput = output.trim();
-  return trimmedOutput ? trimmedOutput.split("\n").filter(Boolean) : [];
+  return output.trim().split("\n").filter(Boolean);
 }
 
 function claudeProjectKey(repoPath: string): string {
@@ -675,7 +669,7 @@ async function readCodexMetadataSnippet(filePath: string): Promise<string> {
   } catch {
     return "";
   } finally {
-    await fileHandle?.close().catch(() => undefined);
+    void fileHandle?.close().catch(() => undefined);
   }
 }
 

@@ -15,7 +15,6 @@ import type {
   KeybindingEventSnapshot,
   KeybindingLabels,
   KeybindingMap,
-  PinnedMessage,
   RepoAppLaunchConfig,
   RepoParallelWorktreeLedgerEntry,
   RepoParallelWorktreeSettings,
@@ -27,7 +26,6 @@ import type {
   TrackedPortStatus,
   VoiceCallState,
   VoiceConfig,
-  WorktreeChangeStats,
   WorktreeCloseAction,
   WikiContext,
   WikiTreeNode as SharedWikiTreeNode,
@@ -2152,6 +2150,7 @@ function renderWikiDetail(repo) {
   }
 
   const wikiContext = ui.wikiContextRepoId === repo.id ? ui.wikiContext : null;
+  const wikiFiles = flattenWikiFiles(wikiContext?.tree || []);
 
   detailElement.innerHTML = `
     <section class="detail-panel">
@@ -2202,7 +2201,7 @@ function renderWikiDetail(repo) {
                     <div class="wiki-panel-header">
                       <div>
                         <div class="row-title">Files</div>
-                        <div class="row-subtitle">${flattenWikiFiles(wikiContext.tree || []).length} tracked ${pluralize(flattenWikiFiles(wikiContext.tree || []).length, "file", "files")}</div>
+                        <div class="row-subtitle">${wikiFiles.length} tracked ${pluralize(wikiFiles.length, "file", "files")}</div>
                       </div>
                     </div>
                     <div class="wiki-tree-scroll">
@@ -2870,13 +2869,6 @@ function renderSessionDetail(session) {
   updateAllSessionPanes();
   updateSessionDropUi();
   syncSectionFocusUi();
-}
-
-function updateSessionChrome(session) {
-  if (isSessionVisible(session.id)) {
-    updateSessionWorkspaceToolbar();
-    updateSessionPane(session);
-  }
 }
 
 function renderSessionWorkspaceLayoutNode(node: WorkspaceLayoutNode, path = "") {
@@ -3742,15 +3734,11 @@ function renderPausedSessionNotice(session) {
     dom(
       "div",
       {},
-      dom("div", { className: "row-title" }, restartSessionActionLabel()),
+      dom("div", { className: "row-title" }, "Restart"),
       dom("div", { className: "row-subtitle" }, body)
     ),
     renderSessionRestartButtonElement(session, { className: "primary" })
   );
-}
-
-function restartSessionActionLabel() {
-  return "Restart";
 }
 
 function startSessionRename(sessionId) {
@@ -3894,17 +3882,6 @@ function mountSessionWorkspaceTerminals(layout: WorkspaceLayoutNode) {
   }
 }
 
-function mountTerminal(session) {
-  if (!isSessionVisible(session.id)) {
-    return;
-  }
-
-  const mount = ui.terminalMounts.get(session.id);
-  if (mount && ui.focusSection === "terminal" && ui.selection.type === "session" && ui.selection.id === session.id) {
-    mount.terminal.focus();
-  }
-}
-
 function writeSessionTerminalOutput(sessionId, data) {
   const mount = ui.terminalMounts.get(sessionId);
   if (!mount) {
@@ -3912,10 +3889,6 @@ function writeSessionTerminalOutput(sessionId, data) {
   }
 
   mount.terminal.write(data);
-}
-
-function syncTerminalLiveState(session) {
-  syncSessionTerminalLiveState(session);
 }
 
 function syncSessionTerminalLiveState(session) {
@@ -5463,8 +5436,9 @@ function renderClaudeFilesPane(context) {
 }
 
 function renderClaudePluginsPane(context) {
+  const jsonFiles = editableClaudeJsonFiles();
   const selectedFile =
-    editableClaudeJsonFiles().find((file) => file.path === ui.settingsSelectedFilePath) || null;
+    jsonFiles.find((file) => file.path === ui.settingsSelectedFilePath) || null;
   const parseError = ui.settingsJsonError;
   const showRawEditor = ui.settingsShowRawJson || !!parseError;
   const currentRootValue = currentJsonSettingsValue();
@@ -5489,7 +5463,7 @@ function renderClaudePluginsPane(context) {
       }
 
       ${
-        editableClaudeJsonFiles().length
+        jsonFiles.length
           ? `
             <div class="settings-group-card">
               <div class="settings-help-row">
@@ -5499,7 +5473,7 @@ function renderClaudePluginsPane(context) {
                 </div>
               </div>
               <div class="claude-settings-chip-row">
-                ${editableClaudeJsonFiles().map((file) => renderClaudeSettingsFileChip(file)).join("")}
+                ${jsonFiles.map((file) => renderClaudeSettingsFileChip(file)).join("")}
               </div>
             </div>
           `
@@ -8716,13 +8690,6 @@ async function refreshPortStatus() {
 }
 
 
-function currentActiveSession(): SessionSummary | null {
-  if (ui.selection.type !== "session") {
-    return null;
-  }
-  return sessionById(ui.selection.id);
-}
-
 function syncPortStatusPolling() {
   if (ui.selection.type === "status") {
     if (ui.portStatusPollTimer === null) {
@@ -9852,7 +9819,7 @@ class HydraSmallWebRTCClient implements VoiceClientLike {
     }
 
     if (this.audioContext) {
-      await this.audioContext.close().catch(() => undefined);
+      void this.audioContext.close().catch(() => undefined);
       this.audioContext = null;
     }
 
@@ -10113,51 +10080,11 @@ class HydraSmallWebRTCClient implements VoiceClientLike {
   }
 }
 
-function voiceRequiredApiKeys(config: VoiceConfig) {
-  const keys = new Set<string>();
-  const add = (key: string | null) => {
-    if (key) keys.add(key);
-  };
-
-  add(config.llmProvider === "openai" ? "OPENAI_API_KEY" : null);
-  add(config.llmProvider === "anthropic" ? "ANTHROPIC_API_KEY" : null);
-  add(config.llmProvider === "google" ? "GOOGLE_API_KEY" : null);
-  add(config.sttProvider === "deepgram" ? "DEEPGRAM_API_KEY" : null);
-  add(config.sttProvider === "google" ? "GOOGLE_API_KEY" : null);
-  add(config.ttsProvider === "cartesia" ? "CARTESIA_API_KEY" : null);
-  add(config.ttsProvider === "elevenlabs" ? "ELEVENLABS_API_KEY" : null);
-  add(config.ttsProvider === "deepgram" ? "DEEPGRAM_API_KEY" : null);
-
-  return [...keys];
-}
-
-function voiceSetupInstructions(config: VoiceConfig) {
-  const requiredKeys = voiceRequiredApiKeys(config);
-  if (!requiredKeys.length) {
-    return "To get started, choose your providers and allow microphone access when prompted.";
-  }
-
-  return `To get started, choose your providers, make sure ${requiredKeys.join(", ")} ${
-    requiredKeys.length === 1 ? "is" : "are"
-  } configured in the right panel or your shell, and allow microphone access when prompted.`;
-}
-
 function voiceTooltip(voiceState: VoiceCallState) {
   if (voiceState === "listening") return "Voice Active";
   if (voiceState === "connecting") return "Preparing...";
   if (voiceState === "error") return "Voice Error";
   return "Voice Mode";
-}
-
-function voiceStatusLabel(voiceState: VoiceCallState) {
-  if (voiceState === "connecting") return "Preparing";
-  if (voiceState === "listening") return "Listening";
-  if (voiceState === "error") return "Error";
-  return "";
-}
-
-function appendVoiceSetupInstructions(_config: VoiceConfig) {
-  // Setup guidance is shown via the status banner, not transcript entries
 }
 
 function renderVoiceRailButton() {
@@ -10331,7 +10258,6 @@ async function startVoiceSession() {
     const config = await api.getVoiceConfig();
     if (!voiceSessionIsCurrent(runId)) return;
     state.preferences.voiceConfig = config;
-    appendVoiceSetupInstructions(config);
     renderVoiceDialog();
 
     const pyCheck = await api.checkPython();
@@ -11262,16 +11188,8 @@ async function openTokscaleOverlay(repoId: string | null) {
   await openEphemeralToolOverlay("tokscale", repoId);
 }
 
-function closeTokscaleOverlay() {
-  closeEphemeralToolOverlay("tokscale");
-}
-
 async function openLazygitOverlay(repoId: string | null) {
   await openEphemeralToolOverlay("lazygit", repoId);
-}
-
-function closeLazygitOverlay() {
-  closeEphemeralToolOverlay("lazygit");
 }
 
 async function startSessionForRepo(
@@ -11414,38 +11332,6 @@ function extractLatestProposedPlan(transcript: string) {
     markdown,
     fingerprint: markdown
   };
-}
-
-function extractClaudePlanFromTranscript(transcript: string) {
-  const normalized = String(transcript || "").replace(/\r\n/g, "\n");
-
-  const approvalPatterns = [
-    /would you like to proceed with this plan/i,
-    /do you want to proceed with this plan/i,
-    /proceed with this plan/i
-  ];
-
-  let approvalIndex = -1;
-  for (const pattern of approvalPatterns) {
-    const match = normalized.search(pattern);
-    if (match !== -1 && (approvalIndex === -1 || match < approvalIndex)) {
-      approvalIndex = match;
-    }
-  }
-
-  if (approvalIndex === -1) return null;
-
-  const beforeApproval = normalized.slice(0, approvalIndex).trimEnd();
-  if (!beforeApproval) return null;
-
-  const lines = beforeApproval.split("\n");
-  const planLines = lines.slice(-200);
-
-  let start = 0;
-  while (start < planLines.length && !planLines[start].trim()) start++;
-  const markdown = planLines.slice(start).join("\n").trim();
-
-  return markdown ? { markdown, fingerprint: markdown } : null;
 }
 
 async function loadWikiContext(
@@ -11962,9 +11848,7 @@ function currentEnabledPluginsSettingsValue(): JsonObject | null {
 
 function selectedEnabledPluginOverride(pluginId: string): boolean | undefined {
   const enabledPluginsValue = currentEnabledPluginsSettingsValue();
-  if (!enabledPluginsValue) {
-    return undefined;
-  }
+  if (!enabledPluginsValue) return;
 
   const value = enabledPluginsValue[pluginId];
   return typeof value === "boolean" ? value : undefined;
@@ -12234,30 +12118,6 @@ function defaultValueForSettingKind(kind) {
     default:
       return "";
   }
-}
-
-function countTopLevelJsonEntries(value) {
-  if (Array.isArray(value)) {
-    return value.length;
-  }
-
-  if (isJsonObject(value)) {
-    return Object.keys(value).length;
-  }
-
-  return value === null || value === undefined ? 0 : 1;
-}
-
-function countLeafJsonEntries(value) {
-  if (Array.isArray(value)) {
-    return value.reduce((count, item) => count + countLeafJsonEntries(item), 0);
-  }
-
-  if (isJsonObject(value)) {
-    return Object.values(value).reduce((count, item) => count + countLeafJsonEntries(item), 0);
-  }
-
-  return value === undefined ? 0 : 1;
 }
 
 function describeJsonValueType(value) {
@@ -14220,22 +14080,6 @@ function renderSessionTagDot(tagColor, extraClass = "") {
   return `<span class="session-tag-dot session-tag-${escapeAttribute(normalized)}${className}" title="${escapeAttribute(sessionTagLabel(normalized))} tag" aria-hidden="true"></span>`;
 }
 
-function renderSessionVisualButton(session, extraClass = "", action = "", label = "Upload session icon") {
-  const className = extraClass ? ` ${extraClass}` : "";
-  const actionAttribute = action ? ` data-action="${escapeAttribute(action)}"` : "";
-  return `
-    <button
-      type="button"
-      class="session-visual-button${className}"
-      ${actionAttribute}
-      data-session-id="${session.id}"
-      aria-label="${escapeAttribute(label)}"
-      title="${escapeAttribute(label)}">
-      ${renderSessionVisual(session, "session-visual-button-content", { includePlaceholder: true })}
-    </button>
-  `;
-}
-
 function renderSessionVisual(
   session,
   extraClass = "",
@@ -14334,7 +14178,7 @@ function renderSessionRestartButton(session, options: SessionRestartButtonRender
     noDrag = false,
     stopRowSelect = false
   } = options;
-  const label = restartSessionActionLabel();
+  const label = "Restart";
   const classes = classNames(
     className || undefined,
     "session-restart-button",
@@ -14413,12 +14257,6 @@ function renderProjectAvatarElement(repo): SVGElement {
 
 function renderUtilityIconElement(kind): SVGElement {
   return trustedElement<SVGElement>(renderUtilityIcon(kind));
-}
-
-function renderSessionVisualButtonElement(session, extraClass = "", action = "", label = "Upload session icon") {
-  return trustedElement<HTMLButtonElement>(
-    renderSessionVisualButton(session, extraClass, action, label)
-  );
 }
 
 function renderSessionVisualElement(
@@ -14980,46 +14818,12 @@ async function revealSessionSearchResult(index: number) {
   });
 }
 
-function pathLeafLabel(filePath: string) {
-  const normalized = filePath.replace(/\\/g, "/");
-  const parts = normalized.split("/");
-  return parts.slice(-2).join("/");
-}
-
 function canResumeSessionSearchResult(
   result: SessionSearchResult | null | undefined
 ): result is SessionSearchResult & { sessionId: string } {
   return !!result && (result.source === "claude" || result.source === "codex") && !!result.sessionId;
 }
 
-
-function codexJsonlPreview(raw: string): string{
-	try{
-		const parsed = JSON.parse(raw);		
-		if (parsed?.payload?.type === "agent_message" || parsed?.payload?.message){
-			return String(parsed.payload.message).slice(0, 300).trim();  
-		}
-
-		if (parsed?.payload?.type === "message"){
-			const content = parsed.payload.content;
-			
-			if (Array.isArray(content)) {  
-				const textBlock = content.find(block => block?.type === "output_text");  
-				if (textBlock?.text) {    
-					return String(textBlock.text).slice(0, 300).trim();  
-				}  
-			}
-			
-			return String(parsed.payload.message).slice(0, 300).trim();  
-		}
-
-
-	}
-	catch{
-		// not valid JSON
-	}
-	return raw.slice(0, 300).trim()
-}
 
 function normalizeJsonlPreview(raw: string): string {
   try {
@@ -15146,14 +14950,6 @@ function terminalLineKillHandled(event) {
   return !!(event as KeyboardEvent & { __claudeWorkspaceTerminalLineKillHandled?: boolean }).__claudeWorkspaceTerminalLineKillHandled;
 }
 
-function markTerminalPinHandled(event) {
-  (event as KeyboardEvent & { __claudeWorkspaceTerminalPinHandled?: boolean }).__claudeWorkspaceTerminalPinHandled = true;
-}
-
-function terminalPinHandled(event) {
-  return !!(event as KeyboardEvent & { __claudeWorkspaceTerminalPinHandled?: boolean }).__claudeWorkspaceTerminalPinHandled;
-}
-
 function isTerminalCopyShortcut(event) {
   return event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "c";
 }
@@ -15232,10 +15028,6 @@ function abbreviateHome(value) {
   return value
     .replace(/^\/(?:Users|home)\/[^/]+/, "~")
     .replace(/^[A-Za-z]:[/\\]Users[/\\][^/\\]+/, "~");
-}
-
-function trimRawTranscript(value) {
-  return value.length > 250000 ? value.slice(-250000) : value;
 }
 
 function pathLabel(filePath) {

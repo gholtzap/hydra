@@ -7,17 +7,10 @@ import { z } from "zod";
 import type { SessionRecord } from "../../shared-types";
 import type { AppControllerHandle } from "../internal-api";
 import type { McpActionArgs } from "../mcp-contracts";
-
-function textResult(data: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
-}
+import { boundedInteger } from "./limits";
+import { textResult } from "./result";
 
 type InboxArgs = {
-  repoId?: string;
-  limit?: number;
-};
-
-type ControlOverviewArgs = {
   repoId?: string;
   limit?: number;
 };
@@ -47,17 +40,6 @@ const EPHEMERAL_TOOL_ID_VALUES = [
   "tokscale"
 ] as const;
 
-function boundedInboxLimit(limit: number | undefined): number {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) {
-    return DEFAULT_INBOX_LIMIT;
-  }
-  return Math.max(1, Math.min(MAX_INBOX_LIMIT, Math.trunc(limit)));
-}
-
-function sessionActivityTimestamp(session: SessionRecord): string {
-  return session.lastActivityAt || session.updatedAt;
-}
-
 function inboxReasons(session: SessionRecord): string[] {
   const reasons: string[] = [];
   if (session.status === "blocked" || session.status === "needs_input" || session.blocker) {
@@ -86,12 +68,7 @@ function sessionSummary(appController: AppControllerHandle, session: SessionReco
   };
 }
 
-function sortedActionableSessions(sessions: SessionRecord[]): SessionRecord[] {
-  const blocked = sessions.filter(
-    (session) => session.status === "blocked" || session.status === "needs_input" || session.blocker !== null
-  );
-  const unread = sessions.filter((session) => session.unreadCount > 0);
-
+function sortedActionableSessions(blocked: SessionRecord[], unread: SessionRecord[]): SessionRecord[] {
   return Array.from(new Map([...blocked, ...unread].map((session) => [session.id, session])).values())
     .sort((left, right) => {
       const leftReasons = inboxReasons(left);
@@ -99,7 +76,7 @@ function sortedActionableSessions(sessions: SessionRecord[]): SessionRecord[] {
       const leftBlocked = leftReasons.includes("blocked");
       const rightBlocked = rightReasons.includes("blocked");
       if (leftBlocked !== rightBlocked) return leftBlocked ? -1 : 1;
-      return sessionActivityTimestamp(right).localeCompare(sessionActivityTimestamp(left));
+      return (right.lastActivityAt || right.updatedAt).localeCompare(left.lastActivityAt || left.updatedAt);
     });
 }
 
@@ -109,8 +86,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
     "Get dev port monitoring status",
     {},
     async () => {
-      const result = await appController.handleMcpAction("get_port_status", {});
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("get_port_status", {}));
     }
   );
 
@@ -122,8 +98,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       repoId: z.string().describe("Repo ID"),
     },
     async (args: McpActionArgs<"launch_ephemeral_tool">) => {
-      const result = await appController.handleMcpAction("launch_ephemeral_tool", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("launch_ephemeral_tool", args));
     }
   );
 
@@ -135,8 +110,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       sessionId: z.string().describe("Session ID of the ephemeral tool"),
     },
     async (args: McpActionArgs<"close_ephemeral_tool">) => {
-      const result = await appController.handleMcpAction("close_ephemeral_tool", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("close_ephemeral_tool", args)) ?? { ok: true });
     }
   );
 
@@ -148,7 +122,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       limit: z.number().optional().describe("Maximum actionable sessions to return, capped at 100"),
     },
     async (args: InboxArgs) => {
-      const limit = boundedInboxLimit(args.limit);
+      const limit = boundedInteger(args.limit, DEFAULT_INBOX_LIMIT, 1, MAX_INBOX_LIMIT);
       const sessions = args.repoId
         ? appController.state.sessions.filter((session) => session.repoID === args.repoId)
         : appController.state.sessions;
@@ -157,13 +131,12 @@ export function register(server: McpServer, appController: AppControllerHandle):
       );
       const unread = sessions.filter((session) => session.unreadCount > 0);
       const blockedIds = new Set(blocked.map((session) => session.id));
-      const summaryMap = (session: SessionRecord): InboxSessionSummary => sessionSummary(appController, session);
-      const actionable = sortedActionableSessions(sessions).slice(0, limit);
+      const actionable = sortedActionableSessions(blocked, unread).slice(0, limit);
 
       return textResult({
-        actionable: actionable.map(summaryMap),
-        blocked: blocked.map(summaryMap),
-        unread: unread.map(summaryMap),
+        actionable: actionable.map((session) => sessionSummary(appController, session)),
+        blocked: blocked.map((session) => sessionSummary(appController, session)),
+        unread: unread.map((session) => sessionSummary(appController, session)),
         counts: {
           actionable: blocked.length + unread.filter((session) => !blockedIds.has(session.id)).length,
           blocked: blocked.length,
@@ -181,8 +154,8 @@ export function register(server: McpServer, appController: AppControllerHandle):
       repoId: z.string().optional().describe("Filter sessions by repo ID"),
       limit: z.number().optional().describe("Maximum actionable sessions to return, capped at 100"),
     },
-    async (args: ControlOverviewArgs) => {
-      const limit = boundedInboxLimit(args.limit);
+    async (args) => {
+      const limit = boundedInteger(args.limit, DEFAULT_INBOX_LIMIT, 1, MAX_INBOX_LIMIT);
       const sessions = args.repoId
         ? appController.state.sessions.filter((session) => session.repoID === args.repoId)
         : appController.state.sessions;
@@ -197,7 +170,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
 
       return textResult({
         focusedSession: focusedSession ? sessionSummary(appController, focusedSession) : null,
-        actionable: sortedActionableSessions(sessions).slice(0, limit).map((session) =>
+        actionable: sortedActionableSessions(blocked, unread).slice(0, limit).map((session) =>
           sessionSummary(appController, session)
         ),
         counts: {

@@ -84,10 +84,6 @@ function pruneWikiExistsSyncCache(currentTime = Date.now()): void {
       }
     }
 
-    if (!oldestRootPath) {
-      break;
-    }
-
     wikiExistsSyncCache.delete(oldestRootPath);
   }
 }

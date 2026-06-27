@@ -14,7 +14,6 @@ import type {
   ClaudeExternalUrlRequest,
   ClaudePathRevealRequest,
   ClaudeSettingsContext,
-  DirectoryReadResult,
   EphemeralToolExitPayload,
   EphemeralToolId,
   EphemeralToolInputRequest,
@@ -31,7 +30,6 @@ import type {
   Point,
   PtyCreateSessionPayload,
   PtyHostMessage,
-  ReadFileResult,
   RepoAppLaunchConfig,
   RepoParallelWorktreeLedgerEntry,
   RepoParallelWorktreeSettings,
@@ -75,8 +73,6 @@ import {
   type McpActionName,
   type McpActionResult
 } from "./mcp-contracts";
-import { Agent } from "node:http";
-
 const fs = require("node:fs");
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");
 const path = require("node:path");
@@ -368,9 +364,8 @@ const {
   wikiExists: (rootPath: string) => Promise<boolean>;
   wikiExistsSync: (rootPath: string) => boolean;
 };
-const { mergeCommandPath, resolveCommandPath, resolveCommandPathSync } = require("./command-path") as {
+const { mergeCommandPath, resolveCommandPathSync } = require("./command-path") as {
   mergeCommandPath: (envPath?: string | null) => string;
-  resolveCommandPath: (command: string, envPath?: string | null) => Promise<string | null>;
   resolveCommandPathSync: (command: string, envPath?: string | null) => string | null;
 };
 const { startMcpServer } = require("./mcp-server") as {
@@ -755,28 +750,6 @@ function sessionWorkingDirectory(session: SessionRecord, repo: RepoRecord): stri
   return session.parallelWorktree.mode === "isolated" && session.parallelWorktree.worktreePath
     ? session.parallelWorktree.worktreePath
     : repo.path;
-}
-
-function parallelWorktreeDisplayState(
-  metadata: SessionParallelWorktreeMetadata | null | undefined
-): ParallelWorktreeLifecycleState | "overlap_warning" {
-  if (!metadata) {
-    return "inactive";
-  }
-
-  if (
-    metadata.overlapSessionIds.length > 0 &&
-    (
-      metadata.lifecycleState === "shared_checkout" ||
-      metadata.lifecycleState === "awaiting_agent" ||
-      metadata.lifecycleState === "active" ||
-      metadata.lifecycleState === "ready_to_finish"
-    )
-  ) {
-    return "overlap_warning";
-  }
-
-  return metadata.lifecycleState;
 }
 
 function tokscaleBinaryPackageName(): string | null {
@@ -1199,7 +1172,7 @@ class AppController {
     const [, state, lazygitPath] = await Promise.all([
       this.authMainSetup,
       loadState(),
-      resolveCommandPath("lazygit")
+      resolveCommandPathSync("lazygit")
     ]);
 
     this.state = state;
@@ -2428,10 +2401,7 @@ class AppController {
     );
   }
 
-  initialParallelWorktreeModeForNewSession(
-    repo: RepoRecord,
-    excludeSessionId: string | null = null
-  ): ParallelWorktreeSessionMode {
+  initialParallelWorktreeModeForNewSession(repo: RepoRecord): ParallelWorktreeSessionMode {
     const settings = this.effectiveRepoParallelWorktreeSettings(repo);
     if (!settings.enabled) {
       return "disabled";
@@ -2661,13 +2631,13 @@ class AppController {
 
     let mode: ParallelWorktreeSessionMode;
     if (launchReason === "create" || launchReason === "resume") {
-      mode = this.initialParallelWorktreeModeForNewSession(repo, session.id);
+      mode = this.initialParallelWorktreeModeForNewSession(repo);
       session.parallelWorktree = this.buildParallelWorktreeMetadata(repo, mode);
     } else {
       const existingMode = session.parallelWorktree?.mode || "disabled";
       mode =
         existingMode === "disabled"
-          ? this.initialParallelWorktreeModeForNewSession(repo, session.id)
+          ? this.initialParallelWorktreeModeForNewSession(repo)
           : existingMode;
       const nextMetadata = this.buildParallelWorktreeMetadata(repo, mode);
       if (launchReason === "reopen" && session.parallelWorktree.mode === "isolated") {
@@ -2758,7 +2728,7 @@ class AppController {
       sessionIconUpdatedAt: null,
       parallelWorktree: this.buildParallelWorktreeMetadata(
         repo,
-        startupAgentId ? this.initialParallelWorktreeModeForNewSession(repo, sessionId) : "disabled"
+        startupAgentId ? this.initialParallelWorktreeModeForNewSession(repo) : "disabled"
       ),
       pinnedMessages: [],
       notes: "",
@@ -3257,7 +3227,7 @@ class AppController {
       sessionIconUpdatedAt: null,
       parallelWorktree: this.buildParallelWorktreeMetadata(
         repo,
-        this.initialParallelWorktreeModeForNewSession(repo, sessionId)
+        this.initialParallelWorktreeModeForNewSession(repo)
       ),
       pinnedMessages: [],
       notes: "",
@@ -4542,7 +4512,9 @@ class AppController {
     let changed = false;
 
     for (const session of this.state.sessions) {
-      const transcript = rebuildTranscript(session);
+      const transcript = session.rawTranscript
+        ? trimTranscript(TerminalTranscriptBuffer.visibleText(session.rawTranscript))
+        : trimTranscript(session.transcript || "");
       this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(transcript));
 
       if ((session.transcript || "") !== transcript) {
@@ -5187,14 +5159,6 @@ function sessionIconUrl(session) {
 function trimTranscript(value) {
   const maxLength = 20000;
   return value.length > maxLength ? value.slice(-maxLength) : value;
-}
-
-function rebuildTranscript(session) {
-  if (session.rawTranscript) {
-    return trimTranscript(TerminalTranscriptBuffer.visibleText(session.rawTranscript));
-  }
-
-  return trimTranscript(session.transcript || "");
 }
 
 function resolvedShellPath(preferences) {

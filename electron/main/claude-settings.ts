@@ -8,7 +8,6 @@ import type {
   ClaudeSkillRoots,
   ClaudeSkillSourceType,
   JsonObject,
-  JsonValue
 } from "../shared-types";
 
 const fsp = require("node:fs/promises") as typeof import("node:fs/promises");

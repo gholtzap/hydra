@@ -79,7 +79,7 @@ function parsePasswordHash(hash: string): {
   }
 
   const iterations = Number.parseInt(iterationsText, 10);
-  if (!Number.isSafeInteger(iterations) || iterations <= 0 || iterations > MAX_PBKDF2_ITERATIONS) {
+  if (iterations <= 0 || iterations > MAX_PBKDF2_ITERATIONS) {
     return null;
   }
 

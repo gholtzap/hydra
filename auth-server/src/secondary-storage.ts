@@ -119,15 +119,15 @@ export function createEncryptedSecondaryStorage(
       }
 
       const now = Date.now();
-      if (isExpired(row.expires_at, now)) {
-        await deleteByHashedKey(keyHash).catch(() => undefined);
+      if (row.expires_at !== null && row.expires_at <= now) {
+        void deleteByHashedKey(keyHash).catch(() => undefined);
         return null;
       }
 
       try {
         return await decryptValue(row.value_encrypted, keyHash, row.expires_at);
       } catch {
-        await deleteByHashedKey(keyHash).catch(() => undefined);
+        void deleteByHashedKey(keyHash).catch(() => undefined);
         return null;
       }
     },
@@ -206,10 +206,6 @@ async function deriveHashKey(rootKey: CryptoKey): Promise<CryptoKey> {
     false,
     ["sign"],
   );
-}
-
-function isExpired(expiresAt: number | null, now: number): boolean {
-  return expiresAt !== null && expiresAt <= now;
 }
 
 function bytesToHex(input: BufferSource): string {

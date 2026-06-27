@@ -99,7 +99,6 @@ type BetterAuthMainClient = {
     ) => Promise<BetterAuthResponse<Record<string, unknown>> | Record<string, unknown>>;
   };
   useSession: {
-    get: () => BetterAuthSessionState;
     subscribe: (listener: (state: BetterAuthSessionState) => void) => () => void;
   };
 };
@@ -205,9 +204,9 @@ export class HydraAuthClient {
   /** Restore any existing Better Auth session on startup. */
   async initialize(): Promise<AuthSession | null> {
     for (let attempt = 0; attempt <= SESSION_RESTORE_RETRY_DELAYS_MS.length; attempt += 1) {
-      const result = await this.loadSessionState();
-      if (result.status !== "error") {
-        return result.session;
+      const { status, session } = await this.loadSessionState();
+      if (status !== "error") {
+        return session;
       }
 
       if (attempt === SESSION_RESTORE_RETRY_DELAYS_MS.length) {
@@ -225,8 +224,7 @@ export class HydraAuthClient {
       return this.cachedSession;
     }
 
-    const result = await this.loadSessionState();
-    return result.session;
+    return (await this.loadSessionState()).session;
   }
 
   async signIn(email: string, password: string): Promise<AuthResult> {
@@ -309,7 +307,30 @@ export class HydraAuthClient {
   }
 
   async requestPasswordReset(email: string, redirectUrl: string): Promise<AuthResult> {
-    const safeRedirectUrl = this.normalizePasswordResetRedirect(redirectUrl);
+    const value = redirectUrl.trim();
+    let safeRedirectUrl: string | null = null;
+
+    if (value) {
+      try {
+        const target = new URL(value);
+        if (target.protocol === "app:" && target.hostname === "-") {
+          safeRedirectUrl = target.toString();
+        } else {
+          const baseUrl = new URL(this.authBaseURL);
+          if (target.origin === baseUrl.origin) {
+            safeRedirectUrl = target.toString();
+          } else if (
+            (target.protocol === "http:" || target.protocol === "https:") &&
+            LOCAL_AUTH_HOSTNAMES.has(target.hostname)
+          ) {
+            safeRedirectUrl = target.toString();
+          }
+        }
+      } catch {
+        safeRedirectUrl = null;
+      }
+    }
+
     if (!safeRedirectUrl) {
       return { success: false, error: "Password reset redirects must stay on Hydra or localhost." };
     }
@@ -381,8 +402,7 @@ export class HydraAuthClient {
   // -----------------------------------------------------------------------
 
   private async refreshSession(options: { broadcast?: boolean } = {}): Promise<AuthSession | null> {
-    const result = await this.loadSessionState(options);
-    return result.session;
+    return (await this.loadSessionState(options)).session;
   }
 
   private async loadSessionState(
@@ -446,35 +466,6 @@ export class HydraAuthClient {
     return fallback;
   }
 
-  private normalizePasswordResetRedirect(redirectUrl: string): string | null {
-    const value = redirectUrl.trim();
-    if (!value) {
-      return null;
-    }
-
-    try {
-      const target = new URL(value);
-      if (target.protocol === "app:" && target.hostname === "-") {
-        return target.toString();
-      }
-
-      const baseUrl = new URL(this.authBaseURL);
-      if (target.origin === baseUrl.origin) {
-        return target.toString();
-      }
-
-      if (target.protocol === "http:" || target.protocol === "https:") {
-        if (LOCAL_AUTH_HOSTNAMES.has(target.hostname)) {
-          return target.toString();
-        }
-      }
-    } catch {
-      return null;
-    }
-
-    return null;
-  }
-
   private toRendererSession(payload: unknown): AuthSession | null {
     if (!payload || typeof payload !== "object") {
       return null;
@@ -486,7 +477,14 @@ export class HydraAuthClient {
       return null;
     }
 
-    const expiresAt = this.toIsoString(session.expiresAt);
+    const expiresAt =
+      typeof session.expiresAt === "string"
+        ? session.expiresAt
+        : typeof session.expiresAt === "number"
+          ? new Date(session.expiresAt).toISOString()
+          : session.expiresAt instanceof Date
+            ? session.expiresAt.toISOString()
+            : null;
     if (!expiresAt) {
       return null;
     }
@@ -501,22 +499,6 @@ export class HydraAuthClient {
       },
       expiresAt,
     };
-  }
-
-  private toIsoString(value: unknown): string | null {
-    if (typeof value === "string") {
-      return value;
-    }
-
-    if (typeof value === "number") {
-      return new Date(value).toISOString();
-    }
-
-    if (value instanceof Date) {
-      return value.toISOString();
-    }
-
-    return null;
   }
 
   private setCachedSession(

@@ -1,7 +1,11 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import type { AgentDefinition, RepoRecord, SessionRecord } from "../shared-types";
+import type { AgentDefinition } from "../shared-types";
 import type { AppControllerHandle } from "./internal-api";
+
+const { AGENT_DEFINITIONS } = require("./state-store") as {
+  AGENT_DEFINITIONS: AgentDefinition[];
+};
 
 function readTemplateVariable(value: string | string[] | undefined): string | null {
   return typeof value === "string" && value ? value : null;
@@ -46,9 +50,6 @@ export function registerResources(server: McpServer, appController: AppControlle
     { title: "Session Detail", description: "Single session with full transcript", mimeType: "application/json" },
     async (uri: URL, variables) => {
       const id = readTemplateVariable(variables.id);
-      if (!id) {
-        return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify({ error: "Session not found" }) }] };
-      }
       const session = appController.state.sessions.find((candidate) => candidate.id === id);
       if (!session) {
         return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify({ error: "Session not found" }) }] };
@@ -136,12 +137,11 @@ export function registerResources(server: McpServer, appController: AppControlle
           }],
         };
       }
-      const result = await appController.handleMcpAction("get_wiki", { repoId: id });
       return {
         contents: [{
           uri: uri.href,
           mimeType: "application/json",
-          text: JSON.stringify(result ?? { error: "Wiki not available" }),
+          text: JSON.stringify((await appController.handleMcpAction("get_wiki", { repoId: id })) ?? { error: "Wiki not available" }),
         }],
       };
     }
@@ -152,18 +152,9 @@ export function registerResources(server: McpServer, appController: AppControlle
     "agents",
     "hydra://agents",
     { title: "Agent Definitions", description: "Available AI agent types and their configurations", mimeType: "application/json" },
-    async (uri: URL) => {
-      // AGENT_DEFINITIONS is loaded in main.ts from state-store; read from require at runtime
-      let agents: AgentDefinition[] = [];
-      try {
-        ({ AGENT_DEFINITIONS: agents } = require("./state-store") as {
-          AGENT_DEFINITIONS: AgentDefinition[];
-        });
-      } catch {
-        agents = [];
-      }
-      return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(agents) }] };
-    }
+    async (uri: URL) => ({
+      contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(AGENT_DEFINITIONS) }],
+    })
   );
 
   // hydra://preferences — current preferences

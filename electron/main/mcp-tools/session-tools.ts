@@ -7,6 +7,8 @@ import { z } from "zod";
 import type { SessionRecord, SessionStatus } from "../../shared-types";
 import type { AppControllerHandle } from "../internal-api";
 import type { McpActionArgs } from "../mcp-contracts";
+import { boundedInteger } from "./limits";
+import { textResult } from "./result";
 
 const AGENT_APPROVE_MAP: Record<string, string> = {
   claude: "1\r",
@@ -17,17 +19,6 @@ const AGENT_DENY_MAP: Record<string, string> = {
   claude: "3\r",
   codex: "\x1b[B\r",
 };
-
-function defaultApprove(): string {
-  return "y\r";
-}
-function defaultDeny(): string {
-  return "n\r";
-}
-
-function textResult(data: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
-}
 
 type SessionListItem = Omit<SessionRecord, "transcript" | "rawTranscript" | "sessionIconPath">;
 type SessionDetailsResult = Omit<SessionRecord, "sessionIconPath" | "rawTranscript"> & {
@@ -249,19 +240,6 @@ const MAX_TERMINAL_COLS = 500;
 const MAX_TERMINAL_ROWS = 200;
 const TERMINAL_TEXT_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
 
-function delayMs(durationMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, durationMs);
-  });
-}
-
-function boundedInteger(value: number | undefined, fallback: number, minimum: number, maximum: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(minimum, Math.min(maximum, Math.trunc(value)));
-}
-
 function sessionActivityTimestamp(session: SessionRecord): string {
   return session.lastActivityAt || session.updatedAt;
 }
@@ -272,24 +250,6 @@ function sessionQuietDurationMs(session: SessionRecord, nowMs: number): number {
     return 0;
   }
   return Math.max(0, nowMs - activityMs);
-}
-
-function sessionSnapshot(
-  session: SessionRecord,
-  condition: SessionWaitCondition,
-  nowMs: number
-): SessionWaitSnapshot {
-  return {
-    sessionId: session.id,
-    condition,
-    status: session.status,
-    runtimeState: session.runtimeState,
-    unreadCount: session.unreadCount,
-    blocker: session.blocker,
-    lastActivityAt: session.lastActivityAt,
-    quietForMs: sessionQuietDurationMs(session, nowMs),
-    updatedAt: session.updatedAt,
-  };
 }
 
 function sessionMatchesWaitCondition(
@@ -357,7 +317,17 @@ async function waitForSessionState(
       };
     }
 
-    lastSnapshot = sessionSnapshot(session, args.condition, nowMs);
+    lastSnapshot = {
+      sessionId: session.id,
+      condition: args.condition,
+      status: session.status,
+      runtimeState: session.runtimeState,
+      unreadCount: session.unreadCount,
+      blocker: session.blocker,
+      lastActivityAt: session.lastActivityAt,
+      quietForMs: sessionQuietDurationMs(session, nowMs),
+      updatedAt: session.updatedAt,
+    };
     if (sessionMatchesWaitCondition(session, args.condition, afterActivityAt, quietMs, nowMs)) {
       return {
         ok: true,
@@ -369,7 +339,9 @@ async function waitForSessionState(
       };
     }
 
-    await delayMs(Math.min(pollIntervalMs, Math.max(deadline - Date.now(), 0)));
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(pollIntervalMs, Math.max(deadline - Date.now(), 0)));
+    });
   }
 
   return {
@@ -399,6 +371,39 @@ function transcriptTail(text: string, lineLimit: number, charLimit: number): Ses
     returnedChars: charTail.length,
     returnedLines,
     truncated: totalLines > lineLimit || lineTail.length > charLimit,
+  };
+}
+
+function sessionTranscriptTail(
+  session: SessionRecord | null | undefined,
+  args: Pick<SessionTailArgs, "lines" | "maxChars" | "includeRawTranscript">
+) {
+  const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
+  const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
+
+  return {
+    transcript: session ? transcriptTail(session.transcript, lineLimit, charLimit) : null,
+    rawTranscript: session && args.includeRawTranscript
+      ? transcriptTail(session.rawTranscript, lineLimit, charLimit)
+      : undefined,
+  };
+}
+
+function sessionTailResult(
+  session: SessionRecord,
+  args: Pick<SessionTailArgs, "lines" | "maxChars" | "includeRawTranscript">
+) {
+  return {
+    sessionId: session.id,
+    repoID: session.repoID,
+    title: session.title,
+    status: session.status,
+    runtimeState: session.runtimeState,
+    unreadCount: session.unreadCount,
+    blocker: session.blocker,
+    lastActivityAt: session.lastActivityAt,
+    updatedAt: session.updatedAt,
+    ...sessionTranscriptTail(session, args),
   };
 }
 
@@ -529,25 +534,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ error: "Session not found" });
 
-      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
-      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
-      const result = {
-        sessionId: session.id,
-        repoID: session.repoID,
-        title: session.title,
-        status: session.status,
-        runtimeState: session.runtimeState,
-        unreadCount: session.unreadCount,
-        blocker: session.blocker,
-        lastActivityAt: session.lastActivityAt,
-        updatedAt: session.updatedAt,
-        transcript: transcriptTail(session.transcript, lineLimit, charLimit),
-        rawTranscript: args.includeRawTranscript
-          ? transcriptTail(session.rawTranscript, lineLimit, charLimit)
-          : undefined,
-      };
-
-      return textResult(result);
+      return textResult(sessionTailResult(session, args));
     }
   );
 
@@ -567,25 +554,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
       if (!session) return textResult({ ok: false, error: "Focused session not found", sessionId });
 
-      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
-      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
-      const result = {
-        sessionId: session.id,
-        repoID: session.repoID,
-        title: session.title,
-        status: session.status,
-        runtimeState: session.runtimeState,
-        unreadCount: session.unreadCount,
-        blocker: session.blocker,
-        lastActivityAt: session.lastActivityAt,
-        updatedAt: session.updatedAt,
-        transcript: transcriptTail(session.transcript, lineLimit, charLimit),
-        rawTranscript: args.includeRawTranscript
-          ? transcriptTail(session.rawTranscript, lineLimit, charLimit)
-          : undefined,
-      };
-
-      return textResult(result);
+      return textResult(sessionTailResult(session, args));
     }
   );
 
@@ -627,8 +596,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       prompt: z.string().max(MAX_SESSION_PROMPT_CHARS).optional().describe("Initial prompt to send. Required when the user asks the new session to do anything specific."),
     },
     async (args: McpActionArgs<"create_session">) => {
-      const result = await appController.handleMcpAction("create_session", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("create_session", args));
     }
   );
 
@@ -649,8 +617,10 @@ export function register(server: McpServer, appController: AppControllerHandle):
         });
       }
 
-      const result = await appController.handleMcpAction("create_shell_session", args);
-      return textResult({ sessionId: result, commandQueued: !!args.command });
+      return textResult({
+        sessionId: await appController.handleMcpAction("create_shell_session", args),
+        commandQueued: !!args.command,
+      });
     }
   );
 
@@ -663,8 +633,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       title: z.string().describe("New title"),
     },
     async (args: McpActionArgs<"rename_session">) => {
-      const result = await appController.handleMcpAction("rename_session", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("rename_session", args)) ?? { ok: true });
     }
   );
 
@@ -676,8 +645,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       sessionId: z.string().describe("Session ID to close"),
     },
     async (args: McpActionArgs<"close_session">) => {
-      const result = await appController.handleMcpAction("close_session", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("close_session", args)) ?? { ok: true });
     }
   );
 
@@ -689,8 +657,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       sessionId: z.string().describe("Session ID to reopen"),
     },
     async (args: McpActionArgs<"reopen_session">) => {
-      const result = await appController.handleMcpAction("reopen_session", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("reopen_session", args)) ?? { ok: true });
     }
   );
 
@@ -705,12 +672,11 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ ok: false, error: "Session not found" });
       const previousRuntimeState = session.runtimeState;
-      const result = await appController.handleMcpAction("restart_session", args);
       return textResult({
         ok: true,
         previousRuntimeState,
         restartQueued: previousRuntimeState === "live",
-        result: result ?? null,
+        result: (await appController.handleMcpAction("restart_session", args)) ?? null,
       });
     }
   );
@@ -726,12 +692,11 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ ok: false, error: "Session not found" });
       const previousRuntimeState = session.runtimeState;
-      const result = await appController.handleMcpAction("stop_session", args);
       return textResult({
         ok: true,
         previousRuntimeState,
         stopped: true,
-        result: result ?? null,
+        result: (await appController.handleMcpAction("stop_session", args)) ?? null,
       });
     }
   );
@@ -749,8 +714,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         if (!repo) return textResult({ ok: false, error: "Repo not found" });
       }
 
-      const result = await appController.handleMcpAction("stop_sessions", args);
-      return textResult({ ok: true, ...result });
+      return textResult({ ok: true, ...(await appController.handleMcpAction("stop_sessions", args)) });
     }
   );
 
@@ -764,8 +728,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
     async (args: McpActionArgs<"mark_session_read">) => {
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ ok: false, error: "Session not found" });
-      const result = await appController.handleMcpAction("mark_session_read", args);
-      return textResult({ ok: true, ...result });
+      return textResult({ ok: true, ...(await appController.handleMcpAction("mark_session_read", args)) });
     }
   );
 
@@ -782,8 +745,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         if (!repo) return textResult({ ok: false, error: "Repo not found" });
       }
 
-      const result = await appController.handleMcpAction("mark_sessions_read", args);
-      return textResult({ ok: true, ...result });
+      return textResult({ ok: true, ...(await appController.handleMcpAction("mark_sessions_read", args)) });
     }
   );
 
@@ -799,13 +761,12 @@ export function register(server: McpServer, appController: AppControllerHandle):
     async (args: McpActionArgs<"resize_session">) => {
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ ok: false, error: "Session not found" });
-      const result = await appController.handleMcpAction("resize_session", args);
       return textResult({
         ok: true,
         sessionId: args.sessionId,
         cols: args.cols,
         rows: args.rows,
-        result: result ?? null,
+        result: (await appController.handleMcpAction("resize_session", args)) ?? null,
       });
     }
   );
@@ -821,8 +782,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       repoId: z.string().optional().describe("Move to different repo"),
     },
     async (args: McpActionArgs<"organize_session">) => {
-      const result = await appController.handleMcpAction("organize_session", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("organize_session", args)) ?? { ok: true });
     }
   );
 
@@ -860,8 +820,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         });
       }
 
-      const result = await appController.handleMcpAction("send_command", args);
-      return textResult({ ok: true, ...result });
+      return textResult({ ok: true, ...(await appController.handleMcpAction("send_command", args)) });
     }
   );
 
@@ -908,18 +867,13 @@ export function register(server: McpServer, appController: AppControllerHandle):
         await appController.handleMcpAction("stop_session", { sessionId: args.sessionId });
       }
       const currentSession = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
-      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
-      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
 
       return textResult({
         ok: wait.ok,
         command: commandResult,
         wait,
         stopped,
-        transcript: currentSession ? transcriptTail(currentSession.transcript, lineLimit, charLimit) : null,
-        rawTranscript: currentSession && args.includeRawTranscript
-          ? transcriptTail(currentSession.rawTranscript, lineLimit, charLimit)
-          : undefined,
+        ...sessionTranscriptTail(currentSession, args),
       });
     }
   );
@@ -969,8 +923,6 @@ export function register(server: McpServer, appController: AppControllerHandle):
         await appController.handleMcpAction("stop_session", { sessionId });
       }
       const currentSession = appController.state.sessions.find((candidate) => candidate.id === sessionId);
-      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
-      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
 
       return textResult({
         ok: wait.ok,
@@ -978,10 +930,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         command: commandResult,
         wait,
         stopped,
-        transcript: currentSession ? transcriptTail(currentSession.transcript, lineLimit, charLimit) : null,
-        rawTranscript: currentSession && args.includeRawTranscript
-          ? transcriptTail(currentSession.rawTranscript, lineLimit, charLimit)
-          : undefined,
+        ...sessionTranscriptTail(currentSession, args),
       });
     }
   );
@@ -1036,8 +985,6 @@ export function register(server: McpServer, appController: AppControllerHandle):
         await appController.handleMcpAction("stop_session", { sessionId });
       }
       const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
-      const lineLimit = boundedInteger(args.lines, DEFAULT_SESSION_TAIL_LINES, 1, MAX_SESSION_TAIL_LINES);
-      const charLimit = boundedInteger(args.maxChars, DEFAULT_SESSION_TAIL_CHARS, 1, MAX_SESSION_TAIL_CHARS);
 
       return textResult({
         ok: wait.ok,
@@ -1045,10 +992,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
         repoId: args.repoId,
         wait,
         stopped,
-        transcript: session ? transcriptTail(session.transcript, lineLimit, charLimit) : null,
-        rawTranscript: session && args.includeRawTranscript
-          ? transcriptTail(session.rawTranscript, lineLimit, charLimit)
-          : undefined,
+        ...sessionTranscriptTail(session, args),
       });
     }
   );
@@ -1146,7 +1090,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ error: "Session not found" });
       const agentId = session.startupAgentId || "claude";
-      const input = AGENT_APPROVE_MAP[agentId] ?? defaultApprove();
+      const input = AGENT_APPROVE_MAP[agentId] ?? "y\r";
       appController.handleSessionInput(args.sessionId, input);
       return textResult({ ok: true, agentId });
     }
@@ -1164,7 +1108,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
       if (!session) return textResult({ ok: false, error: "Focused session not found", sessionId });
       const agentId = session.startupAgentId || "claude";
-      const input = AGENT_APPROVE_MAP[agentId] ?? defaultApprove();
+      const input = AGENT_APPROVE_MAP[agentId] ?? "y\r";
       appController.handleSessionInput(sessionId, input);
       return textResult({ ok: true, sessionId, agentId });
     }
@@ -1181,7 +1125,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === args.sessionId);
       if (!session) return textResult({ error: "Session not found" });
       const agentId = session.startupAgentId || "claude";
-      const input = AGENT_DENY_MAP[agentId] ?? defaultDeny();
+      const input = AGENT_DENY_MAP[agentId] ?? "n\r";
       appController.handleSessionInput(args.sessionId, input);
       return textResult({ ok: true, agentId });
     }
@@ -1199,7 +1143,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const session = appController.state.sessions.find((candidate) => candidate.id === sessionId);
       if (!session) return textResult({ ok: false, error: "Focused session not found", sessionId });
       const agentId = session.startupAgentId || "claude";
-      const input = AGENT_DENY_MAP[agentId] ?? defaultDeny();
+      const input = AGENT_DENY_MAP[agentId] ?? "n\r";
       appController.handleSessionInput(sessionId, input);
       return textResult({ ok: true, sessionId, agentId });
     }
@@ -1214,8 +1158,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       query: z.string().describe("Search query"),
     },
     async (args: McpActionArgs<"search_sessions">) => {
-      const result = await appController.handleMcpAction("search_sessions", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("search_sessions", args));
     }
   );
 
@@ -1232,7 +1175,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
           const rightTime = right.lastActivityAt || right.updatedAt;
           return rightTime.localeCompare(leftTime);
         });
-      const next = unread[0] ?? null;
+      const next = unread[0];
       return textResult({ sessionId: next?.id ?? null, unreadTotal: unread.length });
     }
   );
@@ -1250,8 +1193,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       quietMs: z.number().optional().describe("For quiet waits, required no-output window in milliseconds, capped from 250 to 30000"),
     },
     async (args: SessionWaitArgs) => {
-      const result = await waitForSessionState(appController, args);
-      return textResult(result);
+      return textResult(await waitForSessionState(appController, args));
     }
   );
 
@@ -1265,8 +1207,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       externalSessionId: z.string().describe("External session ID to resume from"),
     },
     async (args: McpActionArgs<"resume_session">) => {
-      const result = await appController.handleMcpAction("resume_session", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("resume_session", args));
     }
   );
 }

@@ -6,10 +6,7 @@ import { z } from "zod";
 
 import type { AppControllerHandle } from "../internal-api";
 import type { McpActionArgs } from "../mcp-contracts";
-
-function textResult(data: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
-}
+import { textResult } from "./result";
 
 export function register(server: McpServer, appController: AppControllerHandle): void {
   server.tool(
@@ -28,8 +25,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       patch: z.record(z.string(), z.unknown()).describe("Partial preferences object to merge"),
     },
     async (args: McpActionArgs<"update_preferences">) => {
-      const result = await appController.handleMcpAction("update_preferences", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("update_preferences", args)) ?? { ok: true });
     }
   );
 
@@ -40,8 +36,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       repoId: z.string().describe("Repo ID"),
     },
     async (args: McpActionArgs<"get_settings_context">) => {
-      const result = await appController.handleMcpAction("get_settings_context", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("get_settings_context", args));
     }
   );
 
@@ -53,8 +48,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       filePath: z.string().describe("Settings file path"),
     },
     async (args: McpActionArgs<"load_settings_file">) => {
-      const result = await appController.handleMcpAction("load_settings_file", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("load_settings_file", args));
     }
   );
 
@@ -67,8 +61,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       content: z.string().describe("File content to write"),
     },
     async (args: McpActionArgs<"save_settings_file">) => {
-      const result = await appController.handleMcpAction("save_settings_file", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("save_settings_file", args)) ?? { ok: true });
     }
   );
 }

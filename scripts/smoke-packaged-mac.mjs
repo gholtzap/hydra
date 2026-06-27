@@ -152,8 +152,7 @@ async function verifyCommandResolution(homeDir, fakeCommandName, fakeCodexPath) 
 }
 
 async function launchOpenCommand(args, options) {
-  const command = `open ${args.map((value) => shellSingleQuote(value)).join(" ")}`;
-  const child = spawn("/bin/zsh", ["-lc", command], {
+  const child = spawn("open", args, {
     env: options.env,
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -167,7 +166,7 @@ async function launchOpenCommand(args, options) {
     options.onStderr(chunk);
   });
 
-  return await new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     let settled = false;
     const timeout = setTimeout(() => {
       if (settled) {

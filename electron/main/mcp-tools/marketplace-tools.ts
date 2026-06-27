@@ -6,10 +6,7 @@ import { z } from "zod";
 
 import type { AppControllerHandle } from "../internal-api";
 import type { McpActionArgs } from "../mcp-contracts";
-
-function textResult(data: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
-}
+import { textResult } from "./result";
 
 export function register(server: McpServer, appController: AppControllerHandle): void {
   server.tool(
@@ -21,8 +18,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       path: z.string().describe("Path within repo"),
     },
     async (args: McpActionArgs<"get_skill_details">) => {
-      const result = await appController.handleMcpAction("get_skill_details", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("get_skill_details", args));
     }
   );
 
@@ -33,8 +29,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       url: z.string().describe("GitHub URL to inspect"),
     },
     async (args: McpActionArgs<"inspect_skill_url">) => {
-      const result = await appController.handleMcpAction("inspect_skill_url", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("inspect_skill_url", args));
     }
   );
 
@@ -48,8 +43,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       scope: z.enum(["user", "project"]).describe("Install scope: user or project"),
     },
     async (args: McpActionArgs<"install_skill">) => {
-      const result = await appController.handleMcpAction("install_skill", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("install_skill", args));
     }
   );
 }

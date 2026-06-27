@@ -17,10 +17,6 @@ const WELL_KNOWN_COMMAND_DIRECTORIES = [
     : [])
 ];
 
-async function resolveCommandPath(command: string, envPath?: string | null): Promise<string | null> {
-  return resolveCommandPathSync(command, envPath);
-}
-
 function resolveCommandPathSync(command: string, envPath?: string | null): string | null {
   const normalizedCommand = typeof command === "string" ? command.trim() : "";
   if (!normalizedCommand) {
@@ -85,6 +81,5 @@ function isExecutableFile(filePath: string): boolean {
 module.exports = {
   isExecutableFile,
   mergeCommandPath,
-  resolveCommandPath,
   resolveCommandPathSync
 };

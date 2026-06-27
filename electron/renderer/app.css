@@ -158,7 +158,6 @@
   --sidebar-border: oklch(0.3100 0.0040 80);
   --sidebar-ring: oklch(0.7600 0.0080 90);
   --font-sans: "Avenir Next", "SF Pro Text", "Helvetica Neue", sans-serif;
-  --font-serif: "Avenir Next", "SF Pro Text", "Helvetica Neue", sans-serif;
   --font-mono: "SF Mono", "JetBrains Mono", Menlo, Monaco, monospace;
   --radius: 0.75rem;
   --shadow-x: 0px;
@@ -1748,7 +1747,6 @@ textarea {
   justify-content: flex-start;
   gap: 6px;
   text-align: left;
-  width: 100%;
   min-height: 34px;
   padding: 0 8px;
   margin: 0;
@@ -2062,7 +2060,6 @@ textarea {
 }
 
 .pane-resize-handle::after {
-  content: '';
   border-radius: 0;
   background: var(--workspace-separator);
   opacity: 1;
@@ -2852,7 +2849,6 @@ textarea {
   min-width: 8px;
   height: 8px;
   padding: 0;
-  background: var(--count-bg);
 }
 
 .blocker-banner {
@@ -6135,10 +6131,6 @@ textarea {
 }
 
 .settings-worktree-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
   padding: 10px 0;
   border-top: 1px solid var(--border);
 }
@@ -6148,10 +6140,7 @@ textarea {
 }
 
 .settings-worktree-copy {
-  display: flex;
-  flex-direction: column;
   gap: 4px;
-  min-width: 0;
 }
 
 .inline-toggle input[type="checkbox"],
@@ -6652,4 +6641,3 @@ textarea {
   color: var(--text-muted);
   white-space: nowrap;
 }
-

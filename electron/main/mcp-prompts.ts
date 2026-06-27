@@ -4,6 +4,10 @@ import { z } from "zod";
 import type { AgentDefinition, RepoRecord, SessionRecord } from "../shared-types";
 import type { AppControllerHandle } from "./internal-api";
 
+const { AGENT_DEFINITIONS } = require("./state-store") as {
+  AGENT_DEFINITIONS: AgentDefinition[];
+};
+
 export function registerPrompts(server: McpServer, appController: AppControllerHandle): void {
   // review_blockers — list all blocked sessions with blocker details
   server.registerPrompt(
@@ -153,17 +157,8 @@ export function registerPrompts(server: McpServer, appController: AppControllerH
       },
     },
     async ({ taskDescription }: { taskDescription: string }) => {
-      let agents: AgentDefinition[] = [];
-      try {
-        ({ AGENT_DEFINITIONS: agents } = require("./state-store") as {
-          AGENT_DEFINITIONS: AgentDefinition[];
-        });
-      } catch {
-        agents = [];
-      }
-
       const prefs = appController.state.preferences;
-      const agentList = agents
+      const agentList = AGENT_DEFINITIONS
         .map((agent) => {
           const override = prefs.agentCommandOverrides?.[agent.id];
           const cmd = override || agent.defaultCommand;

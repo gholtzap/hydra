@@ -6,7 +6,6 @@ import type {
   MarketplaceSearchResponse,
   MarketplaceSkillDetails,
   MarketplaceSkillFile,
-  MarketplaceSkillSource,
   MarketplaceSkillSummary
 } from "../shared-types";
 
@@ -430,19 +429,6 @@ function deriveCompatibility(tags: string[], description: string) {
   return matches.slice(0, 3);
 }
 
-function matchesSearch(value: string, query: string) {
-  if (!query) {
-    return true;
-  }
-
-  const normalizedValue = String(value || "").toLowerCase();
-  return query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((term) => normalizedValue.includes(term));
-}
-
 async function buildSkillSummary(source: {
   owner: string;
   repo: string;
@@ -523,7 +509,10 @@ async function searchReviewedCatalog(query: string): Promise<ResolvedMarketplace
         catalogTags: entry.tags
       });
       const searchableText = `${summary.title} ${summary.description} ${summary.tags.join(" ")} ${summary.repoFullName}`;
-      return matchesSearch(searchableText, query) ? summary : null;
+      const normalizedValue = String(searchableText || "").toLowerCase();
+      return !query || query.toLowerCase().split(/\s+/).filter(Boolean).every((term) => normalizedValue.includes(term))
+        ? summary
+        : null;
     } catch {
       return null;
     }
@@ -577,7 +566,7 @@ async function searchGithubCode(query: string): Promise<ResolvedMarketplaceSkill
     .slice(0, 10)
     .map(async (entry) => {
       try {
-        return await buildSkillSummary({
+        return buildSkillSummary({
           owner: entry.owner,
           repo: entry.repo,
           path: entry.path,
@@ -661,7 +650,7 @@ async function getMarketplaceSkillDetails(payload: {
     files: summary.files,
     installTargets: {
       user: path.join(os.homedir(), ".claude", "skills"),
-      project: payload?.source ? ".claude/skills" : null
+      project: ".claude/skills"
     }
   };
 }
@@ -707,8 +696,8 @@ async function installMarketplaceSkill(payload: {
   scope: MarketplaceInstallScope;
   repoPath?: string | null;
 }): Promise<MarketplaceInstallResponse> {
-  const scope = payload?.scope === "project" ? "project" : "user";
-  const repoPath = payload?.repoPath || "";
+  const scope = payload.scope === "project" ? "project" : "user";
+  const repoPath = payload.repoPath || "";
 
   if (scope === "project" && !repoPath) {
     throw new Error("Open a project folder before installing a project-scoped skill.");
@@ -747,7 +736,8 @@ async function installMarketplaceSkill(payload: {
       await fs.writeFile(targetPath, contents);
     }
   } catch (error) {
-    await fs.rm(installPath, { recursive: true, force: true }).catch(() => undefined);
+    // ponytail: best-effort rollback; partial installs get overwritten on the next attempt.
+    void fs.rm(installPath, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
 

@@ -6,10 +6,8 @@ import { z } from "zod";
 
 import type { AppControllerHandle } from "../internal-api";
 import type { McpActionArgs } from "../mcp-contracts";
-
-function textResult(data: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
-}
+import { boundedInteger } from "./limits";
+import { textResult } from "./result";
 
 type RepoSearchArgs = {
   query: string;
@@ -41,11 +39,13 @@ type WorkspaceSearchResult = {
 const DEFAULT_REPO_SEARCH_LIMIT = 10;
 const MAX_REPO_SEARCH_LIMIT = 50;
 
-function boundedSearchLimit(limit: number | undefined): number {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) {
-    return DEFAULT_REPO_SEARCH_LIMIT;
-  }
-  return Math.max(1, Math.min(MAX_REPO_SEARCH_LIMIT, Math.trunc(limit)));
+function compareNameMatches(
+  left: { name: string; matchedFields: string[] },
+  right: { name: string; matchedFields: string[] }
+): number {
+  const leftNameMatch = left.matchedFields.includes("name") ? 0 : 1;
+  const rightNameMatch = right.matchedFields.includes("name") ? 0 : 1;
+  return leftNameMatch - rightNameMatch || left.name.localeCompare(right.name);
 }
 
 export function register(server: McpServer, appController: AppControllerHandle): void {
@@ -69,7 +69,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const needle = args.query.trim().toLowerCase();
       if (!needle) return textResult({ query: args.query, matches: [] });
 
-      const limit = boundedSearchLimit(args.limit);
+      const limit = boundedInteger(args.limit, DEFAULT_REPO_SEARCH_LIMIT, 1, MAX_REPO_SEARCH_LIMIT);
       const matches: WorkspaceSearchResult[] = appController.state.workspaces
         .map((workspace) => {
           const matchedFields: string[] = [];
@@ -85,11 +85,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
           };
         })
         .filter((workspace) => workspace.matchedFields.length > 0)
-        .sort((left, right) => {
-          const leftNameMatch = left.matchedFields.includes("name") ? 0 : 1;
-          const rightNameMatch = right.matchedFields.includes("name") ? 0 : 1;
-          return leftNameMatch - rightNameMatch || left.name.localeCompare(right.name);
-        })
+        .sort(compareNameMatches)
         .slice(0, limit);
 
       return textResult({ query: args.query, limit, matches });
@@ -103,8 +99,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       path: z.string().describe("Absolute path to workspace folder"),
     },
     async (args: McpActionArgs<"add_workspace">) => {
-      const result = await appController.handleMcpAction("add_workspace", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("add_workspace", args));
     }
   );
 
@@ -115,8 +110,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       workspaceId: z.string().describe("Workspace ID to rescan"),
     },
     async (args: McpActionArgs<"rescan_workspace">) => {
-      const result = await appController.handleMcpAction("rescan_workspace", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("rescan_workspace", args));
     }
   );
 
@@ -127,9 +121,9 @@ export function register(server: McpServer, appController: AppControllerHandle):
       workspaceId: z.string().optional().describe("Filter by workspace ID"),
     },
     async (args: { workspaceId?: string }) => {
-      let repos = [...appController.state.repos];
-      if (args.workspaceId) repos = repos.filter((repo) => repo.workspaceID === args.workspaceId);
-      return textResult(repos);
+      return textResult(args.workspaceId
+        ? appController.state.repos.filter((repo) => repo.workspaceID === args.workspaceId)
+        : appController.state.repos);
     }
   );
 
@@ -145,7 +139,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       const needle = args.query.trim().toLowerCase();
       if (!needle) return textResult({ query: args.query, matches: [] });
 
-      const limit = boundedSearchLimit(args.limit);
+      const limit = boundedInteger(args.limit, DEFAULT_REPO_SEARCH_LIMIT, 1, MAX_REPO_SEARCH_LIMIT);
       const matches: RepoSearchResult[] = appController.state.repos
         .filter((repo) => !args.workspaceId || repo.workspaceID === args.workspaceId)
         .map((repo) => {
@@ -162,11 +156,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
           };
         })
         .filter((repo) => repo.matchedFields.length > 0)
-        .sort((left, right) => {
-          const leftNameMatch = left.matchedFields.includes("name") ? 0 : 1;
-          const rightNameMatch = right.matchedFields.includes("name") ? 0 : 1;
-          return leftNameMatch - rightNameMatch || left.name.localeCompare(right.name);
-        })
+        .sort(compareNameMatches)
         .slice(0, limit);
 
       return textResult({ query: args.query, limit, matches });
@@ -193,8 +183,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       repoId: z.string().describe("Repo ID"),
     },
     async (args: McpActionArgs<"list_files">) => {
-      const result = await appController.handleMcpAction("list_files", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("list_files", args));
     }
   );
 
@@ -206,8 +195,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       path: z.string().describe("Relative file path within repo"),
     },
     async (args: McpActionArgs<"read_file">) => {
-      const result = await appController.handleMcpAction("read_file", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("read_file", args));
     }
   );
 
@@ -220,8 +208,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       runCommand: z.string().describe("Run command"),
     },
     async (args: McpActionArgs<"set_build_run_config">) => {
-      const result = await appController.handleMcpAction("set_build_run_config", args);
-      return textResult(result ?? { ok: true });
+      return textResult((await appController.handleMcpAction("set_build_run_config", args)) ?? { ok: true });
     }
   );
 
@@ -232,8 +219,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       repoId: z.string().describe("Repo ID"),
     },
     async (args: McpActionArgs<"build_and_run_app">) => {
-      const result = await appController.handleMcpAction("build_and_run_app", args);
-      return textResult(result);
+      return textResult(await appController.handleMcpAction("build_and_run_app", args));
     }
   );
 }

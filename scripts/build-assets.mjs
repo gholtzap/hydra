@@ -5,11 +5,17 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { platform } from "node:process";
 
-const root = fileURLToPath(new URL("..", import.meta.url)).replace(/[/\\]$/, "");
-
-function mkdir(dir) {
-  mkdirSync(dir, { recursive: true });
-}
+const root = fileURLToPath(new URL("..", import.meta.url));
+const rendererAssets = [
+  "index.html",
+  "auth.html",
+  "app.css",
+  "vendor/xterm.css",
+  "vendor/xterm.js",
+  "vendor/addon-fit.js",
+  "vendor/pipecat-client.js",
+  "vendor/pipecat-webrtc.js",
+];
 
 function cp(src, dest, options) {
   cpSync(join(root, src), join(root, dest), options);
@@ -17,8 +23,8 @@ function cp(src, dest, options) {
 
 try {
   // Ensure output directories exist
-  mkdir(join(root, "dist-electron/main"));
-  mkdir(join(root, "dist-electron/renderer/vendor"));
+  mkdirSync(join(root, "dist-electron/main"), { recursive: true });
+  mkdirSync(join(root, "dist-electron/renderer/vendor"), { recursive: true });
 
   // PTY host (Unix only — Windows uses node-pty in-process)
   cp("electron/main/pty_host.py", "dist-electron/main/pty_host.py");
@@ -35,14 +41,9 @@ try {
   }
 
   // Renderer static assets
-  cp("electron/renderer/index.html", "dist-electron/renderer/index.html");
-  cp("electron/renderer/auth.html", "dist-electron/renderer/auth.html");
-  cp("electron/renderer/app.css", "dist-electron/renderer/app.css");
-  cp("electron/renderer/vendor/xterm.css", "dist-electron/renderer/vendor/xterm.css");
-  cp("electron/renderer/vendor/xterm.js", "dist-electron/renderer/vendor/xterm.js");
-  cp("electron/renderer/vendor/addon-fit.js", "dist-electron/renderer/vendor/addon-fit.js");
-  cp("electron/renderer/vendor/pipecat-client.js", "dist-electron/renderer/vendor/pipecat-client.js");
-  cp("electron/renderer/vendor/pipecat-webrtc.js", "dist-electron/renderer/vendor/pipecat-webrtc.js");
+  for (const asset of rendererAssets) {
+    cp(`electron/renderer/${asset}`, `dist-electron/renderer/${asset}`);
+  }
 
   // Optional auth server override used by packaged/dev builds.
   if (existsSync(join(root, "electron/renderer/auth-config.json"))) {

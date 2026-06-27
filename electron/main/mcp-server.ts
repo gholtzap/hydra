@@ -188,11 +188,6 @@ export class HydraMcpServer {
   }
 
   private writeUnauthorized(res: ServerResponse): void {
-    if (res.headersSent) {
-      res.end();
-      return;
-    }
-
     res.writeHead(401, {
       "Content-Type": "application/json",
       "WWW-Authenticate": 'Bearer realm="hydra-mcp"',

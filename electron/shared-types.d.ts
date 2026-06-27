@@ -144,7 +144,6 @@ export type PinnedMessage = {
   text: string;
   checked: boolean;
   createdAt: string;
-  line?: number;
 };
 
 export type SessionOrganizationPatch = {

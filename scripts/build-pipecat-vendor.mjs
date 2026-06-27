@@ -33,7 +33,6 @@ await Promise.all(
     build({
       stdin: {
         contents: bundle.contents,
-        loader: "js",
         resolveDir: projectRoot,
         sourcefile: bundle.sourcefile
       },
@@ -43,8 +42,7 @@ await Promise.all(
       minify: true,
       platform: "browser",
       target: "es2022",
-      legalComments: "none",
-      sourcemap: false
+      legalComments: "none"
     })
   )
 );

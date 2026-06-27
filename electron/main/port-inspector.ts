@@ -117,7 +117,7 @@ function summarizePort(port: number, listeners: PortListener[]): PortStatusItem 
     listeners: sortedListeners,
     primaryCommand: sortedListeners[0]?.command || null,
     primaryPid: sortedListeners[0]?.pid || null,
-    addressSummary: uniqueValues(sortedListeners.map((listener) => listener.address)),
+    addressSummary: [...new Set(sortedListeners.map((listener) => listener.address).filter(Boolean))],
     localUrl: `http://127.0.0.1:${port}`
   };
 }
@@ -237,7 +237,7 @@ function parseLsofListeners(output: string): Map<number, PortListener[]> {
 }
 
 function parsePort(value: string): number | null {
-  const match = /:(\d+)(?:->.*)?$/.exec(String(value || ""));
+  const match = /:(\d+)(?:->.*)?$/.exec(value);
   if (!match) {
     return null;
   }
@@ -258,10 +258,6 @@ function humanizePortInspectionError(error: unknown): string {
   }
 
   return "Port inspection failed for an unknown reason.";
-}
-
-function uniqueValues(values: string[]): string[] {
-  return [...new Set(values.filter(Boolean))];
 }
 
 function range(start: number, end: number): number[] {

@@ -131,13 +131,12 @@ export function register(server: McpServer, appController: AppControllerHandle):
       );
       const unread = sessions.filter((session) => session.unreadCount > 0);
       const blockedIds = new Set(blocked.map((session) => session.id));
-      const summaryMap = (session: SessionRecord): InboxSessionSummary => sessionSummary(appController, session);
       const actionable = sortedActionableSessions(blocked, unread).slice(0, limit);
 
       return textResult({
-        actionable: actionable.map(summaryMap),
-        blocked: blocked.map(summaryMap),
-        unread: unread.map(summaryMap),
+        actionable: actionable.map((session) => sessionSummary(appController, session)),
+        blocked: blocked.map((session) => sessionSummary(appController, session)),
+        unread: unread.map((session) => sessionSummary(appController, session)),
         counts: {
           actionable: blocked.length + unread.filter((session) => !blockedIds.has(session.id)).length,
           blocked: blocked.length,

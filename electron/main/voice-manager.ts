@@ -65,7 +65,10 @@ export class VoiceManager {
     ipcMain.handle("voice:checkPython", async () => this.checkPython());
     ipcMain.handle("voice:installDeps", async () => this.installDeps());
     ipcMain.handle("voice:getBotPort", () => this.botPort);
-    ipcMain.handle("voice:clientLog", (_event, message: string) => this.logClientMessage(message));
+    ipcMain.handle("voice:clientLog", (_event, message: string) => {
+      const text = typeof message === "string" ? message.trim() : String(message || "");
+      if (text) console.log("[VoiceClient]", text.slice(0, 1000));
+    });
     ipcMain.handle("voice:webrtcOffer", (_event, endpoint: string, payload: unknown) =>
       this.requestBotJson("POST", endpoint, payload)
     );
@@ -396,11 +399,6 @@ export class VoiceManager {
 
   private emitInstallProgress(line: string): void {
     if (line) this.emit("voice:installProgress", line);
-  }
-
-  private logClientMessage(message: string): void {
-    const text = typeof message === "string" ? message.trim() : String(message || "");
-    if (text) console.log("[VoiceClient]", text.slice(0, 1000));
   }
 
   private requestBotJson(method: "POST" | "PATCH", endpoint: string, payload: unknown): Promise<unknown> {

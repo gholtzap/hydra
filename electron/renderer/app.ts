@@ -11848,9 +11848,7 @@ function currentEnabledPluginsSettingsValue(): JsonObject | null {
 
 function selectedEnabledPluginOverride(pluginId: string): boolean | undefined {
   const enabledPluginsValue = currentEnabledPluginsSettingsValue();
-  if (!enabledPluginsValue) {
-    return undefined;
-  }
+  if (!enabledPluginsValue) return;
 
   const value = enabledPluginsValue[pluginId];
   return typeof value === "boolean" ? value : undefined;

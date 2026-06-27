@@ -14866,34 +14866,6 @@ function canResumeSessionSearchResult(
 }
 
 
-function codexJsonlPreview(raw: string): string{
-	try{
-		const parsed = JSON.parse(raw);		
-		if (parsed?.payload?.type === "agent_message" || parsed?.payload?.message){
-			return String(parsed.payload.message).slice(0, 300).trim();  
-		}
-
-		if (parsed?.payload?.type === "message"){
-			const content = parsed.payload.content;
-			
-			if (Array.isArray(content)) {  
-				const textBlock = content.find(block => block?.type === "output_text");  
-				if (textBlock?.text) {    
-					return String(textBlock.text).slice(0, 300).trim();  
-				}  
-			}
-			
-			return String(parsed.payload.message).slice(0, 300).trim();  
-		}
-
-
-	}
-	catch{
-		// not valid JSON
-	}
-	return raw.slice(0, 300).trim()
-}
-
 function normalizeJsonlPreview(raw: string): string {
   try {
     const parsed = JSON.parse(raw);

@@ -4512,7 +4512,9 @@ class AppController {
     let changed = false;
 
     for (const session of this.state.sessions) {
-      const transcript = rebuildTranscript(session);
+      const transcript = session.rawTranscript
+        ? trimTranscript(TerminalTranscriptBuffer.visibleText(session.rawTranscript))
+        : trimTranscript(session.transcript || "");
       this.terminalBuffers.set(session.id, new TerminalTranscriptBuffer(transcript));
 
       if ((session.transcript || "") !== transcript) {
@@ -5157,14 +5159,6 @@ function sessionIconUrl(session) {
 function trimTranscript(value) {
   const maxLength = 20000;
   return value.length > maxLength ? value.slice(-maxLength) : value;
-}
-
-function rebuildTranscript(session) {
-  if (session.rawTranscript) {
-    return trimTranscript(TerminalTranscriptBuffer.visibleText(session.rawTranscript));
-  }
-
-  return trimTranscript(session.transcript || "");
 }
 
 function resolvedShellPath(preferences) {

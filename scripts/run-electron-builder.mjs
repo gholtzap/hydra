@@ -7,7 +7,7 @@ const env = { ...process.env };
 const builderArgs = [...args];
 
 const hasExplicitSigningConfig =
-  Boolean(env.CSC_LINK?.trim()) ||
+  env.CSC_LINK?.trim() ||
   env.HYDRA_FORCE_MAC_SIGNING === "1";
 
 if (!hasExplicitSigningConfig) {

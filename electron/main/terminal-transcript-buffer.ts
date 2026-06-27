@@ -157,8 +157,6 @@ class TerminalTranscriptBuffer {
     const parameters = parameterString.split(";").map((value) => Number.parseInt(value, 10) || 0);
 
     switch (finalChar) {
-      case "m":
-        return;
       case "K":
         this.clearLine(parameters[0] ?? 0);
         return;

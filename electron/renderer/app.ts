@@ -11357,38 +11357,6 @@ function extractLatestProposedPlan(transcript: string) {
   };
 }
 
-function extractClaudePlanFromTranscript(transcript: string) {
-  const normalized = String(transcript || "").replace(/\r\n/g, "\n");
-
-  const approvalPatterns = [
-    /would you like to proceed with this plan/i,
-    /do you want to proceed with this plan/i,
-    /proceed with this plan/i
-  ];
-
-  let approvalIndex = -1;
-  for (const pattern of approvalPatterns) {
-    const match = normalized.search(pattern);
-    if (match !== -1 && (approvalIndex === -1 || match < approvalIndex)) {
-      approvalIndex = match;
-    }
-  }
-
-  if (approvalIndex === -1) return null;
-
-  const beforeApproval = normalized.slice(0, approvalIndex).trimEnd();
-  if (!beforeApproval) return null;
-
-  const lines = beforeApproval.split("\n");
-  const planLines = lines.slice(-200);
-
-  let start = 0;
-  while (start < planLines.length && !planLines[start].trim()) start++;
-  const markdown = planLines.slice(start).join("\n").trim();
-
-  return markdown ? { markdown, fingerprint: markdown } : null;
-}
-
 async function loadWikiContext(
   repoId: string | null,
   preferredPath: string | null = null

@@ -7,12 +7,10 @@ const hasAuthServerOverride = Boolean(process.env.AUTH_SERVER_URL?.trim()) || ex
 
 const processes = [
   {
-    label: "auth",
     cmd: npmCommand,
     args: ["--prefix", "auth-server", "run", "dev:local"],
   },
   {
-    label: "desktop",
     cmd: npmCommand,
     args: ["run", "dev:desktop"],
     env: hasAuthServerOverride ? {} : { AUTH_SERVER_URL: "http://localhost:8787" },

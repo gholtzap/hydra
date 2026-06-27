@@ -10087,10 +10087,6 @@ function voiceTooltip(voiceState: VoiceCallState) {
   return "Voice Mode";
 }
 
-function appendVoiceSetupInstructions(_config: VoiceConfig) {
-  // Setup guidance is shown via the status banner, not transcript entries
-}
-
 function renderVoiceRailButton() {
   const voiceState = ui.voiceCallState;
   return dom(
@@ -10262,7 +10258,6 @@ async function startVoiceSession() {
     const config = await api.getVoiceConfig();
     if (!voiceSessionIsCurrent(runId)) return;
     state.preferences.voiceConfig = config;
-    appendVoiceSetupInstructions(config);
     renderVoiceDialog();
 
     const pyCheck = await api.checkPython();

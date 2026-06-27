@@ -15064,8 +15064,11 @@ function previewTranscript(transcript) {
   return "No transcript yet.";
 }
 
-function trimRawTranscript(value) {
-  return value.length > 250000 ? value.slice(-250000) : value;
+function abbreviateHome(value) {
+  // Replace Unix home dirs (/Users/name or /home/name) and Windows home dirs (C:\Users\name)
+  return value
+    .replace(/^\/(?:Users|home)\/[^/]+/, "~")
+    .replace(/^[A-Za-z]:[/\\]Users[/\\][^/\\]+/, "~");
 }
 
 function pathLabel(filePath) {

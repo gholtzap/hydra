@@ -15,11 +15,6 @@ type InboxArgs = {
   limit?: number;
 };
 
-type ControlOverviewArgs = {
-  repoId?: string;
-  limit?: number;
-};
-
 type InboxSessionSummary = Pick<
   SessionRecord,
   | "id"
@@ -160,7 +155,7 @@ export function register(server: McpServer, appController: AppControllerHandle):
       repoId: z.string().optional().describe("Filter sessions by repo ID"),
       limit: z.number().optional().describe("Maximum actionable sessions to return, capped at 100"),
     },
-    async (args: ControlOverviewArgs) => {
+    async (args) => {
       const limit = boundedInteger(args.limit, DEFAULT_INBOX_LIMIT, 1, MAX_INBOX_LIMIT);
       const sessions = args.repoId
         ? appController.state.sessions.filter((session) => session.repoID === args.repoId)

@@ -307,7 +307,30 @@ export class HydraAuthClient {
   }
 
   async requestPasswordReset(email: string, redirectUrl: string): Promise<AuthResult> {
-    const safeRedirectUrl = this.normalizePasswordResetRedirect(redirectUrl);
+    const value = redirectUrl.trim();
+    let safeRedirectUrl: string | null = null;
+
+    if (value) {
+      try {
+        const target = new URL(value);
+        if (target.protocol === "app:" && target.hostname === "-") {
+          safeRedirectUrl = target.toString();
+        } else {
+          const baseUrl = new URL(this.authBaseURL);
+          if (target.origin === baseUrl.origin) {
+            safeRedirectUrl = target.toString();
+          } else if (
+            (target.protocol === "http:" || target.protocol === "https:") &&
+            LOCAL_AUTH_HOSTNAMES.has(target.hostname)
+          ) {
+            safeRedirectUrl = target.toString();
+          }
+        }
+      } catch {
+        safeRedirectUrl = null;
+      }
+    }
+
     if (!safeRedirectUrl) {
       return { success: false, error: "Password reset redirects must stay on Hydra or localhost." };
     }
@@ -441,35 +464,6 @@ export class HydraAuthClient {
     }
 
     return fallback;
-  }
-
-  private normalizePasswordResetRedirect(redirectUrl: string): string | null {
-    const value = redirectUrl.trim();
-    if (!value) {
-      return null;
-    }
-
-    try {
-      const target = new URL(value);
-      if (target.protocol === "app:" && target.hostname === "-") {
-        return target.toString();
-      }
-
-      const baseUrl = new URL(this.authBaseURL);
-      if (target.origin === baseUrl.origin) {
-        return target.toString();
-      }
-
-      if (target.protocol === "http:" || target.protocol === "https:") {
-        if (LOCAL_AUTH_HOSTNAMES.has(target.hostname)) {
-          return target.toString();
-        }
-      }
-    } catch {
-      return null;
-    }
-
-    return null;
   }
 
   private toRendererSession(payload: unknown): AuthSession | null {

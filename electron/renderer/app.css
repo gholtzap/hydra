@@ -2850,7 +2850,6 @@ textarea {
   min-width: 8px;
   height: 8px;
   padding: 0;
-  background: var(--count-bg);
 }
 
 .blocker-banner {

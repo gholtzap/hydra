@@ -10,14 +10,6 @@ const net = require("node:net") as typeof import("node:net");
 const os = require("node:os");
 const path = require("node:path");
 
-type VoiceManagerInternalState =
-  | "idle"
-  | "checking_python"
-  | "installing_deps"
-  | "spawning"
-  | "ready"
-  | "error";
-
 type PythonInfo = {
   found: boolean;
   path?: string;
@@ -44,12 +36,10 @@ export class VoiceManager {
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
   private healthCheckFailures = 0;
   private state: VoiceCallState = "idle";
-  private internalState: VoiceManagerInternalState = "idle";
   private pythonInfo: PythonInfo | null = null;
   private config: VoiceConfig = { ...DEFAULT_CONFIG };
   private mcpAuthToken: string | null = null;
   private ensureMcpServer: (() => Promise<string | null>) | null = null;
-  private getPreferences: (() => Record<string, unknown>) | null = null;
   private updatePreferences: ((patch: Record<string, unknown>) => void) | null = null;
 
   init(
@@ -59,7 +49,6 @@ export class VoiceManager {
     ensureMcpServer?: () => Promise<string | null>
   ): void {
     this.mainWindow = mainWindow;
-    this.getPreferences = getPreferences;
     this.updatePreferences = updatePreferences;
     this.ensureMcpServer = ensureMcpServer ?? null;
 
@@ -121,18 +110,14 @@ export class VoiceManager {
     this.setState("connecting");
 
     try {
-      this.internalState = "checking_python";
       const python = await this.checkPython();
       if (!python.found) {
-        this.internalState = "error";
         this.setState("error");
         return { success: false, error: "Python 3.10+ is required." };
       }
 
-      this.internalState = "installing_deps";
       const deps = await this.installDeps();
       if (!deps.success) {
-        this.internalState = "error";
         this.setState("error");
         return { success: false, error: deps.error || "Voice dependency installation failed." };
       }
@@ -149,11 +134,9 @@ export class VoiceManager {
 
       const port = await this.findFreePort();
       this.botPort = port;
-      this.internalState = "spawning";
       await this.spawnBot(port);
       await this.waitForReady(port, 30_000);
       this.startHealthCheck(port);
-      this.internalState = "ready";
       this.setState("listening");
       return { success: true, port };
     } catch (error: unknown) {
@@ -161,7 +144,6 @@ export class VoiceManager {
       console.error("[VoiceManager] Failed to start:", message);
       this.emitError("start_failed", message);
       await this.cleanup();
-      this.internalState = "error";
       this.setState("error");
       return { success: false, error: message };
     }
@@ -170,7 +152,6 @@ export class VoiceManager {
   async stop(): Promise<void> {
     if (this.state === "idle") return;
     await this.cleanup();
-    this.internalState = "idle";
     this.setState("idle");
   }
 
@@ -301,7 +282,6 @@ export class VoiceManager {
       if (this.state === "listening" || this.state === "connecting") {
         this.emitError("bot_crashed", `Voice bot exited unexpectedly (code ${code})`);
         void this.cleanup();
-        this.internalState = "error";
         this.setState("error");
       }
     });
@@ -335,7 +315,6 @@ export class VoiceManager {
       if (this.healthCheckFailures >= HEALTH_CHECK_FAILURE_LIMIT) {
         this.emitError("health_check_failed", "Voice bot is not responding");
         await this.cleanup();
-        this.internalState = "error";
         this.setState("error");
       }
     }, HEALTH_CHECK_INTERVAL_MS);

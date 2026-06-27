@@ -14087,8 +14087,6 @@ function renderSessionTagDot(tagColor, extraClass = "") {
   return `<span class="session-tag-dot session-tag-${escapeAttribute(normalized)}${className}" title="${escapeAttribute(sessionTagLabel(normalized))} tag" aria-hidden="true"></span>`;
 }
 
-function renderSessionVisualButton(session, extraClass = "", action = "", label = "Upload session icon") {
-  const className = extraClass ? ` ${extraClass}` : "";
 function renderSessionVisual(
   session,
   extraClass = "",

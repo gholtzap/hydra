@@ -166,7 +166,7 @@ async function launchOpenCommand(args, options) {
     options.onStderr(chunk);
   });
 
-  return await new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     let settled = false;
     const timeout = setTimeout(() => {
       if (settled) {

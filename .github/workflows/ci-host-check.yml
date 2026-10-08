@@ -1,0 +1,62 @@
+name: CI runner check
+run-name: CI runner check ${{ inputs.nonce || github.event.pull_request.number || github.run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      nonce:
+        description: Verification ID
+        type: string
+        default: manual
+  pull_request:
+    paths:
+      - .github/workflows/ci-host-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            mini: mini-linux
+            hosted: ubuntu-24.04
+          - platform: macos
+            mini: mini-macos
+            hosted: macos-15
+    runs-on: ${{ vars.CI_RUNNER_PROVIDER == 'mini' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && matrix.mini || matrix.hosted }}
+    steps:
+      - name: Verify the selected runner
+        env:
+          EXPECTED_PROVIDER: ${{ vars.CI_RUNNER_PROVIDER == 'mini' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'mini' || 'github' }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          provider = os.environ['EXPECTED_PROVIDER']
+          expected = 'self-hosted' if provider == 'mini' else 'github-hosted'
+          assert os.environ['RUNNER_ENVIRONMENT'] == expected
+          if provider == 'mini':
+              assert os.environ['RUNNER_NAME'].startswith('mini-')
+          receipt = {'provider': provider, 'environment': os.environ['RUNNER_ENVIRONMENT'],
+                     'name': os.environ['RUNNER_NAME'], 'os': os.environ['RUNNER_OS'],
+                     'arch': os.environ['RUNNER_ARCH'], 'sha': os.environ['GITHUB_SHA'],
+                     'run_id': os.environ['GITHUB_RUN_ID'], 'attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                     'git': subprocess.check_output(['git', '--version'], text=True).strip()}
+          path = Path(os.environ['RUNNER_TEMP']) / 'ci-host-receipt.json'
+          path.write_text(json.dumps(receipt, indent=2) + '\n')
+          print(json.dumps(receipt))
+          PY
+      - name: Save runner receipt
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: ci-host-${{ matrix.platform }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-host-receipt.json
+          retention-days: 7

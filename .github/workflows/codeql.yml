@@ -18,7 +18,7 @@ permissions:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'mini-linux' || 'ubuntu-latest' }}
+    runs-on: ${{ vars.CI_RUNNER_PROVIDER == 'mini' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'mini-linux' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:

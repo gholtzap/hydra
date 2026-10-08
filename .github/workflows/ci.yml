@@ -18,7 +18,7 @@ permissions:
 jobs:
   desktop-build:
     name: Desktop Build
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'mini-linux' || 'ubuntu-latest' }}
+    runs-on: ${{ vars.CI_RUNNER_PROVIDER == 'mini' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'mini-linux' || 'ubuntu-latest' }}
 
     steps:
       - name: Check out repository
@@ -38,7 +38,7 @@ jobs:
 
   auth-server-typecheck:
     name: Auth Server Typecheck
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'mini-linux' || 'ubuntu-latest' }}
+    runs-on: ${{ vars.CI_RUNNER_PROVIDER == 'mini' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'mini-linux' || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: auth-server
